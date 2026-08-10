@@ -5,6 +5,42 @@
 The repository is at bootstrap. No game rule is implemented yet. This file is
 an index of stable product language from the design inputs, not an API contract.
 
+## Behavior
+
+### Requirement: Complete local quality gate
+
+The `cargo xtask lint` command runs formatting, Cargo check, Clippy, tests,
+file-length checks, and banned-pattern checks in that order. It stops after the
+first failed check and returns a failure status.
+
+#### Scenario: All checks pass
+
+- **WHEN** a developer runs `cargo xtask lint` and all six checks pass
+- **THEN** the command reports all six checks as successful and returns a
+  success status
+
+#### Scenario: One check fails
+
+- **WHEN** a check fails during `cargo xtask lint`
+- **THEN** the command returns a failure status without running later checks
+
+### Requirement: Safe staged repair and hook ownership
+
+Staged repair refuses a Rust path that has both staged and unstaged changes
+before it changes the index or worktree. Hook removal removes only the exact
+managed pre-commit hook and leaves any unmanaged hook unchanged.
+
+#### Scenario: A Rust path is partially staged
+
+- **WHEN** staged repair finds a Rust path with staged and unstaged changes
+- **THEN** it reports the conflict and leaves the index and worktree unchanged
+
+#### Scenario: A pre-commit hook is unmanaged
+
+- **WHEN** hook removal finds a pre-commit hook that is not the exact managed
+  hook
+- **THEN** it reports that the hook is unmanaged and leaves it unchanged
+
 ## Sources
 
 - `designs/core_rules.md` defines the current prototype rules and their open areas.
