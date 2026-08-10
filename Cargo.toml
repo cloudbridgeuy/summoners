@@ -1,0 +1,35 @@
+[workspace]
+members = ["crates/core", "xtask"]
+resolver = "2"
+
+[workspace.package]
+version = "0.0.0"
+edition = "2024"
+license = "MIT"
+authors = ["Guzmán Monné"]
+rust-version = "1.95.0"
+publish = false
+repository = "https://github.com/cloudbridgeuy/summoners"
+
+[workspace.lints.clippy]
+# Production crate roots deny unwrap_used and expect_used. Tests can opt out.
+enum_glob_use = "deny"
+wildcard_imports = "deny"
+manual_let_else = "warn"
+large_enum_variant = "warn"
+implicit_clone = "warn"
+cloned_instead_of_copied = "warn"
+redundant_closure_for_method_calls = "warn"
+needless_pass_by_value = "warn"
+
+[profile.dev]
+debug = 0
+
+[profile.release]
+incremental = true
+debug = 0
+
+[workspace.dependencies]
+chrono = "0.4"
+clap = { version = "4.5", features = ["derive"] }
+color-eyre = "0.6"

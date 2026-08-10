@@ -1,0 +1,15 @@
+[package]
+name = "summoners_core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+repository.workspace = true
+description = "Deterministic rules and state transitions for Summoners."
+
+[dependencies]
+
+[lints]
+workspace = true

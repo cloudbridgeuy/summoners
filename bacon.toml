@@ -1,0 +1,47 @@
+default_job = "check"
+
+[jobs.check]
+command = ["cargo", "check", "--workspace", "--color", "always"]
+need_stdout = false
+
+[jobs.check-all]
+command = ["cargo", "check", "--workspace", "--all-targets", "--color", "always"]
+need_stdout = false
+
+[jobs.clippy]
+command = [
+  "cargo",
+  "clippy",
+  "--workspace",
+  "--all-targets",
+  "--color",
+  "always",
+]
+need_stdout = false
+
+[jobs.test]
+command = [
+  "cargo",
+  "test",
+  "--workspace",
+  "--color",
+  "always",
+  "--",
+  "--color",
+  "always",
+]
+need_stdout = true
+default_watch = false
+watch = ["crates", "xtask"]
+
+[jobs.doc]
+command = ["cargo", "doc", "--workspace", "--color", "always", "--no-deps"]
+need_stdout = false
+
+[keybindings]
+j = "scroll-lines(1)"
+k = "scroll-lines(-1)"
+ctrl-d = "scroll-pages(1)"
+ctrl-u = "scroll-pages(-1)"
+g = "scroll-to-top"
+shift-g = "scroll-to-bottom"
