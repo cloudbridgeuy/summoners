@@ -5,11 +5,11 @@
 //! back into `work` (step 2), and finally rest once both are settled
 //! (step 3).
 
-use crate::domain::cards::{EffectLeaf, Query, QueryResult, find_def};
+use crate::domain::cards::{CardDefId, EffectLeaf, Query, QueryResult, find_def};
 use crate::domain::events::GameEvent;
 use crate::domain::ids::{PlayerId, Position};
-use crate::domain::state::{GameState, PlayerState, StackItem, SummonInstance, WorkItem};
-use crate::engine::{destruction, loss, upkeep};
+use crate::domain::state::{CardRef, GameState, StackItem, WorkItem};
+use crate::engine::{destruction, effects, loss, upkeep};
 
 /// Drain `state.work`, then the Stack, until both are settled, a decision
 /// pauses the loop (`pending` becomes set), or the game ends (`outcome`
@@ -110,9 +110,7 @@ fn execute_draw(state: &GameState) -> (GameState, Vec<GameEvent>) {
 }
 
 /// Resolve the item on top of the Stack (rules §35: the Stack always
-/// resolves top-first). `StackItem::Spell` has no resolution behavior yet,
-/// so it is a documented no-op besides popping and reporting; a later
-/// interpreter fills this in without touching the loop above.
+/// resolves top-first), through the shared `engine::effects` interpreter.
 fn resolve_top_stack_item(state: &GameState) -> (GameState, Vec<GameEvent>) {
     let mut state = state.clone();
     let Some(item) = state.stack.pop() else {
@@ -121,56 +119,76 @@ fn resolve_top_stack_item(state: &GameState) -> (GameState, Vec<GameEvent>) {
 
     let mut events = vec![GameEvent::StackItemResolved { item: item.clone() }];
 
-    if let StackItem::Attack { attacker, target } = item {
-        let (next_state, damage_events, hit) = resolve_attack(&state, attacker, target);
-        state = next_state;
-        events.extend(damage_events);
-        // Only a Summon that actually took Damage has anything to check for
-        // destruction; an empty targeted position is a clean miss with
-        // nothing left behind to examine (rules §23, §30).
-        if hit {
-            state.work.push_back(WorkItem::DestructionCheck(target));
+    match item {
+        StackItem::Attack { attacker, target } => {
+            let (next_state, leaf_events) = resolve_attack(&state, attacker, target);
+            state = next_state;
+            events.extend(leaf_events);
+        }
+        StackItem::Spell {
+            caster,
+            card,
+            targets,
+        } => {
+            let (next_state, leaf_events) = resolve_spell(&state, caster, card, &targets);
+            state = next_state;
+            events.extend(leaf_events);
         }
     }
 
     (state, events)
 }
 
-/// Apply an attack's Damage to whichever Summon occupies `target` right
-/// now, not whichever one was there when the attack was declared (rules
-/// §30). An empty target Position is a miss: nothing to damage, no event,
-/// and the returned `bool` is `false`.
+/// Apply an attack's printed effects against `target`, re-reading the
+/// attacker's Attack node at resolution time rather than trusting whatever
+/// was printed when the attack was declared, since `StackItem::Attack`
+/// carries no effects field of its own (rules §30).
 fn resolve_attack(
     state: &GameState,
     attacker: PlayerId,
     target: Position,
-) -> (GameState, Vec<GameEvent>, bool) {
-    let mut state = state.clone();
-    let effects = attacker_effects(&state, attacker);
-
-    let defender = attacker.opponent();
-    let Some(summon) = summon_at_mut(state.players.get_mut(defender), target) else {
-        return (state, Vec::new(), false);
-    };
-
-    let before = summon.damage;
-    let after = effects.iter().fold(before, apply_effect_leaf);
-    summon.damage = after;
-
-    (
+) -> (GameState, Vec<GameEvent>) {
+    apply_leaves(
         state,
-        vec![GameEvent::DamageApplied {
-            position: target,
-            before,
-            after,
-        }],
-        true,
+        attacker,
+        &[target],
+        &attacker_effects(state, attacker),
     )
 }
 
-/// The attacker's currently printed Attack effects, re-read at resolution
-/// time rather than snapshotted at declare time, since `StackItem::Attack`
-/// carries no effects field of its own.
+/// Apply a Spell's printed effects against `targets`, then move the Spell
+/// to its caster's discard pile — resolved Spells go to their Owner's
+/// discard the same way a destroyed upgrade chain does (rules §56).
+fn resolve_spell(
+    state: &GameState,
+    caster: PlayerId,
+    card: CardRef,
+    targets: &[Position],
+) -> (GameState, Vec<GameEvent>) {
+    let (mut state, events) = apply_leaves(state, caster, targets, &spell_effects(card.def));
+    state.players.get_mut(caster).discard.push(card);
+    (state, events)
+}
+
+/// Run every effect leaf in order through the shared interpreter, folding
+/// its state and events forward.
+fn apply_leaves(
+    state: &GameState,
+    controller: PlayerId,
+    targets: &[Position],
+    leaves: &[EffectLeaf],
+) -> (GameState, Vec<GameEvent>) {
+    let mut state = state.clone();
+    let mut events = Vec::new();
+    for leaf in leaves {
+        let (next_state, leaf_events) = effects::apply_leaf(&state, controller, targets, leaf);
+        state = next_state;
+        events.extend(leaf_events);
+    }
+    (state, events)
+}
+
+/// The attacker's currently printed Attack effects.
 fn attacker_effects(state: &GameState, attacker: PlayerId) -> Vec<EffectLeaf> {
     let Some(main_summon) = &state.players.get(attacker).main else {
         return Vec::new();
@@ -184,34 +202,14 @@ fn attacker_effects(state: &GameState, attacker: PlayerId) -> Vec<EffectLeaf> {
     }
 }
 
-/// The Summon at `position`, mutably, if any.
-fn summon_at_mut(player: &mut PlayerState, position: Position) -> Option<&mut SummonInstance> {
-    match position {
-        Position::Main => player.main.as_mut(),
-        Position::Bench(slot) => player.bench[slot.index()].as_mut(),
-    }
-}
-
-/// Apply one `EffectLeaf` to a Summon's accumulated Damage. Isolated here
-/// so a later general effect interpreter can replace it without touching
-/// `resolve_attack`. Only `DealDamage` has behavior today; every other
-/// leaf is a documented no-op that leaves Damage unchanged (rules §27
-/// covers a `DealDamage` leaf's `immutable` flag once modifiers exist to
-/// read it — none do yet, so it is accepted but not yet consulted).
-fn apply_effect_leaf(current_damage: u32, leaf: &EffectLeaf) -> u32 {
-    match leaf {
-        EffectLeaf::DealDamage { amount, .. } => current_damage.saturating_add(*amount),
-        EffectLeaf::Heal { .. }
-        | EffectLeaf::MoveSummon
-        | EffectLeaf::SwapPositions
-        | EffectLeaf::ConditionalBonus { .. }
-        | EffectLeaf::BlockResponses(_)
-        | EffectLeaf::ReturnSpellFromDiscard
-        | EffectLeaf::LookAtPrizes
-        | EffectLeaf::DrawCards { .. }
-        | EffectLeaf::ReturnSpellToDeckTop
-        | EffectLeaf::ProduceMana
-        | EffectLeaf::CannotBeMovedByOpponent => current_damage,
+/// A Spell's printed effects, read off its card definition.
+fn spell_effects(def_id: CardDefId) -> Vec<EffectLeaf> {
+    let Some(def) = find_def(def_id) else {
+        return Vec::new();
+    };
+    match def.find(Query::Spell) {
+        Some(QueryResult::Spell { effects, .. }) => effects,
+        _ => Vec::new(),
     }
 }
 
@@ -538,12 +536,20 @@ mod tests {
     }
 
     #[test]
-    fn drain_resolves_a_spell_stack_item_as_a_documented_no_op() {
+    fn drain_resolves_a_support_spell_and_discards_it_to_its_casters_pile() {
         let mut state = base_state();
         state.turn.window = None;
+        state.players.get_mut(PlayerId::One).main = Some(SummonInstance {
+            damage: 15,
+            ..whelp(PlayerId::One)
+        });
+        let card = CardRef {
+            instance: CardInstanceId(99),
+            def: CardDefId("renewing-balm"),
+        };
         state.stack = vec![StackItem::Spell {
             caster: PlayerId::One,
-            card: CardInstanceId(99),
+            card,
             targets: vec![Position::Main],
         }];
 
@@ -552,14 +558,115 @@ mod tests {
         assert!(state.stack.is_empty());
         assert_eq!(
             events,
-            vec![GameEvent::StackItemResolved {
-                item: StackItem::Spell {
-                    caster: PlayerId::One,
-                    card: CardInstanceId(99),
-                    targets: vec![Position::Main],
+            vec![
+                GameEvent::StackItemResolved {
+                    item: StackItem::Spell {
+                        caster: PlayerId::One,
+                        card,
+                        targets: vec![Position::Main],
+                    },
                 },
-            }]
+                GameEvent::Healed {
+                    position: Position::Main,
+                    amount: 15,
+                },
+            ]
         );
-        assert!(state.work.is_empty());
+        assert_eq!(state.players.get(PlayerId::One).discard, vec![card]);
+        assert_eq!(
+            state
+                .players
+                .get(PlayerId::One)
+                .main
+                .as_ref()
+                .expect("main")
+                .damage,
+            0
+        );
+    }
+
+    #[test]
+    fn drain_resolves_an_attack_spell_against_the_opponents_main() {
+        let mut state = base_state();
+        state.turn.window = None;
+        let card = CardRef {
+            instance: CardInstanceId(99),
+            def: CardDefId("ember-lance"),
+        };
+        state.stack = vec![StackItem::Spell {
+            caster: PlayerId::One,
+            card,
+            targets: vec![Position::Main],
+        }];
+
+        let (state, events) = drain(&state);
+
+        assert_eq!(
+            events,
+            vec![
+                GameEvent::StackItemResolved {
+                    item: StackItem::Spell {
+                        caster: PlayerId::One,
+                        card,
+                        targets: vec![Position::Main],
+                    },
+                },
+                GameEvent::DamageApplied {
+                    position: Position::Main,
+                    before: 0,
+                    after: 10,
+                },
+            ]
+        );
+        assert_eq!(state.players.get(PlayerId::One).discard, vec![card]);
+        assert_eq!(
+            state
+                .players
+                .get(PlayerId::Two)
+                .main
+                .as_ref()
+                .expect("main")
+                .damage,
+            10
+        );
+    }
+
+    #[test]
+    fn drain_resolves_a_draw_spell_and_settles_the_loss_check_it_enqueues() {
+        let mut state = base_state();
+        state.turn.window = None;
+        let card = CardRef {
+            instance: CardInstanceId(99),
+            def: CardDefId("scrying-glass"),
+        };
+        state.stack = vec![StackItem::Spell {
+            caster: PlayerId::Two,
+            card,
+            targets: vec![],
+        }];
+
+        let (state, events) = drain(&state);
+
+        assert_eq!(
+            events,
+            vec![
+                GameEvent::StackItemResolved {
+                    item: StackItem::Spell {
+                        caster: PlayerId::Two,
+                        card,
+                        targets: vec![],
+                    },
+                },
+                GameEvent::CardDrawn {
+                    player: PlayerId::Two,
+                    card: CardInstanceId(10),
+                },
+            ]
+        );
+        assert_eq!(state.players.get(PlayerId::Two).discard, vec![card]);
+        assert!(
+            state.work.is_empty(),
+            "the LossCheck the draw enqueued was drained too"
+        );
     }
 }

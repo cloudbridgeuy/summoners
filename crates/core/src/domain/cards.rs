@@ -10,15 +10,20 @@
 //! `Life`, `Produces`, `RetreatCost`, `Form`, and a plain `Attack` node
 //! only — sufficient for `scenario::from_scenario`'s chain-order and board
 //! tests, and for a normal attack to have a cost and a Damage amount to
-//! pay and apply. The four
+//! pay and apply. It also carries three vanilla Spells — one Attack Spell,
+//! one Support Spell that heals, one Support Spell that draws — enough for
+//! `engine::stack::cast_spell` and `engine::resolution` to have a real cost,
+//! timing family, and effect leaf to pay, gate, and resolve. A fourth Spell
+//! with a Ready effect arrives with the work that first gives Ready its own
+//! rules. The four
 //! signature cards from `designs/types_archetypes.md` (Colossus of the
 //! Quarry, Warden of Set Paths, Griefsinger, Old Sow of the Barrow), their
-//! Base/Enhanced fixture lineage, the four Spells, and the vanilla
-//! Enchantment (design decision 1) arrive with the work that first gives
-//! them abilities to test; this module already settles the vocabulary
-//! those fixtures will use (`EffectLeaf`, `CardNode`, `Modifier`), so a few
-//! variants below have no production caller yet. Stats and names are test
-//! data, not final card designs (decision 9).
+//! Base/Enhanced fixture lineage, and the vanilla Enchantment (design
+//! decision 1) arrive with the work that first gives them abilities to
+//! test; this module already settles the vocabulary those fixtures will
+//! use (`EffectLeaf`, `CardNode`, `Modifier`), so a few variants below have
+//! no production caller yet. Stats and names are test data, not final card
+//! designs (decision 9).
 
 use crate::domain::ids::ManaType;
 
@@ -44,6 +49,16 @@ pub(crate) enum Form {
     Base,
     Enhanced,
     Elite,
+}
+
+/// The two Spell timing families (rules §34). A Support Spell may be cast
+/// proactively during its controller's own resting Main Phase or as a legal
+/// response; an Attack Spell is tied to Combat and may only be cast as a
+/// response while its caster holds Priority.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SpellTiming {
+    Support,
+    Attack,
 }
 
 /// The event a `CardNode::Trigger` fires on. This is a starter vocabulary;
@@ -155,6 +170,11 @@ pub(crate) enum CardNode {
     },
     #[allow(dead_code)]
     Passive(Modifier),
+    Spell {
+        timing: SpellTiming,
+        cost: Cost,
+        effects: Vec<EffectLeaf>,
+    },
 }
 
 /// A question `CardDef::find` can answer about one printed card. `Attack`
@@ -163,9 +183,11 @@ pub(crate) enum CardNode {
 /// validation in `scenario::from_scenario`; `Life` backs the rules §23
 /// destruction threshold check in `engine::destruction`; `ProducedManaTypes`
 /// backs the rules §18 Mana-Type-superset check in `engine::board`;
-/// `RetreatCost` backs the printed Retreat Cost lookup there too. More
-/// variants arrive alongside the handler that first needs them, matching
-/// the rest of this crate's stubs.
+/// `RetreatCost` backs the printed Retreat Cost lookup there too; `Spell`
+/// backs the printed timing family, cost, and effects lookup in
+/// `engine::stack` and `engine::resolution` (rules §34). More variants
+/// arrive alongside the handler that first needs them, matching the rest of
+/// this crate's stubs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Query {
     Attack,
@@ -173,6 +195,7 @@ pub(crate) enum Query {
     Life,
     ProducedManaTypes,
     RetreatCost,
+    Spell,
 }
 
 /// One answer `CardDef::find` can return, matching the `Query` asked.
@@ -186,6 +209,11 @@ pub(crate) enum QueryResult {
     Life(u32),
     ProducedManaTypes(Vec<ManaType>),
     RetreatCost(u32),
+    Spell {
+        timing: SpellTiming,
+        cost: Cost,
+        effects: Vec<EffectLeaf>,
+    },
 }
 
 /// One printed card: an id, a display name, its family, and its nodes.
@@ -215,6 +243,18 @@ impl CardDef {
             (Query::RetreatCost, CardNode::RetreatCost(cost)) => {
                 Some(QueryResult::RetreatCost(*cost))
             }
+            (
+                Query::Spell,
+                CardNode::Spell {
+                    timing,
+                    cost,
+                    effects,
+                },
+            ) => Some(QueryResult::Spell {
+                timing: *timing,
+                cost: *cost,
+                effects: effects.clone(),
+            }),
             _ => None,
         })
     }
@@ -326,6 +366,49 @@ pub(crate) fn registry() -> Vec<CardDef> {
                     }],
                 },
             ],
+        },
+        // Spells.
+        CardDef {
+            id: CardDefId("ember-lance"),
+            name: "Ember Lance",
+            kind: CardKind::Spell,
+            nodes: vec![CardNode::Spell {
+                timing: SpellTiming::Attack,
+                cost: Cost {
+                    generic: 1,
+                    ..Cost::default()
+                },
+                effects: vec![EffectLeaf::DealDamage {
+                    amount: 10,
+                    immutable: false,
+                }],
+            }],
+        },
+        CardDef {
+            id: CardDefId("renewing-balm"),
+            name: "Renewing Balm",
+            kind: CardKind::Spell,
+            nodes: vec![CardNode::Spell {
+                timing: SpellTiming::Support,
+                cost: Cost {
+                    generic: 1,
+                    ..Cost::default()
+                },
+                effects: vec![EffectLeaf::Heal { amount: 20 }],
+            }],
+        },
+        CardDef {
+            id: CardDefId("scrying-glass"),
+            name: "Scrying Glass",
+            kind: CardKind::Spell,
+            nodes: vec![CardNode::Spell {
+                timing: SpellTiming::Support,
+                cost: Cost {
+                    generic: 1,
+                    ..Cost::default()
+                },
+                effects: vec![EffectLeaf::DrawCards { amount: 1 }],
+            }],
         },
     ]
 }
@@ -456,8 +539,18 @@ mod tests {
                 effects: vec![EffectLeaf::Heal { amount: 10 }],
             },
             CardNode::Passive(Modifier::OpposingRetreatCostDelta(1)),
+            CardNode::Spell {
+                timing: SpellTiming::Support,
+                cost: Cost::default(),
+                effects: vec![EffectLeaf::Heal { amount: 10 }],
+            },
         ];
-        assert_eq!(nodes.len(), 8);
+        assert_eq!(nodes.len(), 9);
+    }
+
+    #[test]
+    fn spell_timing_variants_construct() {
+        assert_ne!(SpellTiming::Support, SpellTiming::Attack);
     }
 
     #[test]
@@ -531,8 +624,60 @@ mod tests {
     #[test]
     fn registry_holds_a_two_step_and_a_three_step_chain() {
         let defs = registry();
-        assert_eq!(defs.len(), 5);
-        assert!(defs.iter().all(|def| def.kind == CardKind::Summon));
+        let summons = defs.iter().filter(|def| def.kind == CardKind::Summon);
+        assert_eq!(summons.count(), 5);
+    }
+
+    #[test]
+    fn registry_holds_the_three_vanilla_spells() {
+        let defs = registry();
+        let spells = defs.iter().filter(|def| def.kind == CardKind::Spell);
+        assert_eq!(spells.count(), 3);
+    }
+
+    #[test]
+    fn find_reads_the_spell_timing_cost_and_effects() {
+        let ember_lance = find_def(CardDefId("ember-lance")).expect("fixture exists");
+        assert_eq!(
+            ember_lance.find(Query::Spell),
+            Some(QueryResult::Spell {
+                timing: SpellTiming::Attack,
+                cost: Cost {
+                    generic: 1,
+                    ..Cost::default()
+                },
+                effects: vec![EffectLeaf::DealDamage {
+                    amount: 10,
+                    immutable: false,
+                }],
+            })
+        );
+
+        let renewing_balm = find_def(CardDefId("renewing-balm")).expect("fixture exists");
+        assert_eq!(
+            renewing_balm.find(Query::Spell),
+            Some(QueryResult::Spell {
+                timing: SpellTiming::Support,
+                cost: Cost {
+                    generic: 1,
+                    ..Cost::default()
+                },
+                effects: vec![EffectLeaf::Heal { amount: 20 }],
+            })
+        );
+
+        let scrying_glass = find_def(CardDefId("scrying-glass")).expect("fixture exists");
+        assert_eq!(
+            scrying_glass.find(Query::Spell),
+            Some(QueryResult::Spell {
+                timing: SpellTiming::Support,
+                cost: Cost {
+                    generic: 1,
+                    ..Cost::default()
+                },
+                effects: vec![EffectLeaf::DrawCards { amount: 1 }],
+            })
+        );
     }
 
     #[test]

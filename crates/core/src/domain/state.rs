@@ -226,7 +226,7 @@ pub enum StackItem {
     },
     Spell {
         caster: PlayerId,
-        card: CardInstanceId,
+        card: CardRef,
         targets: Vec<Position>,
     },
 }
@@ -438,7 +438,10 @@ mod tests {
             },
             StackItem::Spell {
                 caster: PlayerId::One,
-                card: CardInstanceId(1),
+                card: CardRef {
+                    instance: CardInstanceId(1),
+                    def: CardDefId("ember-lance"),
+                },
                 targets: vec![Position::Main],
             },
         ];

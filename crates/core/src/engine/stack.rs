@@ -1,5 +1,5 @@
-//! Priority windows, passing, and declaring the normal attack (rules
-//! §29–33, §46–47).
+//! Priority windows, passing, declaring the normal attack, and casting a
+//! Spell (rules §29–34, §46–47).
 //!
 //! A window opens with a named first holder and no pass recorded. Every
 //! pass moves Priority to the other player; a pass while `prior_pass` is
@@ -11,10 +11,10 @@
 //! (rules §47–48), so `pass` calls straight into that handover rather than
 //! leaving the state resting with nobody able to act.
 
-use crate::domain::cards::{Query, QueryResult, find_def};
+use crate::domain::cards::{CardKind, Query, QueryResult, SpellTiming, find_def};
 use crate::domain::errors::ActionError;
 use crate::domain::events::GameEvent;
-use crate::domain::ids::{ManaType, PlayerId, Position};
+use crate::domain::ids::{CardInstanceId, ManaType, PlayerId, Position};
 use crate::domain::state::{GameState, Phase, StackItem, StackWindow};
 use crate::engine::apply::ActionOutcome;
 use crate::engine::payment::{self, PaymentError};
@@ -98,18 +98,111 @@ pub(crate) fn declare_attack(
     })
 }
 
+/// Cast a Spell (rules §34). A Support Spell may be cast proactively during
+/// its controller's own resting Main Phase (rules §45: "cast legal Support
+/// Spells") or, like an Attack Spell, as a response while the caster holds
+/// Priority (rules §34: "Support Spells may normally be played proactively
+/// during their controller's turn or as a legal response"; §46: "the
+/// defending player may play a legal Support Spell, play a legal Attack
+/// Spell if its timing allows, or pass"). An Attack Spell may only be cast
+/// as a response while the caster holds Priority — casting one proactively,
+/// with no window open, is rejected the same as casting one out of Combat
+/// altogether. Casting pays the printed cost exactly like `declare_attack`
+/// pays an Attack's cost, pushes the Spell onto the Stack, opens the same
+/// Priority window `declare_attack` and `engine::turn::end_turn` already
+/// open (rules §32), and marks the turn's Spell flag.
+pub(crate) fn cast_spell(
+    state: &GameState,
+    player: PlayerId,
+    card: CardInstanceId,
+    targets: Vec<Position>,
+    mana_hint: Option<ManaType>,
+) -> Result<ActionOutcome, ActionError> {
+    if state.pending.is_some() {
+        return Err(ActionError::PendingInputMismatch);
+    }
+
+    let player_state = state.players.get(player);
+    let Some(hand_index) = player_state.hand.iter().position(|c| c.instance == card) else {
+        return Err(ActionError::UnknownCard);
+    };
+    let card_ref = player_state.hand[hand_index];
+
+    let Some(def) = find_def(card_ref.def) else {
+        return Err(ActionError::UnknownCard);
+    };
+    if def.kind != CardKind::Spell {
+        return Err(ActionError::UnknownCard);
+    }
+    let Some(QueryResult::Spell { timing, cost, .. }) = def.find(Query::Spell) else {
+        return Err(ActionError::UnknownCard);
+    };
+
+    let resting_in_own_main = state.turn.window.is_none()
+        && state.turn.phase == Phase::Main
+        && player == state.turn.active_player;
+    let holds_priority = matches!(state.turn.window, Some(window) if window.holder == player);
+    let legal_timing = match timing {
+        SpellTiming::Support => resting_in_own_main || holds_priority,
+        SpellTiming::Attack => holds_priority,
+    };
+    if !legal_timing {
+        return Err(ActionError::WrongPhase);
+    }
+
+    let payment = match payment::deduct(player_state.mana, cost, mana_hint) {
+        Ok(payment) => payment,
+        Err(PaymentError::Insufficient(short)) => {
+            return Err(ActionError::InsufficientMana { short });
+        }
+        Err(PaymentError::InvalidHint) => return Err(ActionError::InvalidManaHint),
+    };
+
+    let mut next = state.clone();
+    next.turn.window = Some(window_after_play(player));
+    next.turn.spell_played_this_turn = true;
+    next.stack.push(StackItem::Spell {
+        caster: player,
+        card: card_ref,
+        targets: targets.clone(),
+    });
+    let next_player = next.players.get_mut(player);
+    next_player.mana = payment.bank;
+    next_player.hand.remove(hand_index);
+
+    let mut events: Vec<GameEvent> = payment
+        .deductions
+        .iter()
+        .map(|deduction| GameEvent::ManaDeducted {
+            player,
+            mana_type: deduction.mana_type,
+            amount: deduction.amount,
+        })
+        .collect();
+    events.push(GameEvent::SpellCast {
+        player,
+        card,
+        targets,
+    });
+
+    Ok(ActionOutcome {
+        state: next,
+        events,
+    })
+}
+
 /// The Priority window that follows `player` declaring an attack, ending
 /// their turn without attacking, or playing an effect (rules §31, §32,
 /// §47). Rules §32 states the general fact: "whenever a player plays a
 /// Spell or passes, Priority moves to the other player." `pass` below is
 /// the passing half of that sentence; this is the playing half, and it is
 /// the same value in every case — the other player becomes the holder and
-/// the pass streak starts clean — so `declare_attack` and
+/// the pass streak starts clean — so `declare_attack`, `cast_spell`, and
 /// `engine::turn::end_turn`, which each open that window for their own
-/// rule (§31 and §47 respectively), build it here instead of restating it
-/// and risking disagreement on the pass streak. Casting a Spell,
-/// activating a Skill that creates a Stack effect, and a trigger that
-/// opens a response opportunity (rules §38) will call this too.
+/// rule (§31, §34, and §47 respectively), build it here instead of
+/// restating it and risking disagreement on the pass streak. Activating a
+/// Skill that creates a Stack effect and a trigger that opens a response
+/// opportunity (rules §38) will call this too.
 pub(crate) fn window_after_play(player: PlayerId) -> StackWindow {
     StackWindow {
         holder: player.opponent(),
@@ -379,6 +472,301 @@ mod tests {
         let _ = declare_attack(&state, PlayerId::One, Position::Main, None);
 
         assert_eq!(state, before);
+    }
+
+    // --- cast_spell: timing gates, payment, Stack push -------------------
+
+    fn hand_with(def: &'static str, instance: u32) -> Vec<CardRef> {
+        vec![CardRef {
+            instance: CardInstanceId(instance),
+            def: CardDefId(def),
+        }]
+    }
+
+    #[test]
+    fn cast_spell_a_support_spell_pays_cost_pushes_the_stack_and_opens_a_window_for_the_opponent() {
+        let mut state = base_state();
+        state.players.get_mut(PlayerId::One).hand = hand_with("renewing-balm", 5);
+        state.players.get_mut(PlayerId::One).mana = ManaBank {
+            matter: 1,
+            mind: 0,
+            spirit: 0,
+        };
+
+        let outcome = cast_spell(
+            &state,
+            PlayerId::One,
+            CardInstanceId(5),
+            vec![Position::Main],
+            None,
+        )
+        .expect("Renewing Balm is affordable and legal in the caster's own Main");
+
+        assert!(outcome.state.players.get(PlayerId::One).hand.is_empty());
+        assert_eq!(
+            outcome.state.stack,
+            vec![StackItem::Spell {
+                caster: PlayerId::One,
+                card: CardRef {
+                    instance: CardInstanceId(5),
+                    def: CardDefId("renewing-balm"),
+                },
+                targets: vec![Position::Main],
+            }]
+        );
+        assert_eq!(
+            outcome.state.turn.window,
+            Some(StackWindow {
+                holder: PlayerId::Two,
+                prior_pass: false,
+            })
+        );
+        assert!(outcome.state.turn.spell_played_this_turn);
+        assert_eq!(
+            outcome.events,
+            vec![
+                GameEvent::ManaDeducted {
+                    player: PlayerId::One,
+                    mana_type: ManaType::Matter,
+                    amount: 1,
+                },
+                GameEvent::SpellCast {
+                    player: PlayerId::One,
+                    card: CardInstanceId(5),
+                    targets: vec![Position::Main],
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn cast_spell_allows_a_support_spell_as_a_response_too() {
+        let mut state = base_state();
+        state.turn.active_player = PlayerId::Two;
+        state.turn.phase = Phase::Combat;
+        state.turn.window = Some(StackWindow {
+            holder: PlayerId::One,
+            prior_pass: false,
+        });
+        state.players.get_mut(PlayerId::One).hand = hand_with("renewing-balm", 5);
+        state.players.get_mut(PlayerId::One).mana = ManaBank {
+            matter: 1,
+            mind: 0,
+            spirit: 0,
+        };
+
+        let outcome = cast_spell(
+            &state,
+            PlayerId::One,
+            CardInstanceId(5),
+            vec![Position::Main],
+            None,
+        )
+        .expect("One holds Priority, so the Support Spell is a legal response too (rules §34)");
+
+        assert_eq!(
+            outcome.state.turn.window,
+            Some(StackWindow {
+                holder: PlayerId::Two,
+                prior_pass: false,
+            })
+        );
+    }
+
+    #[test]
+    fn cast_spell_rejects_a_support_spell_outside_main_and_without_priority() {
+        let mut state = base_state();
+        state.turn.phase = Phase::Combat;
+        state.players.get_mut(PlayerId::One).hand = hand_with("renewing-balm", 5);
+
+        let result = cast_spell(
+            &state,
+            PlayerId::One,
+            CardInstanceId(5),
+            vec![Position::Main],
+            None,
+        );
+
+        assert_eq!(result, Err(ActionError::WrongPhase));
+    }
+
+    #[test]
+    fn cast_spell_rejects_an_attack_spell_cast_proactively_in_main() {
+        // Rules §34: an Attack Spell "may normally be played as part of an
+        // attack or as responses to appropriate offensive effects" — never
+        // proactively, even during the caster's own resting Main Phase.
+        let mut state = base_state();
+        state.players.get_mut(PlayerId::One).hand = hand_with("ember-lance", 5);
+        state.players.get_mut(PlayerId::One).mana = ManaBank {
+            matter: 1,
+            mind: 0,
+            spirit: 0,
+        };
+
+        let result = cast_spell(
+            &state,
+            PlayerId::One,
+            CardInstanceId(5),
+            vec![Position::Main],
+            None,
+        );
+
+        assert_eq!(result, Err(ActionError::WrongPhase));
+    }
+
+    #[test]
+    fn cast_spell_allows_an_attack_spell_as_a_response_inside_a_combat_window() {
+        // Rules §46: "the defending player may play a legal Support Spell,
+        // play a legal Attack Spell if its timing allows, or pass." The
+        // Attack Spell is cast after the attack is already on the Stack, so
+        // it resolves first (last in, first out — rules §35).
+        let mut state = base_state();
+        state.turn.phase = Phase::Combat;
+        state.turn.window = Some(StackWindow {
+            holder: PlayerId::Two,
+            prior_pass: false,
+        });
+        state.stack.push(StackItem::Attack {
+            attacker: PlayerId::One,
+            target: Position::Main,
+        });
+        state.players.get_mut(PlayerId::Two).hand = hand_with("ember-lance", 7);
+        state.players.get_mut(PlayerId::Two).mana = ManaBank {
+            matter: 1,
+            mind: 0,
+            spirit: 0,
+        };
+
+        let outcome = cast_spell(
+            &state,
+            PlayerId::Two,
+            CardInstanceId(7),
+            vec![Position::Main],
+            None,
+        )
+        .expect("Two holds Priority, so the Attack Spell is a legal response");
+
+        assert_eq!(
+            outcome.state.stack,
+            vec![
+                StackItem::Attack {
+                    attacker: PlayerId::One,
+                    target: Position::Main,
+                },
+                StackItem::Spell {
+                    caster: PlayerId::Two,
+                    card: CardRef {
+                        instance: CardInstanceId(7),
+                        def: CardDefId("ember-lance"),
+                    },
+                    targets: vec![Position::Main],
+                },
+            ],
+            "the Attack Spell is last in, so it sits on top of the original attack"
+        );
+        assert_eq!(
+            outcome.state.turn.window,
+            Some(StackWindow {
+                holder: PlayerId::One,
+                prior_pass: false,
+            })
+        );
+    }
+
+    #[test]
+    fn cast_spell_rejects_a_pending_decision() {
+        let mut state = base_state();
+        state.pending = Some(PendingInput::Promotion {
+            player: PlayerId::One,
+        });
+        state.players.get_mut(PlayerId::One).hand = hand_with("renewing-balm", 5);
+
+        let result = cast_spell(
+            &state,
+            PlayerId::One,
+            CardInstanceId(5),
+            vec![Position::Main],
+            None,
+        );
+
+        assert_eq!(result, Err(ActionError::PendingInputMismatch));
+    }
+
+    #[test]
+    fn cast_spell_rejects_a_card_not_in_hand() {
+        let state = base_state();
+
+        let result = cast_spell(
+            &state,
+            PlayerId::One,
+            CardInstanceId(999),
+            vec![Position::Main],
+            None,
+        );
+
+        assert_eq!(result, Err(ActionError::UnknownCard));
+    }
+
+    #[test]
+    fn cast_spell_rejects_a_non_spell_card() {
+        let mut state = base_state();
+        state.players.get_mut(PlayerId::One).hand = hand_with("quarry-whelp", 5);
+
+        let result = cast_spell(
+            &state,
+            PlayerId::One,
+            CardInstanceId(5),
+            vec![Position::Main],
+            None,
+        );
+
+        assert_eq!(result, Err(ActionError::UnknownCard));
+    }
+
+    #[test]
+    fn cast_spell_reports_a_mana_shortfall() {
+        let mut state = base_state();
+        state.players.get_mut(PlayerId::One).hand = hand_with("renewing-balm", 5);
+
+        let result = cast_spell(
+            &state,
+            PlayerId::One,
+            CardInstanceId(5),
+            vec![Position::Main],
+            None,
+        );
+
+        assert_eq!(
+            result,
+            Err(ActionError::InsufficientMana {
+                short: ManaBank {
+                    matter: 1,
+                    mind: 0,
+                    spirit: 0,
+                }
+            })
+        );
+    }
+
+    #[test]
+    fn cast_spell_rejects_a_hint_naming_an_empty_pool() {
+        let mut state = base_state();
+        state.players.get_mut(PlayerId::One).hand = hand_with("renewing-balm", 5);
+        state.players.get_mut(PlayerId::One).mana = ManaBank {
+            matter: 1,
+            mind: 0,
+            spirit: 0,
+        };
+
+        let result = cast_spell(
+            &state,
+            PlayerId::One,
+            CardInstanceId(5),
+            vec![Position::Main],
+            Some(ManaType::Spirit),
+        );
+
+        assert_eq!(result, Err(ActionError::InvalidManaHint));
     }
 
     // --- pass: single vs double, window holder gating -------------------
