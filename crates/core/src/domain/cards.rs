@@ -163,12 +163,14 @@ pub(crate) enum CardNode {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Query {
     CurrentForm,
+    ProducedManaTypes,
 }
 
 /// One answer `CardDef::find` can return, matching the `Query` asked.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum QueryResult {
     CurrentForm(Form),
+    ProducedManaTypes(Vec<ManaType>),
 }
 
 /// One printed card: an id, a display name, its family, and its nodes.
@@ -187,6 +189,9 @@ impl CardDef {
     pub(crate) fn find(&self, query: Query) -> Option<QueryResult> {
         self.nodes.iter().find_map(|node| match (query, node) {
             (Query::CurrentForm, CardNode::Form(form)) => Some(QueryResult::CurrentForm(*form)),
+            (Query::ProducedManaTypes, CardNode::Produces(types)) => {
+                Some(QueryResult::ProducedManaTypes(types.clone()))
+            }
             _ => None,
         })
     }
@@ -403,6 +408,24 @@ mod tests {
         assert_eq!(
             whelp.find(Query::CurrentForm),
             Some(QueryResult::CurrentForm(Form::Base))
+        );
+    }
+
+    #[test]
+    fn find_reads_produced_mana_types() {
+        let whelp = find_def(CardDefId("quarry-whelp")).expect("fixture exists");
+        assert_eq!(
+            whelp.find(Query::ProducedManaTypes),
+            Some(QueryResult::ProducedManaTypes(vec![ManaType::Matter]))
+        );
+
+        let adept = find_def(CardDefId("set-path-adept")).expect("fixture exists");
+        assert_eq!(
+            adept.find(Query::ProducedManaTypes),
+            Some(QueryResult::ProducedManaTypes(vec![
+                ManaType::Matter,
+                ManaType::Mind
+            ]))
         );
     }
 
