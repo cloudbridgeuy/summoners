@@ -1,0 +1,451 @@
+//! The provisional card representation (design decision 6).
+//!
+//! A card is a tree of typed nodes and effect leaves, reached only through
+//! `CardDef::find`. The final Card container is a separate, future design;
+//! when it lands, `CardDef` and `find` change but the engine keeps this
+//! query surface. Everything below `CardDefId` stays `pub(crate)` because no
+//! code outside this crate should depend on today's shape.
+//!
+//! The fixture registry at the bottom is a minimal set of vanilla Summons —
+//! `Life`, `Produces`, `RetreatCost`, and `Form` nodes only — sufficient for
+//! `scenario::from_scenario`'s chain-order and board tests. The four
+//! signature cards from `designs/types_archetypes.md` (Colossus of the
+//! Quarry, Warden of Set Paths, Griefsinger, Old Sow of the Barrow), their
+//! Base/Enhanced fixture lineage, the four Spells, and the vanilla
+//! Enchantment (design decision 1) arrive with the work that first gives
+//! them abilities to test; this module already settles the vocabulary
+//! those fixtures will use (`EffectLeaf`, `CardNode`, `Modifier`), so a few
+//! variants below have no production caller yet. Stats and names are test
+//! data, not final card designs (decision 9).
+
+use crate::domain::ids::ManaType;
+
+/// A stable key for one printed card in the fixture registry. Scenarios
+/// reference cards by this id; it is public because `Scenario` is public.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct CardDefId(pub &'static str);
+
+/// The three card families (rules §3). The registry below is Summons only;
+/// `Spell` and `Enchantment` stay unconstructed until fixtures of those
+/// kinds land.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
+pub(crate) enum CardKind {
+    Summon,
+    Spell,
+    Enchantment,
+}
+
+/// A Summon's place in its upgrade chain (rules §20).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum Form {
+    Base,
+    Enhanced,
+    Elite,
+}
+
+/// The event a `CardNode::Trigger` fires on. This is a starter vocabulary;
+/// later work adds events as fixture cards need them. Unlike the rest of
+/// this module it is `pub`, not `pub(crate)`: `GameEvent::TriggerFired` and
+/// `WorkItem::FireTrigger` are public and both name it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TriggerEvent {
+    YourUpkeep,
+    EntersMain,
+    EntersBench,
+    LeavesMain,
+    LeavesBench,
+    AnySummonDestroyed,
+}
+
+/// A condition an effect leaf can test before applying a bonus. No fixture
+/// in the vanilla registry carries a conditional effect yet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
+pub(crate) enum EffectCondition {
+    DefenderEnteredMainThisTurn,
+    SpellPlayedThisTurn,
+}
+
+/// The family of response an effect can block. No fixture in the vanilla
+/// registry blocks a response yet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
+pub(crate) enum ResponseBlock {
+    AttackSpells,
+}
+
+/// A typed plus Generic Mana cost (rules §12). Every component may be zero;
+/// a Skill's cost may be free (rules §15). No vanilla fixture carries a
+/// costed node yet, so this struct has no production caller until one does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[allow(dead_code)]
+pub(crate) struct Cost {
+    pub matter: u32,
+    pub mind: u32,
+    pub spirit: u32,
+    pub generic: u32,
+}
+
+/// The first fixed set of effect leaves, one per signature card ability
+/// (design decision 1). Shapes here are provisional. None has a production
+/// caller yet: the vanilla registry has no costed node to carry one, and
+/// the interpreter that runs them belongs to later work.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(dead_code)]
+pub(crate) enum EffectLeaf {
+    DealDamage {
+        amount: u32,
+        immutable: bool,
+    },
+    Heal {
+        amount: u32,
+    },
+    MoveSummon,
+    SwapPositions,
+    ConditionalBonus {
+        condition: EffectCondition,
+        amount: u32,
+    },
+    BlockResponses(ResponseBlock),
+    ReturnSpellFromDiscard,
+    LookAtPrizes,
+    DrawCards {
+        amount: u32,
+    },
+    ReturnSpellToDeckTop,
+    ProduceMana,
+    CannotBeMovedByOpponent,
+}
+
+/// The first Modifier: a Passive's continuous adjustment (rules §16). No
+/// vanilla fixture carries a Passive node yet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
+pub(crate) enum Modifier {
+    OpposingRetreatCostDelta(i32),
+}
+
+/// One typed fact or ability printed on a card. The vanilla registry only
+/// ever builds `Life`, `Produces`, `RetreatCost`, and `Form`; the ability
+/// node shapes (`Attack`, `Skill`, `Trigger`, `Passive`) are settled now so
+/// later fixtures share this tree instead of growing a second one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum CardNode {
+    Life(u32),
+    Produces(Vec<ManaType>),
+    RetreatCost(u32),
+    Form(Form),
+    #[allow(dead_code)]
+    Attack {
+        cost: Cost,
+        effects: Vec<EffectLeaf>,
+    },
+    #[allow(dead_code)]
+    Skill {
+        cost: Cost,
+        effects: Vec<EffectLeaf>,
+    },
+    #[allow(dead_code)]
+    Trigger {
+        event: TriggerEvent,
+        respondable: bool,
+        effects: Vec<EffectLeaf>,
+    },
+    #[allow(dead_code)]
+    Passive(Modifier),
+}
+
+/// A question `CardDef::find` can answer about one printed card. Only
+/// `CurrentForm` has a caller today (chain-order validation in
+/// `scenario::from_scenario`); more variants arrive alongside the handler
+/// that first needs them, matching the rest of this crate's stubs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Query {
+    CurrentForm,
+}
+
+/// One answer `CardDef::find` can return, matching the `Query` asked.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum QueryResult {
+    CurrentForm(Form),
+}
+
+/// One printed card: an id, a display name, its family, and its nodes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CardDef {
+    pub id: CardDefId,
+    pub name: &'static str,
+    pub kind: CardKind,
+    pub nodes: Vec<CardNode>,
+}
+
+impl CardDef {
+    /// The only way to read a card's characteristics. Callers never match on
+    /// `nodes` directly, so the tree's shape can change later without
+    /// touching call sites.
+    pub(crate) fn find(&self, query: Query) -> Option<QueryResult> {
+        self.nodes.iter().find_map(|node| match (query, node) {
+            (Query::CurrentForm, CardNode::Form(form)) => Some(QueryResult::CurrentForm(*form)),
+            _ => None,
+        })
+    }
+}
+
+/// A minimal registry of vanilla Summons — enough for `from_scenario`'s
+/// board and chain-order tests, no more. One three-step chain and one
+/// two-step chain, so tests can exercise both a full and a partial climb.
+/// Fixture stats and names are test data, not final card designs.
+pub(crate) fn registry() -> Vec<CardDef> {
+    vec![
+        // Chain 1 — three steps.
+        CardDef {
+            id: CardDefId("quarry-whelp"),
+            name: "Quarry Whelp",
+            kind: CardKind::Summon,
+            nodes: vec![
+                CardNode::Life(40),
+                CardNode::Produces(vec![ManaType::Matter]),
+                CardNode::RetreatCost(1),
+                CardNode::Form(Form::Base),
+            ],
+        },
+        CardDef {
+            id: CardDefId("quarry-brute"),
+            name: "Quarry Brute",
+            kind: CardKind::Summon,
+            nodes: vec![
+                CardNode::Life(90),
+                CardNode::Produces(vec![ManaType::Matter]),
+                CardNode::RetreatCost(2),
+                CardNode::Form(Form::Enhanced),
+            ],
+        },
+        CardDef {
+            id: CardDefId("colossus-of-the-quarry"),
+            name: "Colossus of the Quarry",
+            kind: CardKind::Summon,
+            nodes: vec![
+                CardNode::Life(180),
+                CardNode::Produces(vec![ManaType::Matter]),
+                CardNode::RetreatCost(3),
+                CardNode::Form(Form::Elite),
+            ],
+        },
+        // Chain 2 — two steps.
+        CardDef {
+            id: CardDefId("set-path-adept"),
+            name: "Set-Path Adept",
+            kind: CardKind::Summon,
+            nodes: vec![
+                CardNode::Life(50),
+                CardNode::Produces(vec![ManaType::Matter, ManaType::Mind]),
+                CardNode::RetreatCost(2),
+                CardNode::Form(Form::Base),
+            ],
+        },
+        CardDef {
+            id: CardDefId("set-path-warden"),
+            name: "Set-Path Warden",
+            kind: CardKind::Summon,
+            nodes: vec![
+                CardNode::Life(100),
+                CardNode::Produces(vec![ManaType::Matter, ManaType::Mind]),
+                CardNode::RetreatCost(2),
+                CardNode::Form(Form::Enhanced),
+            ],
+        },
+    ]
+}
+
+/// Look up one fixture by id.
+pub(crate) fn find_def(id: CardDefId) -> Option<CardDef> {
+    registry().into_iter().find(|def| def.id == id)
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::expect_used)]
+
+    use super::*;
+
+    #[test]
+    fn card_def_id_constructs_and_compares() {
+        assert_eq!(CardDefId("a"), CardDefId("a"));
+        assert_ne!(CardDefId("a"), CardDefId("b"));
+    }
+
+    #[test]
+    fn card_kind_variants_construct() {
+        let kinds = [CardKind::Summon, CardKind::Spell, CardKind::Enchantment];
+        assert_eq!(kinds.len(), 3);
+    }
+
+    #[test]
+    fn form_orders_base_below_enhanced_below_elite() {
+        assert!(Form::Base < Form::Enhanced);
+        assert!(Form::Enhanced < Form::Elite);
+    }
+
+    #[test]
+    fn trigger_event_variants_construct() {
+        let events = [
+            TriggerEvent::YourUpkeep,
+            TriggerEvent::EntersMain,
+            TriggerEvent::EntersBench,
+            TriggerEvent::LeavesMain,
+            TriggerEvent::LeavesBench,
+            TriggerEvent::AnySummonDestroyed,
+        ];
+        assert_eq!(events.len(), 6);
+    }
+
+    #[test]
+    fn effect_condition_variants_construct() {
+        let conditions = [
+            EffectCondition::DefenderEnteredMainThisTurn,
+            EffectCondition::SpellPlayedThisTurn,
+        ];
+        assert_eq!(conditions.len(), 2);
+    }
+
+    #[test]
+    fn response_block_variants_construct() {
+        assert_eq!(ResponseBlock::AttackSpells, ResponseBlock::AttackSpells);
+    }
+
+    #[test]
+    fn cost_defaults_to_free() {
+        assert_eq!(
+            Cost::default(),
+            Cost {
+                matter: 0,
+                mind: 0,
+                spirit: 0,
+                generic: 0,
+            }
+        );
+    }
+
+    #[test]
+    fn every_effect_leaf_variant_constructs() {
+        let leaves = vec![
+            EffectLeaf::DealDamage {
+                amount: 10,
+                immutable: false,
+            },
+            EffectLeaf::Heal { amount: 10 },
+            EffectLeaf::MoveSummon,
+            EffectLeaf::SwapPositions,
+            EffectLeaf::ConditionalBonus {
+                condition: EffectCondition::SpellPlayedThisTurn,
+                amount: 20,
+            },
+            EffectLeaf::BlockResponses(ResponseBlock::AttackSpells),
+            EffectLeaf::ReturnSpellFromDiscard,
+            EffectLeaf::LookAtPrizes,
+            EffectLeaf::DrawCards { amount: 1 },
+            EffectLeaf::ReturnSpellToDeckTop,
+            EffectLeaf::ProduceMana,
+            EffectLeaf::CannotBeMovedByOpponent,
+        ];
+        assert_eq!(leaves.len(), 12);
+    }
+
+    #[test]
+    fn modifier_variants_construct() {
+        assert_eq!(
+            Modifier::OpposingRetreatCostDelta(1),
+            Modifier::OpposingRetreatCostDelta(1)
+        );
+    }
+
+    #[test]
+    fn every_card_node_variant_constructs() {
+        let nodes = [
+            CardNode::Life(10),
+            CardNode::Produces(vec![ManaType::Matter]),
+            CardNode::RetreatCost(1),
+            CardNode::Form(Form::Base),
+            CardNode::Attack {
+                cost: Cost::default(),
+                effects: vec![EffectLeaf::DealDamage {
+                    amount: 10,
+                    immutable: false,
+                }],
+            },
+            CardNode::Skill {
+                cost: Cost::default(),
+                effects: vec![EffectLeaf::Heal { amount: 10 }],
+            },
+            CardNode::Trigger {
+                event: TriggerEvent::YourUpkeep,
+                respondable: false,
+                effects: vec![EffectLeaf::Heal { amount: 10 }],
+            },
+            CardNode::Passive(Modifier::OpposingRetreatCostDelta(1)),
+        ];
+        assert_eq!(nodes.len(), 8);
+    }
+
+    #[test]
+    fn card_kind_covers_spell_and_enchantment_too() {
+        // The registry below is Summons only; this test is the only
+        // production-adjacent proof that `Spell` and `Enchantment` still
+        // construct and compare correctly.
+        assert_ne!(CardKind::Spell, CardKind::Enchantment);
+        assert_ne!(CardKind::Summon, CardKind::Spell);
+    }
+
+    #[test]
+    fn find_reads_only_the_current_form() {
+        let whelp = find_def(CardDefId("quarry-whelp")).expect("fixture exists");
+        assert_eq!(
+            whelp.find(Query::CurrentForm),
+            Some(QueryResult::CurrentForm(Form::Base))
+        );
+    }
+
+    #[test]
+    fn find_returns_none_for_an_absent_node() {
+        let bare = CardDef {
+            id: CardDefId("bare"),
+            name: "Bare",
+            kind: CardKind::Summon,
+            nodes: vec![],
+        };
+        assert_eq!(bare.find(Query::CurrentForm), None);
+    }
+
+    #[test]
+    fn find_def_locates_a_registry_fixture_and_rejects_an_unknown_id() {
+        assert!(find_def(CardDefId("quarry-whelp")).is_some());
+        assert!(find_def(CardDefId("does-not-exist")).is_none());
+    }
+
+    #[test]
+    fn registry_holds_a_two_step_and_a_three_step_chain() {
+        let defs = registry();
+        assert_eq!(defs.len(), 5);
+        assert!(defs.iter().all(|def| def.kind == CardKind::Summon));
+    }
+
+    #[test]
+    fn every_summon_chain_climbs_base_enhanced_elite() {
+        fn form_of(id: &'static str) -> Form {
+            let def = find_def(CardDefId(id)).expect("fixture exists");
+            let Some(QueryResult::CurrentForm(form)) = def.find(Query::CurrentForm) else {
+                panic!("every registry Summon fixture carries a Form node");
+            };
+            form
+        }
+
+        let three_step = ["quarry-whelp", "quarry-brute", "colossus-of-the-quarry"];
+        let forms: Vec<Form> = three_step.iter().map(|id| form_of(id)).collect();
+        assert_eq!(forms, vec![Form::Base, Form::Enhanced, Form::Elite]);
+
+        let two_step = ["set-path-adept", "set-path-warden"];
+        let forms: Vec<Form> = two_step.iter().map(|id| form_of(id)).collect();
+        assert_eq!(forms, vec![Form::Base, Form::Enhanced]);
+    }
+}
