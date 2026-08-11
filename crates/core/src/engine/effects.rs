@@ -11,13 +11,24 @@
 //! target Position is empty by the time it runs — the same miss semantics
 //! `engine::resolution::resolve_attack` already used before this module
 //! existed. `DrawCards` has no Position target; it always draws for
-//! `controller` directly. Every other leaf is a documented no-op until a
+//! `controller` directly. `MoveSummon` and `SwapPositions` are also
+//! positional, but their caller (`engine::skills::activate_skill`) validates
+//! both positions before either leaf ever runs, since a Skill resolves
+//! immediately rather than sitting on the Stack until a target might change
+//! (rules §43) — so a miss here only ever means a caller supplied something
+//! this interpreter cannot act on, not a legal in-fiction whiff.
+//! `ProduceMana` delegates to `engine::upkeep::produce_mana` against the
+//! named Summon's own printed Types. `ReadySummon` is positional against
+//! `controller`'s own board. Every other leaf is a documented no-op until a
 //! later fixture gives it behavior.
 
 use crate::domain::cards::EffectLeaf;
 use crate::domain::events::GameEvent;
 use crate::domain::ids::{PlayerId, Position};
-use crate::domain::state::{GameState, PlayerState, SummonInstance, WorkItem};
+use crate::domain::state::{
+    GameState, ManaSource, MovementStep, PlayerState, SummonInstance, WorkItem,
+};
+use crate::engine::upkeep;
 
 /// Apply one printed `EffectLeaf`, controlled by `controller` — the
 /// attacking or casting player — against `targets`. `DealDamage` reads its
@@ -29,7 +40,10 @@ use crate::domain::state::{GameState, PlayerState, SummonInstance, WorkItem};
 /// `WorkItem::LossCheck` (rules §2, §10 step 2, §58 — an empty Deck on a
 /// forced draw is an immediate loss). `WorkItem::DestructionCheck` and
 /// `WorkItem::LossCheck` are documented no-ops elsewhere in the engine
-/// today; this interpreter only enqueues them.
+/// today; this interpreter only enqueues them. `MoveSummon` and
+/// `SwapPositions` read and write `controller`'s own board and enqueue
+/// `WorkItem::MovementTrigger`s (rules §28); `ProduceMana` and `ReadySummon`
+/// are documented on their own functions below.
 pub(crate) fn apply_leaf(
     state: &GameState,
     controller: PlayerId,
@@ -40,14 +54,15 @@ pub(crate) fn apply_leaf(
         EffectLeaf::DealDamage { amount, .. } => deal_damage(state, controller, targets, *amount),
         EffectLeaf::Heal { amount } => heal(state, controller, targets, *amount),
         EffectLeaf::DrawCards { amount } => draw_cards(state, controller, *amount),
-        EffectLeaf::MoveSummon
-        | EffectLeaf::SwapPositions
-        | EffectLeaf::ConditionalBonus { .. }
+        EffectLeaf::MoveSummon => move_summon(state, controller, targets),
+        EffectLeaf::SwapPositions => swap_positions(state, controller, targets),
+        EffectLeaf::ProduceMana => produce_mana_leaf(state, controller, targets),
+        EffectLeaf::ReadySummon => ready_summon(state, controller, targets),
+        EffectLeaf::ConditionalBonus { .. }
         | EffectLeaf::BlockResponses(_)
         | EffectLeaf::ReturnSpellFromDiscard
         | EffectLeaf::LookAtPrizes
         | EffectLeaf::ReturnSpellToDeckTop
-        | EffectLeaf::ProduceMana
         | EffectLeaf::CannotBeMovedByOpponent => (state.clone(), Vec::new()),
     }
 }
@@ -142,6 +157,152 @@ fn draw_cards(state: &GameState, controller: PlayerId, amount: u32) -> (GameStat
     state.work.push_back(WorkItem::LossCheck(controller));
 
     (state, events)
+}
+
+/// Relocate `controller`'s own Summon from `targets[0]` to the empty Bench
+/// slot at `targets[1]` — never Main, since Main can never be voluntarily
+/// emptied without a replacement (rules §27; `swap_positions` is that
+/// replacement's leaf). Callers validate both positions before this runs
+/// (`engine::skills::activate_skill` rejects an occupied destination or a
+/// missing source with `ActionError::InvalidTarget` first), so this stays a
+/// defensive no-op on any input it cannot act on, matching this
+/// interpreter's other leaves. `ready` and every other field travel with the
+/// moved Summon unchanged (movement, not a new arrival — the same reading
+/// `engine::destruction::promote_from_slot` gives Promotion). Enqueues the
+/// two movement triggers a Bench-to-Bench move fires (rules §28, §36).
+fn move_summon(
+    state: &GameState,
+    controller: PlayerId,
+    targets: &[Position],
+) -> (GameState, Vec<GameEvent>) {
+    let (Some(&from), Some(&to)) = (targets.first(), targets.get(1)) else {
+        return (state.clone(), Vec::new());
+    };
+    let (Position::Bench(from_slot), Position::Bench(to_slot)) = (from, to) else {
+        return (state.clone(), Vec::new());
+    };
+
+    let mut state = state.clone();
+    let player_state = state.players.get_mut(controller);
+    if player_state.bench[to_slot.index()].is_some() {
+        return (state, Vec::new());
+    }
+    let Some(summon) = player_state.bench[from_slot.index()].take() else {
+        return (state, Vec::new());
+    };
+    player_state.bench[to_slot.index()] = Some(summon);
+
+    state
+        .work
+        .push_back(WorkItem::MovementTrigger(MovementStep::LeavingBench, from));
+    state
+        .work
+        .push_back(WorkItem::MovementTrigger(MovementStep::EnteringBench, to));
+
+    (state, Vec::new())
+}
+
+/// Exchange `controller`'s Main Summon with the one at the Bench slot named
+/// by `targets[0]` — the same exchange `engine::board::retreat` performs,
+/// reached here through a Skill instead of the normal Retreat action (rules
+/// §43). Callers validate both sides are occupied before this runs, so this
+/// stays a defensive no-op otherwise. `ready` travels with each Summon
+/// unchanged; only `entered_main_this_turn` is set on the Summon now
+/// entering Main, matching `retreat`'s own bookkeeping. Enqueues the same
+/// four movement triggers in the same fixed order (rules §28).
+fn swap_positions(
+    state: &GameState,
+    controller: PlayerId,
+    targets: &[Position],
+) -> (GameState, Vec<GameEvent>) {
+    let Some(&target) = targets.first() else {
+        return (state.clone(), Vec::new());
+    };
+    let Position::Bench(slot) = target else {
+        return (state.clone(), Vec::new());
+    };
+
+    let mut state = state.clone();
+    let player_state = state.players.get_mut(controller);
+    let Some(vacating_main) = player_state.main.take() else {
+        return (state, Vec::new());
+    };
+    let Some(mut incoming_main) = player_state.bench[slot.index()].take() else {
+        player_state.main = Some(vacating_main);
+        return (state, Vec::new());
+    };
+    incoming_main.entered_main_this_turn = true;
+    player_state.main = Some(incoming_main);
+    player_state.bench[slot.index()] = Some(vacating_main);
+
+    state.work.push_back(WorkItem::MovementTrigger(
+        MovementStep::LeavingMain,
+        Position::Main,
+    ));
+    state.work.push_back(WorkItem::MovementTrigger(
+        MovementStep::EnteringBench,
+        Position::Bench(slot),
+    ));
+    state.work.push_back(WorkItem::MovementTrigger(
+        MovementStep::LeavingBench,
+        Position::Bench(slot),
+    ));
+    state.work.push_back(WorkItem::MovementTrigger(
+        MovementStep::EnteringMain,
+        Position::Main,
+    ));
+
+    (
+        state,
+        vec![GameEvent::SummonsSwapped {
+            player: controller,
+            main: slot,
+        }],
+    )
+}
+
+/// Produce Mana from one Summon's own printed Types — `targets[0]` names its
+/// position — rather than `controller`'s player-wide anchor (rules §11–12,
+/// `ManaSource::Summon`). Delegates entirely to `engine::upkeep::produce_mana`
+/// so a Skill-driven production pauses on the same
+/// `PendingInput::ManaProduction` a multi-type Summon's natural production
+/// would. No target is a no-op: nothing names which Summon produces.
+fn produce_mana_leaf(
+    state: &GameState,
+    _controller: PlayerId,
+    targets: &[Position],
+) -> (GameState, Vec<GameEvent>) {
+    let Some(&position) = targets.first() else {
+        return (state.clone(), Vec::new());
+    };
+    upkeep::produce_mana(state, ManaSource::Summon(position))
+}
+
+/// Turn Ready the Summon at `controller`'s own `targets[0]` (rules §53). No
+/// target, or an empty target Position, is a miss: nothing to Ready, no
+/// event.
+fn ready_summon(
+    state: &GameState,
+    controller: PlayerId,
+    targets: &[Position],
+) -> (GameState, Vec<GameEvent>) {
+    let Some(&position) = targets.first() else {
+        return (state.clone(), Vec::new());
+    };
+
+    let mut state = state.clone();
+    let Some(summon) = summon_at_mut(state.players.get_mut(controller), position) else {
+        return (state, Vec::new());
+    };
+    summon.ready = true;
+
+    (
+        state,
+        vec![GameEvent::SummonsReadied {
+            player: controller,
+            positions: vec![position],
+        }],
+    )
 }
 
 /// The Summon at `position`, mutably, if any.
@@ -399,8 +560,6 @@ mod tests {
     fn every_other_leaf_is_a_documented_no_op() {
         let state = base_state();
         let leaves = [
-            EffectLeaf::MoveSummon,
-            EffectLeaf::SwapPositions,
             EffectLeaf::ConditionalBonus {
                 condition: crate::domain::cards::EffectCondition::SpellPlayedThisTurn,
                 amount: 5,
@@ -409,7 +568,6 @@ mod tests {
             EffectLeaf::ReturnSpellFromDiscard,
             EffectLeaf::LookAtPrizes,
             EffectLeaf::ReturnSpellToDeckTop,
-            EffectLeaf::ProduceMana,
             EffectLeaf::CannotBeMovedByOpponent,
         ];
 
@@ -418,5 +576,207 @@ mod tests {
             assert!(events.is_empty());
             assert_eq!(next_state, state);
         }
+    }
+
+    #[test]
+    fn move_summon_relocates_a_bench_summon_to_an_empty_bench_slot_and_enqueues_its_triggers() {
+        let mut state = base_state();
+        state.players.get_mut(PlayerId::One).bench[0] = Some(whelp(PlayerId::One));
+        let leaf = EffectLeaf::MoveSummon;
+
+        let (state, events) = apply_leaf(
+            &state,
+            PlayerId::One,
+            &[
+                Position::Bench(BenchSlot::First),
+                Position::Bench(BenchSlot::Second),
+            ],
+            &leaf,
+        );
+
+        assert!(events.is_empty());
+        assert!(state.players.get(PlayerId::One).bench[0].is_none());
+        assert!(state.players.get(PlayerId::One).bench[1].is_some());
+        assert_eq!(
+            state.work,
+            VecDeque::from(vec![
+                WorkItem::MovementTrigger(
+                    MovementStep::LeavingBench,
+                    Position::Bench(BenchSlot::First)
+                ),
+                WorkItem::MovementTrigger(
+                    MovementStep::EnteringBench,
+                    Position::Bench(BenchSlot::Second)
+                ),
+            ])
+        );
+    }
+
+    #[test]
+    fn move_summon_onto_an_occupied_destination_is_a_silent_miss() {
+        let mut state = base_state();
+        state.players.get_mut(PlayerId::One).bench[0] = Some(whelp(PlayerId::One));
+        state.players.get_mut(PlayerId::One).bench[1] = Some(whelp(PlayerId::One));
+        let leaf = EffectLeaf::MoveSummon;
+
+        let (next_state, events) = apply_leaf(
+            &state,
+            PlayerId::One,
+            &[
+                Position::Bench(BenchSlot::First),
+                Position::Bench(BenchSlot::Second),
+            ],
+            &leaf,
+        );
+
+        assert!(events.is_empty());
+        assert_eq!(next_state, state);
+    }
+
+    #[test]
+    fn move_summon_from_an_empty_source_is_a_silent_miss() {
+        let state = base_state();
+        let leaf = EffectLeaf::MoveSummon;
+
+        let (next_state, events) = apply_leaf(
+            &state,
+            PlayerId::One,
+            &[
+                Position::Bench(BenchSlot::First),
+                Position::Bench(BenchSlot::Second),
+            ],
+            &leaf,
+        );
+
+        assert!(events.is_empty());
+        assert_eq!(next_state, state);
+    }
+
+    #[test]
+    fn swap_positions_exchanges_main_and_the_named_bench_slot_and_enqueues_the_four_triggers() {
+        let mut state = base_state();
+        state.players.get_mut(PlayerId::One).bench[0] = Some(whelp(PlayerId::One));
+        let leaf = EffectLeaf::SwapPositions;
+
+        let (state, events) = apply_leaf(
+            &state,
+            PlayerId::One,
+            &[Position::Bench(BenchSlot::First)],
+            &leaf,
+        );
+
+        assert_eq!(
+            events,
+            vec![GameEvent::SummonsSwapped {
+                player: PlayerId::One,
+                main: BenchSlot::First,
+            }]
+        );
+        assert!(
+            state
+                .players
+                .get(PlayerId::One)
+                .main
+                .as_ref()
+                .expect("main")
+                .entered_main_this_turn
+        );
+        assert!(state.players.get(PlayerId::One).bench[0].is_some());
+        assert_eq!(
+            state.work,
+            VecDeque::from(vec![
+                WorkItem::MovementTrigger(MovementStep::LeavingMain, Position::Main),
+                WorkItem::MovementTrigger(
+                    MovementStep::EnteringBench,
+                    Position::Bench(BenchSlot::First)
+                ),
+                WorkItem::MovementTrigger(
+                    MovementStep::LeavingBench,
+                    Position::Bench(BenchSlot::First)
+                ),
+                WorkItem::MovementTrigger(MovementStep::EnteringMain, Position::Main),
+            ])
+        );
+    }
+
+    #[test]
+    fn swap_positions_against_an_empty_bench_slot_is_a_silent_miss() {
+        let state = base_state();
+        let leaf = EffectLeaf::SwapPositions;
+
+        let (next_state, events) = apply_leaf(
+            &state,
+            PlayerId::One,
+            &[Position::Bench(BenchSlot::First)],
+            &leaf,
+        );
+
+        assert!(events.is_empty());
+        assert_eq!(next_state, state);
+    }
+
+    #[test]
+    fn produce_mana_leaf_banks_the_named_summons_own_printed_type() {
+        let state = base_state();
+        let leaf = EffectLeaf::ProduceMana;
+
+        let (state, events) = apply_leaf(&state, PlayerId::One, &[Position::Main], &leaf);
+
+        assert_eq!(
+            events,
+            vec![GameEvent::ManaProduced {
+                player: PlayerId::One,
+                source: ManaSource::Summon(Position::Main),
+                mana_type: crate::domain::ids::ManaType::Matter,
+            }]
+        );
+        assert_eq!(state.players.get(PlayerId::One).mana.matter, 1);
+    }
+
+    #[test]
+    fn produce_mana_leaf_with_no_target_is_a_no_op() {
+        let state = base_state();
+        let leaf = EffectLeaf::ProduceMana;
+
+        let (next_state, events) = apply_leaf(&state, PlayerId::One, &[], &leaf);
+
+        assert!(events.is_empty());
+        assert_eq!(next_state, state);
+    }
+
+    #[test]
+    fn ready_summon_turns_the_targeted_summon_ready() {
+        let state = base_state();
+        let leaf = EffectLeaf::ReadySummon;
+
+        let (state, events) = apply_leaf(&state, PlayerId::One, &[Position::Main], &leaf);
+
+        assert_eq!(
+            events,
+            vec![GameEvent::SummonsReadied {
+                player: PlayerId::One,
+                positions: vec![Position::Main],
+            }]
+        );
+        assert!(
+            state
+                .players
+                .get(PlayerId::One)
+                .main
+                .as_ref()
+                .expect("main")
+                .ready
+        );
+    }
+
+    #[test]
+    fn ready_summon_on_an_empty_position_is_a_silent_miss() {
+        let mut state = base_state();
+        state.players.get_mut(PlayerId::One).main = None;
+        let leaf = EffectLeaf::ReadySummon;
+
+        let (_state, events) = apply_leaf(&state, PlayerId::One, &[Position::Main], &leaf);
+
+        assert!(events.is_empty());
     }
 }

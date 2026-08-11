@@ -198,8 +198,11 @@ fn an_open_priority_window_beats_the_active_player_outside_combat_too() {
 
 #[test]
 fn with_no_pending_and_no_window_only_the_active_player_may_act() {
-    // `ActivateSkill` still has no handler, so it isolates the
-    // actor-gate boundary from the now-wired actions' own behavior.
+    // `ActivateSkill` now has a real handler in `engine::skills`; this
+    // isolates the actor-gate boundary from that handler's own rule
+    // checks by using a target the actor gate lets through but the
+    // handler itself must still reject on its own terms (this fixture's
+    // quarry-whelp prints no Skill).
     let state = base_state();
     let activate_skill = GameAction::ActivateSkill {
         player: PlayerId::One,
@@ -211,36 +214,8 @@ fn with_no_pending_and_no_window_only_the_active_player_may_act() {
 
     assert!(matches!(
         apply(&state, &activate_skill),
-        Err(ActionError::NotYetImplemented)
+        Err(ActionError::InvalidTarget)
     ));
-}
-
-#[test]
-fn every_unwired_action_still_rejects_as_not_yet_implemented() {
-    // PlaySummon, UpgradeSummon, and Retreat have real handlers in
-    // `engine::board`; EndTurn, ConvertCoin, and ChooseManaType have
-    // real handlers in `engine::upkeep`; DeclareAttack, PassPriority,
-    // and CastSpell have real handlers in `engine::stack`;
-    // ChoosePromotion and ChoosePrize have real handlers in
-    // `engine::destruction`. Against this fixture's empty hand, empty
-    // Bench, resting Main Phase board, each of those eleven reaches its
-    // own rule check or its own behavior instead of falling through to
-    // `NotYetImplemented`, so they are exercised by their owning
-    // module's own tests instead of here. One arm remains genuinely
-    // unbuilt.
-    let state = base_state();
-    let actions = vec![GameAction::ActivateSkill {
-        player: PlayerId::One,
-        position: Position::Main,
-        skill: crate::domain::actions::SkillIndex(0),
-        targets: vec![],
-        mana_hint: None,
-    }];
-
-    assert_eq!(actions.len(), 1);
-    for action in &actions {
-        assert_eq!(apply(&state, action), Err(ActionError::NotYetImplemented));
-    }
 }
 
 mod demo;
