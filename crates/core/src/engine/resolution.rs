@@ -9,7 +9,7 @@ use crate::domain::cards::{EffectLeaf, Query, QueryResult, find_def};
 use crate::domain::events::GameEvent;
 use crate::domain::ids::{PlayerId, Position};
 use crate::domain::state::{GameState, PlayerState, StackItem, SummonInstance, WorkItem};
-use crate::engine::{loss, upkeep};
+use crate::engine::{destruction, loss, upkeep};
 
 /// Drain `state.work`, then the Stack, until both are settled, a decision
 /// pauses the loop (`pending` becomes set), or the game ends (`outcome`
@@ -70,21 +70,27 @@ fn execute(state: &GameState, item: &WorkItem) -> (GameState, Vec<GameEvent>) {
         WorkItem::DrawCard => execute_draw(state),
         WorkItem::ProduceMana(source) => upkeep::produce_mana(state, *source),
 
-        // Destruction, promotion, movement triggers, ability triggers, and
-        // the general loss check (§24, §28, §36–38) have no implementation
-        // yet. Draining one of these items today does nothing and produces
-        // no event: an honest, documented no-op rather than a panic, so the
-        // loop can keep moving once later work starts enqueueing them for
-        // real.
-        WorkItem::DestructionCheck(_)
-        | WorkItem::DiscardDestroyedChain(_)
-        | WorkItem::RecordMainLoss(_)
-        | WorkItem::RecoverPrize(_)
-        | WorkItem::PromoteBenchSummon(_)
-        | WorkItem::ResolveMovementConsequences(_)
-        | WorkItem::MovementTrigger(_, _)
-        | WorkItem::FireTrigger(_, _)
-        | WorkItem::LossCheck(_) => (state.clone(), Vec::new()),
+        WorkItem::DestructionCheck(position) => destruction::check(state, *position),
+        WorkItem::DiscardDestroyedChain(position) => {
+            destruction::discard_destroyed_chain(state, *position)
+        }
+        WorkItem::RecordMainLoss(player) => destruction::record_main_loss(state, *player),
+        WorkItem::RecoverPrize(player) => destruction::recover_prize(state, *player),
+        WorkItem::PromoteBenchSummon(player) => destruction::promote_bench_summon(state, *player),
+        WorkItem::ResolveMovementConsequences(player) => {
+            destruction::resolve_movement_consequences(state, *player)
+        }
+
+        // Movement and ability triggers (§28, §36–38) have no fixture that
+        // reads one yet. Draining one of these items today does nothing and
+        // produces no event: an honest, documented no-op rather than a
+        // panic, so the loop can keep moving once later work starts
+        // consuming them for real.
+        WorkItem::MovementTrigger(_, _) | WorkItem::FireTrigger(_, _) => {
+            (state.clone(), Vec::new())
+        }
+
+        WorkItem::LossCheck(player) => loss::check(state, *player),
     }
 }
 
@@ -216,8 +222,8 @@ mod tests {
     use crate::domain::cards::CardDefId;
     use crate::domain::ids::{CardInstanceId, PlayerId, Position};
     use crate::domain::state::{
-        CardRef, ManaBank, ManaSource, PendingInput, PerPlayer, Phase, PlayerState, SummonInstance,
-        TurnState, UpgradeChain,
+        CardRef, ManaBank, ManaSource, MovementStep, PendingInput, PerPlayer, Phase, PlayerState,
+        SummonInstance, TurnState, UpgradeChain,
     };
     use std::collections::VecDeque;
 
@@ -397,15 +403,27 @@ mod tests {
     }
 
     #[test]
-    fn drain_treats_not_yet_built_work_items_as_silent_no_ops() {
+    fn drain_treats_movement_and_ability_triggers_as_silent_no_ops() {
         let mut state = base_state();
         state.work = VecDeque::from(vec![
-            WorkItem::LossCheck(PlayerId::One),
+            WorkItem::MovementTrigger(MovementStep::LeavingMain, Position::Main),
             WorkItem::FireTrigger(
                 Position::Main,
                 crate::domain::cards::TriggerEvent::YourUpkeep,
             ),
         ]);
+
+        let (state, events) = drain(&state);
+
+        assert!(events.is_empty());
+        assert!(state.work.is_empty());
+        assert_eq!(state.outcome, None);
+    }
+
+    #[test]
+    fn drain_runs_a_loss_check_that_finds_no_losing_condition_as_a_silent_no_op() {
+        let mut state = base_state();
+        state.work = VecDeque::from(vec![WorkItem::LossCheck(PlayerId::One)]);
 
         let (state, events) = drain(&state);
 
