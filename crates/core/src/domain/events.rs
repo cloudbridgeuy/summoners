@@ -81,6 +81,7 @@ pub enum GameEvent {
     SummonsSwapped { player: PlayerId, main: BenchSlot },
     /// Rules §28, §36–39.
     TriggerFired {
+        controller: PlayerId,
         position: Position,
         event: TriggerEvent,
     },
@@ -185,6 +186,7 @@ mod tests {
                 main: BenchSlot::First,
             },
             GameEvent::TriggerFired {
+                controller: PlayerId::One,
                 position: Position::Main,
                 event: TriggerEvent::YourUpkeep,
             },

@@ -6,9 +6,9 @@
 //! query surface. Everything below `CardDefId` stays `pub(crate)` because no
 //! code outside this crate should depend on today's shape.
 //!
-//! The fixture registry at the bottom is a minimal set of vanilla Summons —
-//! `Life`, `Produces`, `RetreatCost`, `Form`, and a plain `Attack` node
-//! only — sufficient for `scenario::from_scenario`'s chain-order and board
+//! The fixture registry in `registry.rs` is a minimal set of vanilla
+//! Summons — `Life`, `Produces`, `RetreatCost`, `Form`, and a plain `Attack`
+//! node only — sufficient for `scenario::from_scenario`'s chain-order and board
 //! tests, and for a normal attack to have a cost and a Damage amount to
 //! pay and apply. It also carries four vanilla Spells — one Attack Spell,
 //! one Support Spell that heals, one Support Spell that draws, and one
@@ -17,7 +17,17 @@
 //! timing family, and effect leaf to pay, gate, and resolve. Three of the
 //! Summon fixtures each print one Skill (`MoveSummon`, `SwapPositions`, or
 //! `ProduceMana`), enough for `engine::skills::activate_skill` to pay, gate,
-//! and resolve a Skill through the same interpreter (rules §15, §43). The four
+//! and resolve a Skill through the same interpreter (rules §15, §43). Two
+//! further Summons each carry one `CardNode::Trigger`: Hearth Warden fires an
+//! immediate Heal on entering Main (rules §36, §39), and Spite Thorn fires a
+//! respondable Damage trigger whenever any Summon is destroyed (rules §37,
+//! §41) — enough for `engine::triggers` to have one non-respondable and one
+//! respondable fixture to discover and resolve. A third, Dawn Tender, fires
+//! an immediate Heal at the start of its controller's own Upkeep (rules
+//! §36), exercising the same discovery path `engine::turn::handover` queues
+//! every turn. A fourth Spell
+//! with a Ready effect arrives with the work that first gives Ready its own
+//! rules. The four
 //! signature cards from `designs/types_archetypes.md` (Colossus of the
 //! Quarry, Warden of Set Paths, Griefsinger, Old Sow of the Barrow), their
 //! Base/Enhanced fixture lineage, and the vanilla Enchantment (design
@@ -79,19 +89,22 @@ pub enum TriggerEvent {
 }
 
 /// A condition an effect leaf can test before applying a bonus. No fixture
-/// in the vanilla registry carries a conditional effect yet.
+/// in the vanilla registry carries a conditional effect yet. `pub` for the
+/// same reason `EffectLeaf` is: `EffectLeaf::ConditionalBonus` names it and
+/// `EffectLeaf` is reachable from the public `StackItem::Trigger`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[allow(dead_code)]
-pub(crate) enum EffectCondition {
+pub enum EffectCondition {
     DefenderEnteredMainThisTurn,
     SpellPlayedThisTurn,
 }
 
 /// The family of response an effect can block. No fixture in the vanilla
-/// registry blocks a response yet.
+/// registry blocks a response yet. `pub` for the same reason
+/// `EffectCondition` is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[allow(dead_code)]
-pub(crate) enum ResponseBlock {
+pub enum ResponseBlock {
     AttackSpells,
 }
 
@@ -108,12 +121,14 @@ pub(crate) struct Cost {
 }
 
 /// The first fixed set of effect leaves, one per signature card ability
-/// (design decision 1). Shapes here are provisional. None has a production
-/// caller yet: the vanilla registry has no costed node to carry one, and
-/// the interpreter that runs them belongs to later work.
+/// (design decision 1). Shapes here are provisional. Unlike the rest of
+/// this module it is `pub`, not `pub(crate)`, for the same reason
+/// `TriggerEvent` is: `StackItem::Trigger` is public and names it directly,
+/// since a respondable trigger's effects wait on the Stack like any other
+/// entry.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[allow(dead_code)]
-pub(crate) enum EffectLeaf {
+pub enum EffectLeaf {
     DealDamage {
         amount: u32,
         immutable: bool,
@@ -169,7 +184,6 @@ pub(crate) enum CardNode {
         cost: Cost,
         effects: Vec<EffectLeaf>,
     },
-    #[allow(dead_code)]
     Trigger {
         event: TriggerEvent,
         respondable: bool,
@@ -206,6 +220,7 @@ pub(crate) enum Query {
     RetreatCost,
     Skill(SkillIndex),
     Spell,
+    Trigger,
 }
 
 /// One answer `CardDef::find` can return, matching the `Query` asked.
@@ -226,6 +241,11 @@ pub(crate) enum QueryResult {
     Spell {
         timing: SpellTiming,
         cost: Cost,
+        effects: Vec<EffectLeaf>,
+    },
+    Trigger {
+        event: TriggerEvent,
+        respondable: bool,
         effects: Vec<EffectLeaf>,
     },
 }
@@ -287,260 +307,34 @@ impl CardDef {
                 cost: *cost,
                 effects: effects.clone(),
             }),
+            (
+                Query::Trigger,
+                CardNode::Trigger {
+                    event,
+                    respondable,
+                    effects,
+                },
+            ) => Some(QueryResult::Trigger {
+                event: *event,
+                respondable: *respondable,
+                effects: effects.clone(),
+            }),
             _ => None,
         })
     }
 }
 
-/// A minimal registry of vanilla Summons — enough for `from_scenario`'s
-/// board and chain-order tests, no more. One three-step chain and one
-/// two-step chain, so tests can exercise both a full and a partial climb.
-/// Fixture stats and names are test data, not final card designs.
-pub(crate) fn registry() -> Vec<CardDef> {
-    vec![
-        // Chain 1 — three steps.
-        CardDef {
-            id: CardDefId("quarry-whelp"),
-            name: "Quarry Whelp",
-            kind: CardKind::Summon,
-            nodes: vec![
-                CardNode::Life(40),
-                CardNode::Produces(vec![ManaType::Matter]),
-                CardNode::RetreatCost(1),
-                CardNode::Form(Form::Base),
-                CardNode::Attack {
-                    cost: Cost::default(),
-                    effects: vec![EffectLeaf::DealDamage {
-                        amount: 10,
-                        immutable: false,
-                    }],
-                },
-            ],
-        },
-        CardDef {
-            id: CardDefId("quarry-brute"),
-            name: "Quarry Brute",
-            kind: CardKind::Summon,
-            nodes: vec![
-                CardNode::Life(90),
-                CardNode::Produces(vec![ManaType::Matter]),
-                CardNode::RetreatCost(2),
-                CardNode::Form(Form::Enhanced),
-                CardNode::Attack {
-                    cost: Cost {
-                        generic: 1,
-                        ..Cost::default()
-                    },
-                    effects: vec![EffectLeaf::DealDamage {
-                        amount: 20,
-                        immutable: false,
-                    }],
-                },
-            ],
-        },
-        CardDef {
-            id: CardDefId("colossus-of-the-quarry"),
-            name: "Colossus of the Quarry",
-            kind: CardKind::Summon,
-            nodes: vec![
-                CardNode::Life(180),
-                CardNode::Produces(vec![ManaType::Matter]),
-                CardNode::RetreatCost(3),
-                CardNode::Form(Form::Elite),
-                CardNode::Attack {
-                    cost: Cost {
-                        generic: 2,
-                        ..Cost::default()
-                    },
-                    effects: vec![EffectLeaf::DealDamage {
-                        amount: 40,
-                        immutable: false,
-                    }],
-                },
-            ],
-        },
-        // Chain 2 — two steps.
-        CardDef {
-            id: CardDefId("set-path-adept"),
-            name: "Set-Path Adept",
-            kind: CardKind::Summon,
-            nodes: vec![
-                CardNode::Life(50),
-                CardNode::Produces(vec![ManaType::Matter, ManaType::Mind]),
-                CardNode::RetreatCost(2),
-                CardNode::Form(Form::Base),
-                CardNode::Attack {
-                    cost: Cost::default(),
-                    effects: vec![EffectLeaf::DealDamage {
-                        amount: 10,
-                        immutable: false,
-                    }],
-                },
-            ],
-        },
-        CardDef {
-            id: CardDefId("set-path-warden"),
-            name: "Set-Path Warden",
-            kind: CardKind::Summon,
-            nodes: vec![
-                CardNode::Life(100),
-                CardNode::Produces(vec![ManaType::Matter, ManaType::Mind]),
-                CardNode::RetreatCost(2),
-                CardNode::Form(Form::Enhanced),
-                CardNode::Attack {
-                    cost: Cost {
-                        generic: 1,
-                        ..Cost::default()
-                    },
-                    effects: vec![EffectLeaf::DealDamage {
-                        amount: 20,
-                        immutable: false,
-                    }],
-                },
-            ],
-        },
-        // Skill fixtures — each a standalone Base Summon carrying exactly
-        // one Skill node, so `engine::skills::activate_skill` has a real
-        // cost, Ready gate, and effect leaf to pay, exhaust, and resolve
-        // (rules §15). Kept separate from the two chains above rather than
-        // added to them.
-        CardDef {
-            id: CardDefId("quarry-scout"),
-            name: "Quarry Scout",
-            kind: CardKind::Summon,
-            nodes: vec![
-                CardNode::Life(30),
-                CardNode::Produces(vec![ManaType::Matter]),
-                CardNode::RetreatCost(1),
-                CardNode::Form(Form::Base),
-                CardNode::Attack {
-                    cost: Cost::default(),
-                    effects: vec![EffectLeaf::DealDamage {
-                        amount: 10,
-                        immutable: false,
-                    }],
-                },
-                CardNode::Skill {
-                    cost: Cost {
-                        generic: 1,
-                        ..Cost::default()
-                    },
-                    effects: vec![EffectLeaf::MoveSummon],
-                },
-            ],
-        },
-        CardDef {
-            id: CardDefId("quarry-warden-guard"),
-            name: "Quarry Warden-Guard",
-            kind: CardKind::Summon,
-            nodes: vec![
-                CardNode::Life(30),
-                CardNode::Produces(vec![ManaType::Matter]),
-                CardNode::RetreatCost(1),
-                CardNode::Form(Form::Base),
-                CardNode::Attack {
-                    cost: Cost::default(),
-                    effects: vec![EffectLeaf::DealDamage {
-                        amount: 10,
-                        immutable: false,
-                    }],
-                },
-                CardNode::Skill {
-                    cost: Cost::default(),
-                    effects: vec![EffectLeaf::SwapPositions],
-                },
-            ],
-        },
-        CardDef {
-            id: CardDefId("quarry-well-tender"),
-            name: "Quarry Well-Tender",
-            kind: CardKind::Summon,
-            nodes: vec![
-                CardNode::Life(30),
-                CardNode::Produces(vec![ManaType::Matter]),
-                CardNode::RetreatCost(1),
-                CardNode::Form(Form::Base),
-                CardNode::Attack {
-                    cost: Cost::default(),
-                    effects: vec![EffectLeaf::DealDamage {
-                        amount: 10,
-                        immutable: false,
-                    }],
-                },
-                CardNode::Skill {
-                    cost: Cost::default(),
-                    effects: vec![EffectLeaf::ProduceMana],
-                },
-            ],
-        },
-        // Spells.
-        CardDef {
-            id: CardDefId("ember-lance"),
-            name: "Ember Lance",
-            kind: CardKind::Spell,
-            nodes: vec![CardNode::Spell {
-                timing: SpellTiming::Attack,
-                cost: Cost {
-                    generic: 1,
-                    ..Cost::default()
-                },
-                effects: vec![EffectLeaf::DealDamage {
-                    amount: 10,
-                    immutable: false,
-                }],
-            }],
-        },
-        CardDef {
-            id: CardDefId("renewing-balm"),
-            name: "Renewing Balm",
-            kind: CardKind::Spell,
-            nodes: vec![CardNode::Spell {
-                timing: SpellTiming::Support,
-                cost: Cost {
-                    generic: 1,
-                    ..Cost::default()
-                },
-                effects: vec![EffectLeaf::Heal { amount: 20 }],
-            }],
-        },
-        CardDef {
-            id: CardDefId("scrying-glass"),
-            name: "Scrying Glass",
-            kind: CardKind::Spell,
-            nodes: vec![CardNode::Spell {
-                timing: SpellTiming::Support,
-                cost: Cost {
-                    generic: 1,
-                    ..Cost::default()
-                },
-                effects: vec![EffectLeaf::DrawCards { amount: 1 }],
-            }],
-        },
-        CardDef {
-            id: CardDefId("second-wind"),
-            name: "Second Wind",
-            kind: CardKind::Spell,
-            nodes: vec![CardNode::Spell {
-                timing: SpellTiming::Support,
-                cost: Cost {
-                    generic: 1,
-                    ..Cost::default()
-                },
-                effects: vec![EffectLeaf::ReadySummon],
-            }],
-        },
-    ]
-}
-
-/// Look up one fixture by id.
-pub(crate) fn find_def(id: CardDefId) -> Option<CardDef> {
-    registry().into_iter().find(|def| def.id == id)
-}
+/// The concrete fixture data: every printed `CardDef` this crate builds
+/// against, and the lookup that reaches one by id. Kept in its own module so
+/// this file stays the vocabulary and the query machinery only.
+mod registry;
+pub(crate) use registry::find_def;
 
 #[cfg(test)]
 mod tests {
     #![allow(clippy::expect_used)]
 
+    use super::registry::registry;
     use super::*;
 
     #[test]
@@ -669,6 +463,35 @@ mod tests {
     }
 
     #[test]
+    fn find_reads_the_trigger_event_respondability_and_effects() {
+        let hearth_warden = find_def(CardDefId("hearth-warden")).expect("fixture exists");
+        assert_eq!(
+            hearth_warden.find(Query::Trigger),
+            Some(QueryResult::Trigger {
+                event: TriggerEvent::EntersMain,
+                respondable: false,
+                effects: vec![EffectLeaf::Heal { amount: 15 }],
+            })
+        );
+
+        let spite_thorn = find_def(CardDefId("spite-thorn")).expect("fixture exists");
+        assert_eq!(
+            spite_thorn.find(Query::Trigger),
+            Some(QueryResult::Trigger {
+                event: TriggerEvent::AnySummonDestroyed,
+                respondable: true,
+                effects: vec![EffectLeaf::DealDamage {
+                    amount: 15,
+                    immutable: false,
+                }],
+            })
+        );
+
+        let whelp = find_def(CardDefId("quarry-whelp")).expect("fixture exists");
+        assert_eq!(whelp.find(Query::Trigger), None);
+    }
+
+    #[test]
     fn spell_timing_variants_construct() {
         assert_ne!(SpellTiming::Support, SpellTiming::Attack);
     }
@@ -745,7 +568,11 @@ mod tests {
     fn registry_holds_a_two_step_and_a_three_step_chain() {
         let defs = registry();
         let summons = defs.iter().filter(|def| def.kind == CardKind::Summon);
-        assert_eq!(summons.count(), 8);
+        // Five chain-fixture Summons, plus the three single-Skill fixtures
+        // (Quarry Scout, Quarry Warden-Guard, Quarry Well-Tender), plus the
+        // three single-Trigger fixtures (Hearth Warden, Spite Thorn, Dawn
+        // Tender).
+        assert_eq!(summons.count(), 11);
     }
 
     #[test]

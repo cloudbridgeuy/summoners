@@ -12,12 +12,14 @@
 //! Priority in an open window, since a defender may want to convert their
 //! Coin in response to a declared attack.
 
+use crate::domain::cards::TriggerEvent;
 use crate::domain::errors::ActionError;
 use crate::domain::events::GameEvent;
 use crate::domain::ids::{ManaType, PlayerId};
 use crate::domain::state::{GameState, ManaSource, PendingInput, Phase, TurnState, WorkItem};
 use crate::engine::apply::ActionOutcome;
 use crate::engine::stack::window_after_play;
+use crate::engine::triggers::discover_back;
 use crate::engine::upkeep::{anchor_types, available_types, bank, reset_per_turn_summon_flags};
 
 // ---------------------------------------------------------------------------
@@ -77,6 +79,10 @@ pub(crate) fn handover(state: &GameState) -> ActionOutcome {
     reset_per_turn_summon_flags(state.players.get_mut(player));
     reset_per_turn_summon_flags(state.players.get_mut(opponent));
     state.work.push_back(WorkItem::ReadyAll);
+    // Rules §36, §41: a Trigger on `YourUpkeep` fires for the newly active
+    // player's own board, Main then Bench, ahead of the draw and natural
+    // production this same Upkeep also queues.
+    state = discover_back(&state, &[opponent], TriggerEvent::YourUpkeep);
     state.work.push_back(WorkItem::DrawCard);
     state
         .work
@@ -176,7 +182,7 @@ pub(crate) fn choose_mana_type(
 mod tests {
     use super::*;
     use crate::domain::cards::CardDefId;
-    use crate::domain::ids::CardInstanceId;
+    use crate::domain::ids::{CardInstanceId, Position};
     use crate::domain::state::{
         CardRef, ManaBank, PerPlayer, PlayerState, StackWindow, SummonInstance, UpgradeChain,
     };
@@ -208,6 +214,10 @@ mod tests {
 
     fn adept(owner: PlayerId) -> SummonInstance {
         chain_summon(owner, "set-path-adept", 2)
+    }
+
+    fn dawn_tender(owner: PlayerId) -> SummonInstance {
+        chain_summon(owner, "dawn-tender", 3)
     }
 
     fn empty_player_state() -> PlayerState {
@@ -314,6 +324,68 @@ mod tests {
                 WorkItem::DrawCard,
                 WorkItem::ProduceMana(ManaSource::Player),
             ])
+        );
+    }
+
+    #[test]
+    fn end_turn_hands_off_and_fires_the_new_active_players_your_upkeep_trigger() {
+        // Rules §36, §41: Dawn Tender's immediate Heal fires as soon as the
+        // newly active player's own Upkeep begins — `handover` queues it
+        // (`discover_back`) ahead of the draw and natural production this
+        // same Upkeep also queues, and the resolution loop then fires it in
+        // that order, exactly the way a movement trigger or a destruction
+        // trigger already fires through `engine::resolution::drain`.
+        let mut state = base_state();
+        state.players.get_mut(PlayerId::Two).main = Some(SummonInstance {
+            damage: 15,
+            ..dawn_tender(PlayerId::Two)
+        });
+        state.players.get_mut(PlayerId::Two).deck = vec![CardRef {
+            instance: CardInstanceId(20),
+            def: CardDefId("quarry-whelp"),
+        }];
+
+        let outcome = full_end_turn(&state, PlayerId::One);
+        let (state, drained_events) = crate::engine::resolution::drain(&outcome.state);
+
+        assert_eq!(
+            drained_events,
+            vec![
+                GameEvent::SummonsReadied {
+                    player: PlayerId::Two,
+                    positions: vec![Position::Main],
+                },
+                GameEvent::TriggerFired {
+                    controller: PlayerId::Two,
+                    position: Position::Main,
+                    event: TriggerEvent::YourUpkeep,
+                },
+                GameEvent::Healed {
+                    position: Position::Main,
+                    amount: 10,
+                },
+                GameEvent::CardDrawn {
+                    player: PlayerId::Two,
+                    card: CardInstanceId(20),
+                },
+                GameEvent::ManaProduced {
+                    player: PlayerId::Two,
+                    source: ManaSource::Player,
+                    mana_type: ManaType::Spirit,
+                },
+            ]
+        );
+        assert!(state.work.is_empty());
+        assert_eq!(
+            state
+                .players
+                .get(PlayerId::Two)
+                .main
+                .as_ref()
+                .expect("main")
+                .damage,
+            5,
+            "Dawn Tender's own Heal reduced its accumulated Damage"
         );
     }
 

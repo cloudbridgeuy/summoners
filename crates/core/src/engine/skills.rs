@@ -536,10 +536,12 @@ mod tests {
             VecDeque::from(vec![
                 WorkItem::MovementTrigger(
                     MovementStep::LeavingBench,
-                    Position::Bench(BenchSlot::First)
+                    PlayerId::One,
+                    Position::Bench(BenchSlot::Second)
                 ),
                 WorkItem::MovementTrigger(
                     MovementStep::EnteringBench,
+                    PlayerId::One,
                     Position::Bench(BenchSlot::Second)
                 ),
             ])
@@ -769,6 +771,87 @@ mod tests {
                 .as_ref()
                 .expect("main")
                 .ready
+        );
+    }
+
+    #[test]
+    fn apply_activates_a_swap_positions_skill_and_fires_the_four_movement_triggers_end_to_end() {
+        // Rules §15, §28, §43: activating a Skill that resolves
+        // `SwapPositions` moves two Summons the same way a normal Retreat
+        // does, and the same four movement-trigger steps fire in the same
+        // fixed order — LeavingMain, EnteringBench, LeavingBench,
+        // EnteringMain. Neither Quarry Warden-Guard nor its own Bench
+        // neighbour carries a Trigger for the first three; Hearth Warden,
+        // now entering Main, fires its immediate Heal on the last one,
+        // proving the queued `WorkItem::MovementTrigger`s this Skill leaf
+        // enqueues (`engine::effects::swap_positions`) reach the real
+        // `engine::triggers::movement_trigger` handler through `apply`
+        // exactly as `engine::board::retreat` does.
+        let mut state = base_state("quarry-warden-guard", true);
+        state.players.get_mut(PlayerId::One).bench[0] = Some(SummonInstance {
+            chain: UpgradeChain::new(
+                CardRef {
+                    instance: CardInstanceId(2),
+                    def: CardDefId("hearth-warden"),
+                },
+                vec![],
+            ),
+            damage: 20,
+            ..summon(PlayerId::One, "hearth-warden", true)
+        });
+
+        let outcome = crate::engine::apply::apply(
+            &state,
+            &GameAction::ActivateSkill {
+                player: PlayerId::One,
+                position: Position::Main,
+                skill: SkillIndex(0),
+                targets: vec![Position::Bench(BenchSlot::First)],
+                mana_hint: None,
+            },
+        )
+        .expect("Quarry Warden-Guard is Ready and its Skill is free");
+
+        assert_eq!(
+            outcome.events,
+            vec![
+                GameEvent::SkillActivated {
+                    player: PlayerId::One,
+                    position: Position::Main,
+                    skill: SkillIndex(0),
+                },
+                GameEvent::SummonsSwapped {
+                    player: PlayerId::One,
+                    main: BenchSlot::First,
+                },
+                GameEvent::TriggerFired {
+                    controller: PlayerId::One,
+                    position: Position::Main,
+                    event: crate::domain::cards::TriggerEvent::EntersMain,
+                },
+                GameEvent::Healed {
+                    position: Position::Main,
+                    amount: 15,
+                },
+            ],
+            "EnteringMain fires last, in fixed §28 order, after the three \
+             silent steps ahead of it"
+        );
+        let healed = outcome
+            .state
+            .players
+            .get(PlayerId::One)
+            .main
+            .as_ref()
+            .expect("Hearth Warden landed on Main");
+        assert_eq!(healed.damage, 5);
+        assert!(healed.entered_main_this_turn);
+        assert!(
+            !outcome.state.players.get(PlayerId::One).bench[0]
+                .as_ref()
+                .expect("Quarry Warden-Guard landed on the Bench")
+                .ready,
+            "the activating Summon itself stays Exhausted after its own Skill resolves"
         );
     }
 }

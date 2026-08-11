@@ -9,5 +9,6 @@ pub(crate) mod payment;
 pub mod resolution;
 pub(crate) mod skills;
 pub(crate) mod stack;
+pub(crate) mod triggers;
 pub(crate) mod turn;
 pub mod upkeep;
