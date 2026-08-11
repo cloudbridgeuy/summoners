@@ -12,7 +12,7 @@ use crate::domain::errors::ActionError;
 use crate::domain::events::GameEvent;
 use crate::domain::ids::PlayerId;
 use crate::domain::state::{GameState, PendingInput};
-use crate::engine::{resolution, stack, turn};
+use crate::engine::{destruction, resolution, stack, turn};
 
 /// The result of one accepted action: the next state and the ordered facts
 /// that describe how it got there (decision 3).
@@ -82,8 +82,8 @@ fn check_actor(state: &GameState, actor: PlayerId) -> Result<(), ActionError> {
 
 /// Route an action that passed the actor gate to its handler.
 ///
-/// Eight of the twelve arms now call into their owning module's handler;
-/// the rest are still placeholders that reject with
+/// Ten of the twelve arms now call into their owning module's handler; the
+/// rest are still placeholders that reject with
 /// `ActionError::NotYetImplemented`. Later work replaces the remaining arms
 /// one at a time; this shape exists so those changes touch a single line
 /// each.
@@ -117,8 +117,13 @@ fn dispatch(state: &GameState, action: &GameAction) -> Result<ActionOutcome, Act
         GameAction::ChooseManaType { player, mana_type } => {
             turn::choose_mana_type(state, *player, *mana_type)
         }
-        GameAction::ChoosePromotion { .. } => Err(ActionError::NotYetImplemented),
-        GameAction::ChoosePrize { .. } => Err(ActionError::NotYetImplemented),
+        GameAction::ChoosePromotion { player, slot } => {
+            destruction::answer_promotion(state, *player, *slot)
+        }
+        GameAction::ChoosePrize {
+            player,
+            prize_index,
+        } => destruction::answer_prize(state, *player, *prize_index),
     }
 }
 
@@ -346,12 +351,13 @@ mod tests {
         // PlaySummon, UpgradeSummon, and Retreat have real handlers in
         // `engine::board`; EndTurn, ConvertCoin, and ChooseManaType have
         // real handlers in `engine::upkeep`; DeclareAttack and PassPriority
-        // now have real handlers in `engine::stack`. Against this fixture's
-        // empty hand, empty Bench, resting Main Phase board, each of those
-        // eight reaches its own rule check or its own behavior instead of
-        // falling through to `NotYetImplemented`, so they are exercised by
-        // their owning module's own tests instead of here. Four arms remain
-        // genuinely unbuilt.
+        // have real handlers in `engine::stack`; ChoosePromotion and
+        // ChoosePrize now have real handlers in `engine::destruction`.
+        // Against this fixture's empty hand, empty Bench, resting Main
+        // Phase board, each of those ten reaches its own rule check or its
+        // own behavior instead of falling through to `NotYetImplemented`,
+        // so they are exercised by their owning module's own tests instead
+        // of here. Two arms remain genuinely unbuilt.
         let state = base_state();
         let actions = vec![
             GameAction::CastSpell {
@@ -367,17 +373,9 @@ mod tests {
                 targets: vec![],
                 mana_hint: None,
             },
-            GameAction::ChoosePromotion {
-                player: PlayerId::One,
-                slot: BenchSlot::First,
-            },
-            GameAction::ChoosePrize {
-                player: PlayerId::One,
-                prize_index: 0,
-            },
         ];
 
-        assert_eq!(actions.len(), 4);
+        assert_eq!(actions.len(), 2);
         for action in &actions {
             assert_eq!(apply(&state, action), Err(ActionError::NotYetImplemented));
         }
@@ -641,6 +639,148 @@ mod tests {
                 .damage,
             10
         );
+    }
+
+    #[test]
+    fn demo_a_lethal_attack_destroys_recovers_a_prize_and_promotes_through_apply() {
+        // The full §24/§25/§41 chain, driven only through `apply`: a lethal
+        // hit destroys Two's Main, Two's opponent (One) chooses which Prize
+        // Two recovers, then Two chooses which Bench Summon is promoted.
+        let mut state = base_state();
+        state.players.get_mut(PlayerId::Two).main = Some(SummonInstance {
+            damage: 30, // ten more finishes Quarry Whelp's printed Life of 40.
+            ..summon(PlayerId::Two)
+        });
+        state.players.get_mut(PlayerId::Two).prizes = vec![card_ref(2, "quarry-whelp")];
+        state.players.get_mut(PlayerId::Two).bench = [
+            Some(summon(PlayerId::Two)),
+            Some(summon(PlayerId::Two)),
+            None,
+        ];
+
+        let declared = apply(
+            &state,
+            &GameAction::DeclareAttack {
+                player: PlayerId::One,
+                target: Position::Main,
+                mana_hint: None,
+            },
+        )
+        .expect("Quarry Whelp's Attack is free and Main is a legal target");
+        let defender_passed = apply(
+            &declared.state,
+            &GameAction::PassPriority {
+                player: PlayerId::Two,
+            },
+        )
+        .expect("the defender holds Priority");
+        let resolved = apply(
+            &defender_passed.state,
+            &GameAction::PassPriority {
+                player: PlayerId::One,
+            },
+        )
+        .expect("the attacker holds Priority second");
+
+        assert_eq!(
+            resolved.events,
+            vec![
+                GameEvent::PriorityPassed {
+                    player: PlayerId::One
+                },
+                GameEvent::StackItemResolved {
+                    item: StackItem::Attack {
+                        attacker: PlayerId::One,
+                        target: Position::Main,
+                    }
+                },
+                GameEvent::DamageApplied {
+                    position: Position::Main,
+                    before: 30,
+                    after: 40,
+                },
+                GameEvent::SummonDestroyed {
+                    position: Position::Main,
+                    owner: PlayerId::Two,
+                },
+            ],
+            "the destruction chain discards and records the loss, then pauses \
+             on Prize recovery before Promotion or the loss check ever run"
+        );
+        assert_eq!(resolved.state.players.get(PlayerId::Two).main, None);
+        assert_eq!(resolved.state.players.get(PlayerId::Two).main_losses, 1);
+        assert_eq!(
+            resolved.state.players.get(PlayerId::Two).discard,
+            vec![card_ref(1, "quarry-whelp")]
+        );
+        assert_eq!(
+            resolved.state.pending,
+            Some(PendingInput::PrizePick {
+                chooser: PlayerId::One
+            }),
+            "rules §25: the opponent of the player recovering the Prize chooses"
+        );
+
+        let prize_picked = apply(
+            &resolved.state,
+            &GameAction::ChoosePrize {
+                player: PlayerId::One,
+                prize_index: 0,
+            },
+        )
+        .expect("a Prize is pending");
+
+        assert_eq!(
+            prize_picked.events,
+            vec![GameEvent::PrizeRecovered {
+                player: PlayerId::Two,
+                card: CardInstanceId(2),
+            }],
+            "recovering the Prize resumes the chain into Promotion, which \
+             pauses again with two Bench Summons to choose from"
+        );
+        assert_eq!(prize_picked.state.players.get(PlayerId::Two).prizes, vec![]);
+        assert_eq!(
+            prize_picked.state.players.get(PlayerId::Two).hand,
+            vec![card_ref(2, "quarry-whelp")]
+        );
+        assert_eq!(
+            prize_picked.state.pending,
+            Some(PendingInput::Promotion {
+                player: PlayerId::Two
+            })
+        );
+
+        let promoted = apply(
+            &prize_picked.state,
+            &GameAction::ChoosePromotion {
+                player: PlayerId::Two,
+                slot: BenchSlot::First,
+            },
+        )
+        .expect("a Promotion is pending");
+
+        assert_eq!(
+            promoted.events,
+            vec![GameEvent::SummonPromoted {
+                player: PlayerId::Two,
+                from: BenchSlot::First,
+            }],
+            "the two queued movement-trigger steps and the final loss check \
+             all run silently: no loss condition applies with a fresh Main"
+        );
+        assert_eq!(promoted.state.pending, None);
+        assert_eq!(promoted.state.outcome, None);
+        assert!(promoted.state.work.is_empty());
+        let two = promoted.state.players.get(PlayerId::Two);
+        assert!(two.main.is_some(), "Promotion filled the empty Main");
+        assert!(
+            two.main
+                .as_ref()
+                .expect("checked above")
+                .entered_main_this_turn
+        );
+        assert_eq!(two.bench, [None, Some(summon(PlayerId::Two)), None]);
     }
 
     #[test]
