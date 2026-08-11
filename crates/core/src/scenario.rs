@@ -226,10 +226,13 @@ pub fn from_scenario(scenario: &Scenario) -> Result<GameState, InvalidScenario> 
         turn: TurnState {
             active_player: scenario.active_player,
             phase: Phase::Main,
+            window: None,
             normal_attack_used: false,
             normal_retreat_used: false,
+            spell_played_this_turn: false,
         },
         stack: vec![],
+        stack_segment_bases: vec![],
         work: VecDeque::new(),
         pending,
         outcome: None,

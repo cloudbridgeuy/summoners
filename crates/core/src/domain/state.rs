@@ -140,24 +140,38 @@ pub struct StackWindow {
     pub prior_pass: bool,
 }
 
-/// The turn's resting shape (rules §9). `Upkeep` rests only while a
-/// production choice is pending; `Main` is free play; `Combat` carries the
-/// open Priority window, if any.
+/// The turn's resting shape (rules §9): `Upkeep` rests only while a
+/// production choice is pending, `Main` is free play, `Combat` is after an
+/// attack has been declared. A Priority window can open during any of the
+/// three (a Spell cast proactively in Main, a respondable trigger during
+/// Upkeep or Main resolution, or a declared attack in Combat), so the
+/// window lives on `TurnState` as its own field rather than as a payload of
+/// one phase — the phase to rest in after the window closes is never lost.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Phase {
     Upkeep,
     Main,
-    Combat { window: StackWindow },
+    Combat,
 }
 
-/// The active player, the current phase, and the flags that track the
-/// turn's one normal attack and one normal Retreat (rules §26, §29).
+/// The active player, the current phase, any open Priority window, and the
+/// per-turn flags (rules §26, §29, and the Griefsinger's conditional attack
+/// bonus).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TurnState {
     pub active_player: PlayerId,
     pub phase: Phase,
+    /// Set while a Priority window is open (design's "Phases and Priority":
+    /// a declared attack, an attackless end of turn, a proactive Spell
+    /// cast, or a respondable trigger mid-resolution). `None` when nobody
+    /// currently holds Priority.
+    pub window: Option<StackWindow>,
     pub normal_attack_used: bool,
     pub normal_retreat_used: bool,
+    /// Set for the rest of the turn once any Spell is cast. Read by a
+    /// conditional attack bonus that checks whether its controller played a
+    /// Spell this turn; cleared when the turn ends.
+    pub spell_played_this_turn: bool,
 }
 
 /// Where a Mana-production choice comes from: the player's own natural
@@ -266,6 +280,15 @@ pub struct GameState {
     pub players: PerPlayer<PlayerState>,
     pub turn: TurnState,
     pub stack: Vec<StackItem>,
+    /// Segment base indices into `stack` (design's "Phases and Priority").
+    /// When a respondable trigger creates a Stack effect mid-drain, its
+    /// index in `stack` is pushed here. Responses build above that index; a
+    /// double pass drains only down to it, then it pops and the drain that
+    /// was interrupted resumes below it. Empty outside a mid-drain segment;
+    /// a `Vec` because a trigger can itself land while another segment is
+    /// still open, nesting one base above the last. No behavior reads or
+    /// writes this yet — it is storage only.
+    pub stack_segment_bases: Vec<usize>,
     pub work: VecDeque<WorkItem>,
     pub pending: Option<PendingInput>,
     pub outcome: Option<GameOutcome>,
@@ -337,8 +360,31 @@ mod tests {
             holder: PlayerId::One,
             prior_pass: true,
         };
-        let phases = [Phase::Upkeep, Phase::Main, Phase::Combat { window }];
+        let phases = [Phase::Upkeep, Phase::Main, Phase::Combat];
         assert_eq!(phases.len(), 3);
+        assert_eq!(window.holder, PlayerId::One);
+    }
+
+    #[test]
+    fn turn_state_window_is_a_peer_of_phase_not_nested_in_it() {
+        // A window can be open during any phase (a proactive Spell cast in
+        // Main, a respondable trigger during Upkeep resolution, a declared
+        // attack in Combat); it must be representable independent of which
+        // phase is resting.
+        let window = StackWindow {
+            holder: PlayerId::Two,
+            prior_pass: false,
+        };
+        let turn = TurnState {
+            active_player: PlayerId::One,
+            phase: Phase::Upkeep,
+            window: Some(window),
+            normal_attack_used: false,
+            normal_retreat_used: false,
+            spell_played_this_turn: false,
+        };
+        assert_eq!(turn.phase, Phase::Upkeep);
+        assert_eq!(turn.window, Some(window));
     }
 
     #[test]

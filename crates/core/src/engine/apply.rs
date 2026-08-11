@@ -11,7 +11,7 @@ use crate::domain::actions::GameAction;
 use crate::domain::errors::ActionError;
 use crate::domain::events::GameEvent;
 use crate::domain::ids::PlayerId;
-use crate::domain::state::{GameState, PendingInput, Phase};
+use crate::domain::state::{GameState, PendingInput};
 
 /// The result of one accepted action: the next state and the ordered facts
 /// that describe how it got there (decision 3).
@@ -33,12 +33,16 @@ pub fn apply(state: &GameState, action: &GameAction) -> Result<ActionOutcome, Ac
     dispatch(state, action)
 }
 
-/// The one player currently allowed to act (decision 15).
+/// The one player currently allowed to act (decision 15). A window can be
+/// open regardless of which phase is resting (a Spell cast proactively in
+/// Main, a respondable trigger during Upkeep or Main resolution, or a
+/// declared attack in Combat), so this checks `state.turn.window` directly
+/// rather than matching on the phase.
 fn required_actor(state: &GameState) -> PlayerId {
     if let Some(pending) = &state.pending {
         return pending_actor(pending);
     }
-    if let Phase::Combat { window } = &state.turn.phase {
+    if let Some(window) = &state.turn.window {
         return window.holder;
     }
     state.turn.active_player
@@ -90,7 +94,7 @@ mod tests {
     use crate::domain::cards::CardDefId;
     use crate::domain::ids::{BenchSlot, CardInstanceId};
     use crate::domain::state::{
-        CardRef, GameOutcome, LossReason, ManaBank, PerPlayer, PlayerState, StackWindow,
+        CardRef, GameOutcome, LossReason, ManaBank, PerPlayer, Phase, PlayerState, StackWindow,
         SummonInstance, TurnState, UpgradeChain,
     };
     use std::collections::VecDeque;
@@ -135,10 +139,13 @@ mod tests {
             turn: TurnState {
                 active_player: PlayerId::One,
                 phase: Phase::Main,
+                window: None,
                 normal_attack_used: false,
                 normal_retreat_used: false,
+                spell_played_this_turn: false,
             },
             stack: vec![],
+            stack_segment_bases: vec![],
             work: VecDeque::new(),
             pending: None,
             outcome: None,
@@ -178,12 +185,11 @@ mod tests {
     fn a_pending_decision_names_the_only_legal_actor() {
         let mut state = base_state();
         state.turn.active_player = PlayerId::Two;
-        state.turn.phase = Phase::Combat {
-            window: StackWindow {
-                holder: PlayerId::Two,
-                prior_pass: false,
-            },
-        };
+        state.turn.phase = Phase::Combat;
+        state.turn.window = Some(StackWindow {
+            holder: PlayerId::Two,
+            prior_pass: false,
+        });
         state.pending = Some(PendingInput::Promotion {
             player: PlayerId::One,
         });
@@ -202,12 +208,34 @@ mod tests {
     fn an_open_priority_window_beats_the_active_player() {
         let mut state = base_state();
         state.turn.active_player = PlayerId::Two;
-        state.turn.phase = Phase::Combat {
-            window: StackWindow {
-                holder: PlayerId::One,
-                prior_pass: false,
-            },
-        };
+        state.turn.phase = Phase::Combat;
+        state.turn.window = Some(StackWindow {
+            holder: PlayerId::One,
+            prior_pass: false,
+        });
+
+        assert!(matches!(
+            apply(&state, &end_turn(PlayerId::One)),
+            Err(ActionError::NotYetImplemented)
+        ));
+        assert_eq!(
+            apply(&state, &end_turn(PlayerId::Two)),
+            Err(ActionError::NotYourDecision)
+        );
+    }
+
+    #[test]
+    fn an_open_priority_window_beats_the_active_player_outside_combat_too() {
+        // A window can open in Main (a proactive Spell cast) or Upkeep (a
+        // respondable trigger mid-resolution), not only in Combat. The
+        // window must win regardless of which phase is resting.
+        let mut state = base_state();
+        state.turn.active_player = PlayerId::Two;
+        state.turn.phase = Phase::Main;
+        state.turn.window = Some(StackWindow {
+            holder: PlayerId::One,
+            prior_pass: false,
+        });
 
         assert!(matches!(
             apply(&state, &end_turn(PlayerId::One)),
