@@ -156,14 +156,17 @@ pub(crate) enum CardNode {
     Passive(Modifier),
 }
 
-/// A question `CardDef::find` can answer about one printed card. Only
-/// `CurrentForm` has a caller today (chain-order validation in
-/// `scenario::from_scenario`); more variants arrive alongside the handler
-/// that first needs them, matching the rest of this crate's stubs.
+/// A question `CardDef::find` can answer about one printed card.
+/// `CurrentForm` backs chain-order validation in `scenario::from_scenario`;
+/// `ProducedManaTypes` backs the rules §18 Mana-Type-superset check in
+/// `engine::board`; `RetreatCost` backs the printed Retreat Cost lookup
+/// there too. More variants arrive alongside the handler that first needs
+/// them, matching the rest of this crate's stubs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Query {
     CurrentForm,
     ProducedManaTypes,
+    RetreatCost,
 }
 
 /// One answer `CardDef::find` can return, matching the `Query` asked.
@@ -171,6 +174,7 @@ pub(crate) enum Query {
 pub(crate) enum QueryResult {
     CurrentForm(Form),
     ProducedManaTypes(Vec<ManaType>),
+    RetreatCost(u32),
 }
 
 /// One printed card: an id, a display name, its family, and its nodes.
@@ -191,6 +195,9 @@ impl CardDef {
             (Query::CurrentForm, CardNode::Form(form)) => Some(QueryResult::CurrentForm(*form)),
             (Query::ProducedManaTypes, CardNode::Produces(types)) => {
                 Some(QueryResult::ProducedManaTypes(types.clone()))
+            }
+            (Query::RetreatCost, CardNode::RetreatCost(cost)) => {
+                Some(QueryResult::RetreatCost(*cost))
             }
             _ => None,
         })
@@ -412,7 +419,7 @@ mod tests {
     }
 
     #[test]
-    fn find_reads_produced_mana_types() {
+    fn find_reads_the_produced_mana_types() {
         let whelp = find_def(CardDefId("quarry-whelp")).expect("fixture exists");
         assert_eq!(
             whelp.find(Query::ProducedManaTypes),
@@ -426,6 +433,15 @@ mod tests {
                 ManaType::Matter,
                 ManaType::Mind
             ]))
+        );
+    }
+
+    #[test]
+    fn find_reads_the_retreat_cost() {
+        let brute = find_def(CardDefId("quarry-brute")).expect("fixture exists");
+        assert_eq!(
+            brute.find(Query::RetreatCost),
+            Some(QueryResult::RetreatCost(2))
         );
     }
 

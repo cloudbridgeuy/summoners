@@ -82,18 +82,27 @@ fn check_actor(state: &GameState, actor: PlayerId) -> Result<(), ActionError> {
 
 /// Route an action that passed the actor gate to its handler.
 ///
-/// Most arms are still placeholders that reject with
-/// `ActionError::NotYetImplemented`; `EndTurn`, `ConvertCoin`, and
-/// `ChooseManaType` now call into `engine::upkeep`. Later work replaces the
-/// remaining arms one at a time; this shape exists so those changes touch a
-/// single line each.
+/// Half the arms now call into their owning module's handler; the rest are
+/// still placeholders that reject with `ActionError::NotYetImplemented`.
+/// Later work replaces the remaining arms one at a time; this shape exists
+/// so those changes touch a single line each.
 fn dispatch(state: &GameState, action: &GameAction) -> Result<ActionOutcome, ActionError> {
     match action {
-        GameAction::PlaySummon { .. } => Err(ActionError::NotYetImplemented),
-        GameAction::UpgradeSummon { .. } => Err(ActionError::NotYetImplemented),
+        GameAction::PlaySummon { player, card, slot } => {
+            crate::engine::board::play_summon(state, *player, *card, *slot)
+        }
+        GameAction::UpgradeSummon {
+            player,
+            card,
+            position,
+        } => crate::engine::board::upgrade_summon(state, *player, *card, *position),
         GameAction::CastSpell { .. } => Err(ActionError::NotYetImplemented),
         GameAction::ActivateSkill { .. } => Err(ActionError::NotYetImplemented),
-        GameAction::Retreat { .. } => Err(ActionError::NotYetImplemented),
+        GameAction::Retreat {
+            player,
+            slot,
+            mana_hint,
+        } => crate::engine::board::retreat(state, *player, *slot, *mana_hint),
         GameAction::DeclareAttack { .. } => Err(ActionError::NotYetImplemented),
         GameAction::EndTurn { player } => upkeep::end_turn(state, *player),
         GameAction::PassPriority { .. } => Err(ActionError::NotYetImplemented),
@@ -284,40 +293,30 @@ mod tests {
 
     #[test]
     fn with_no_pending_and_no_window_only_the_active_player_may_act() {
-        // `PlaySummon` has no handler yet, so it isolates the actor-gate
-        // boundary from `EndTurn`'s now-real behavior.
+        // `PassPriority` still has no handler, so it isolates the
+        // actor-gate boundary from the six now-wired actions' own behavior.
         let state = base_state();
-        let play_summon = GameAction::PlaySummon {
+        let pass_priority = GameAction::PassPriority {
             player: PlayerId::One,
-            card: CardInstanceId(1),
-            slot: BenchSlot::First,
         };
 
         assert!(matches!(
-            apply(&state, &play_summon),
+            apply(&state, &pass_priority),
             Err(ActionError::NotYetImplemented)
         ));
     }
 
     #[test]
-    fn every_remaining_dispatch_arm_still_rejects_as_not_yet_implemented() {
-        // `EndTurn`, `ConvertCoin`, and `ChooseManaType` now have real
-        // handlers (`upkeep::end_turn`, `upkeep::convert_coin`,
-        // `upkeep::choose_mana_type`), covered by their own behavior tests
-        // above and in `engine::upkeep`. The other nine arms are still
-        // this list's job to prove.
+    fn every_dispatch_arm_currently_rejects_as_not_yet_implemented() {
+        // PlaySummon, UpgradeSummon, and Retreat now have real handlers in
+        // `engine::board`, and EndTurn, ConvertCoin, and ChooseManaType now
+        // have real handlers in `engine::upkeep`. Against this fixture's
+        // empty hand, empty Bench, resting Main Phase board, each of those
+        // six reaches its own rule check or its own behavior instead of
+        // falling through to `NotYetImplemented`, so they are exercised by
+        // `engine::board`'s and `engine::upkeep`'s own tests instead of here.
         let state = base_state();
         let actions = vec![
-            GameAction::PlaySummon {
-                player: PlayerId::One,
-                card: CardInstanceId(1),
-                slot: BenchSlot::First,
-            },
-            GameAction::UpgradeSummon {
-                player: PlayerId::One,
-                card: CardInstanceId(1),
-                position: Position::Main,
-            },
             GameAction::CastSpell {
                 player: PlayerId::One,
                 card: CardInstanceId(1),
@@ -329,11 +328,6 @@ mod tests {
                 position: Position::Main,
                 skill: crate::domain::actions::SkillIndex(0),
                 targets: vec![],
-                mana_hint: None,
-            },
-            GameAction::Retreat {
-                player: PlayerId::One,
-                slot: BenchSlot::First,
                 mana_hint: None,
             },
             GameAction::DeclareAttack {
@@ -354,7 +348,7 @@ mod tests {
             },
         ];
 
-        assert_eq!(actions.len(), 9);
+        assert_eq!(actions.len(), 6);
         for action in &actions {
             assert_eq!(apply(&state, action), Err(ActionError::NotYetImplemented));
         }
@@ -535,6 +529,47 @@ mod tests {
         assert_eq!(
             apply(&outcome.state, &end_turn(PlayerId::Two)),
             Err(ActionError::GameAlreadyOver)
+        );
+    }
+
+    #[test]
+    fn play_summon_upgrade_summon_and_retreat_reach_their_own_handlers() {
+        // Confirms dispatch actually routes to `engine::board` now, without
+        // duplicating that module's own coverage of its rules.
+        let state = base_state();
+
+        assert_eq!(
+            apply(
+                &state,
+                &GameAction::PlaySummon {
+                    player: PlayerId::One,
+                    card: CardInstanceId(1),
+                    slot: BenchSlot::First,
+                },
+            ),
+            Err(ActionError::UnknownCard)
+        );
+        assert_eq!(
+            apply(
+                &state,
+                &GameAction::UpgradeSummon {
+                    player: PlayerId::One,
+                    card: CardInstanceId(1),
+                    position: crate::domain::ids::Position::Main,
+                },
+            ),
+            Err(ActionError::UnknownCard)
+        );
+        assert_eq!(
+            apply(
+                &state,
+                &GameAction::Retreat {
+                    player: PlayerId::One,
+                    slot: BenchSlot::First,
+                    mana_hint: None,
+                },
+            ),
+            Err(ActionError::EmptyPosition)
         );
     }
 
