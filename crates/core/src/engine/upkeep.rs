@@ -1,6 +1,8 @@
 //! Upkeep work — Ready, draw, and natural Mana production (rules §10–12) —
-//! plus the turn handoff, the Coin, and the anchoring rule they share
-//! (rules §7, §11–12; design decisions 12–13).
+//! and the anchoring rule and per-turn flag reset they, and `engine::turn`,
+//! share (rules §11–12; design decisions 12–13). The turn handoff, the §47
+//! window, and the Coin live in `engine::turn`, kept separate purely to
+//! stay under this crate's file-length cap.
 //!
 //! The anchoring rule: a Mana Type is available to a player only if some
 //! Summon they control in Main or on the Bench currently prints it (read
@@ -11,13 +13,9 @@
 //! one Type.
 
 use crate::domain::cards::{Query, QueryResult, find_def};
-use crate::domain::errors::ActionError;
 use crate::domain::events::GameEvent;
-use crate::domain::ids::{BenchSlot, ManaType, PlayerId, Position};
-use crate::domain::state::{
-    GameState, ManaSource, PendingInput, Phase, PlayerState, SummonInstance, WorkItem,
-};
-use crate::engine::apply::ActionOutcome;
+use crate::domain::ids::{BenchSlot, ManaType, Position};
+use crate::domain::state::{GameState, ManaSource, PendingInput, PlayerState, SummonInstance};
 
 // ---------------------------------------------------------------------------
 // The anchoring rule
@@ -103,15 +101,21 @@ fn summon_types(player_state: &PlayerState, position: Position) -> Vec<ManaType>
 }
 
 /// The Mana Types available for one `ManaSource`, dispatching to the
-/// player-wide anchor or one Summon's own printed Types.
-fn available_types(player_state: &PlayerState, source: ManaSource) -> Vec<ManaType> {
+/// player-wide anchor or one Summon's own printed Types. `pub(crate)`
+/// because `engine::turn::choose_mana_type` answers a paused
+/// `ManaProduction` decision against the same set this module's own
+/// `produce_mana` used to pause it.
+pub(crate) fn available_types(player_state: &PlayerState, source: ManaSource) -> Vec<ManaType> {
     match source {
         ManaSource::Player => anchor_types(player_state),
         ManaSource::Summon(position) => summon_types(player_state, position),
     }
 }
 
-fn bank(player_state: &mut PlayerState, mana_type: ManaType) {
+/// `pub(crate)` because `engine::turn::convert_coin` and
+/// `engine::turn::choose_mana_type` both bank Mana the same way
+/// `produce_mana` does here.
+pub(crate) fn bank(player_state: &mut PlayerState, mana_type: ManaType) {
     match mana_type {
         ManaType::Matter => player_state.mana.matter += 1,
         ManaType::Mind => player_state.mana.mind += 1,
@@ -133,20 +137,22 @@ fn bank(player_state: &mut PlayerState, mana_type: ManaType) {
 /// clearing point — this is a deferred decision, resolved below).
 ///
 /// All three share one reset point: the moment a turn changes hands, for
-/// both players' boards (see `end_turn`). The rules describe each flag
-/// against "this turn" as a single game-wide concept (§9: "players
-/// alternate complete turns"), not a clock that runs only while a Summon's
-/// controller happens to be active. That reading is provably correct for
-/// `played_this_turn` and `upgraded_this_turn`: both are read only during
-/// their controller's own Main Phase, which cannot arrive before their own
-/// next Upkeep, so clearing them at the handoff that starts the *other*
-/// player's turn already lands before that next read. It is also the only
-/// reading available for `entered_main_this_turn`, which can be set on
-/// either player's Summon and must stay true for the remainder of the turn
-/// that set it, whether that Summon belongs to the player about to act or
-/// not — clearing only the newly active player's own board would leave a
-/// stale `true` sitting on the other player's board indefinitely.
-fn reset_per_turn_summon_flags(player_state: &mut PlayerState) {
+/// both players' boards (see `engine::turn::handover`). The rules describe
+/// each flag against "this turn" as a single game-wide concept (§9:
+/// "players alternate complete turns"), not a clock that runs only while a
+/// Summon's controller happens to be active. That reading is provably
+/// correct for `played_this_turn` and `upgraded_this_turn`: both are read
+/// only during their controller's own Main Phase, which cannot arrive
+/// before their own next Upkeep, so clearing them at the handoff that
+/// starts the *other* player's turn already lands before that next read.
+/// It is also the only reading available for `entered_main_this_turn`,
+/// which can be set on either player's Summon and must stay true for the
+/// remainder of the turn that set it, whether that Summon belongs to the
+/// player about to act or not — clearing only the newly active player's
+/// own board would leave a stale `true` sitting on the other player's
+/// board indefinitely. `pub(crate)` because `engine::turn::handover` is
+/// where this reset actually runs.
+pub(crate) fn reset_per_turn_summon_flags(player_state: &mut PlayerState) {
     if let Some(summon) = player_state.main.as_mut() {
         clear_per_turn_flags(summon);
     }
@@ -247,144 +253,13 @@ pub(crate) fn produce_mana(state: &GameState, source: ManaSource) -> (GameState,
     }
 }
 
-// ---------------------------------------------------------------------------
-// Dispatch handlers: `EndTurn`, `ConvertCoin`, `ChooseManaType`
-// ---------------------------------------------------------------------------
-
-/// `EndTurn` (decision 7, rules §9, §47–48): the direct turn handoff.
-///
-/// The rule §47 final Priority window — a last response opportunity before
-/// Combat ends when the active player declines to attack — is not built
-/// yet. Until it lands, `EndTurn` is only legal from a resting Main Phase
-/// with no pending decision and no open Priority window; from any other
-/// shape it is honestly rejected with `WrongPhase` rather than simulating a
-/// window that does not exist yet. When legal, it hands the turn straight
-/// to the opponent: every Summon's per-turn flags reset (see
-/// `reset_per_turn_summon_flags`), the opponent's Upkeep begins, and
-/// `Ready`, draw, and natural production are queued as work for the
-/// resolution loop to drain.
-pub(crate) fn end_turn(state: &GameState, player: PlayerId) -> Result<ActionOutcome, ActionError> {
-    if state.pending.is_some()
-        || state.turn.window.is_some()
-        || state.turn.phase != Phase::Main
-        || player != state.turn.active_player
-    {
-        return Err(ActionError::WrongPhase);
-    }
-
-    let mut state = state.clone();
-    let opponent = player.opponent();
-    state.turn = crate::domain::state::TurnState {
-        active_player: opponent,
-        phase: Phase::Upkeep,
-        window: None,
-        normal_attack_used: false,
-        normal_retreat_used: false,
-        spell_played_this_turn: false,
-    };
-    reset_per_turn_summon_flags(state.players.get_mut(player));
-    reset_per_turn_summon_flags(state.players.get_mut(opponent));
-    state.work.push_back(WorkItem::ReadyAll);
-    state.work.push_back(WorkItem::DrawCard);
-    state
-        .work
-        .push_back(WorkItem::ProduceMana(ManaSource::Player));
-
-    Ok(ActionOutcome {
-        state,
-        events: vec![GameEvent::TurnBegan { player: opponent }],
-    })
-}
-
-/// `ConvertCoin` (rules §7, decision 13): exchange the one-use Coin for one
-/// anchored Mana.
-///
-/// Legal only in the owner's own Main Phase for now — the "or while the
-/// owner holds Priority" clause in decision 13 arrives with the Priority
-/// work, so an open window rejects this today rather than granting a
-/// legality nothing yet polices. The chosen Type must be in the
-/// owner's anchor, the same rule `produce_mana` uses; a missing Coin or an
-/// out-of-anchor Type are both reported as `InvalidTarget`, since neither
-/// names a legal target for this conversion.
-pub(crate) fn convert_coin(
-    state: &GameState,
-    player: PlayerId,
-    mana_type: ManaType,
-) -> Result<ActionOutcome, ActionError> {
-    if state.pending.is_some()
-        || state.turn.window.is_some()
-        || state.turn.phase != Phase::Main
-        || player != state.turn.active_player
-    {
-        return Err(ActionError::WrongPhase);
-    }
-
-    let mut state = state.clone();
-    let player_state = state.players.get_mut(player);
-
-    if !player_state.has_coin {
-        return Err(ActionError::InvalidTarget);
-    }
-    if !anchor_types(player_state).contains(&mana_type) {
-        return Err(ActionError::InvalidTarget);
-    }
-
-    player_state.has_coin = false;
-    bank(player_state, mana_type);
-
-    Ok(ActionOutcome {
-        state,
-        events: vec![GameEvent::CoinConverted { player, mana_type }],
-    })
-}
-
-/// `ChooseManaType` (rules §11–12): answer a paused `ManaProduction`
-/// decision. Anything other than a matching `PendingInput::ManaProduction`
-/// is `PendingInputMismatch`; a Type outside the anchor is `InvalidTarget`.
-pub(crate) fn choose_mana_type(
-    state: &GameState,
-    player: PlayerId,
-    mana_type: ManaType,
-) -> Result<ActionOutcome, ActionError> {
-    let Some(PendingInput::ManaProduction {
-        player: pending_player,
-        source,
-    }) = state.pending
-    else {
-        return Err(ActionError::PendingInputMismatch);
-    };
-    if player != pending_player {
-        return Err(ActionError::PendingInputMismatch);
-    }
-
-    let mut state = state.clone();
-    let available = available_types(state.players.get(pending_player), source);
-    if !available.contains(&mana_type) {
-        return Err(ActionError::InvalidTarget);
-    }
-
-    state.pending = None;
-    bank(state.players.get_mut(pending_player), mana_type);
-
-    Ok(ActionOutcome {
-        state,
-        events: vec![GameEvent::ManaProduced {
-            player: pending_player,
-            source,
-            mana_type,
-        }],
-    })
-}
-
 #[cfg(test)]
 #[allow(clippy::expect_used)]
 mod tests {
     use super::*;
     use crate::domain::cards::CardDefId;
-    use crate::domain::ids::CardInstanceId;
-    use crate::domain::state::{
-        CardRef, ManaBank, PerPlayer, StackWindow, TurnState, UpgradeChain,
-    };
+    use crate::domain::ids::{CardInstanceId, PlayerId};
+    use crate::domain::state::{CardRef, ManaBank, PerPlayer, Phase, TurnState, UpgradeChain};
     use std::collections::VecDeque;
 
     fn chain_summon(owner: PlayerId, def: &'static str, instance: u32) -> SummonInstance {
@@ -624,70 +499,6 @@ mod tests {
         assert_eq!(state.players.get(PlayerId::One).mana, ManaBank::default());
     }
 
-    // -- end_turn -------------------------------------------------------------
-
-    #[test]
-    fn end_turn_hands_off_and_queues_the_opponents_upkeep() {
-        let state = base_state();
-
-        let outcome = end_turn(&state, PlayerId::One).expect("legal from Main");
-
-        assert_eq!(
-            outcome.events,
-            vec![GameEvent::TurnBegan {
-                player: PlayerId::Two
-            }]
-        );
-        assert_eq!(outcome.state.turn.active_player, PlayerId::Two);
-        assert_eq!(outcome.state.turn.phase, Phase::Upkeep);
-        assert_eq!(
-            outcome.state.work,
-            VecDeque::from(vec![
-                WorkItem::ReadyAll,
-                WorkItem::DrawCard,
-                WorkItem::ProduceMana(ManaSource::Player),
-            ])
-        );
-    }
-
-    #[test]
-    fn end_turn_is_rejected_outside_a_resting_main_phase() {
-        let mut state = base_state();
-        state.turn.phase = Phase::Combat;
-
-        assert_eq!(
-            end_turn(&state, PlayerId::One),
-            Err(ActionError::WrongPhase)
-        );
-    }
-
-    #[test]
-    fn end_turn_is_rejected_while_a_window_is_open() {
-        let mut state = base_state();
-        state.turn.window = Some(StackWindow {
-            holder: PlayerId::One,
-            prior_pass: false,
-        });
-
-        assert_eq!(
-            end_turn(&state, PlayerId::One),
-            Err(ActionError::WrongPhase)
-        );
-    }
-
-    #[test]
-    fn end_turn_is_rejected_while_a_decision_is_pending() {
-        let mut state = base_state();
-        state.pending = Some(PendingInput::Promotion {
-            player: PlayerId::One,
-        });
-
-        assert_eq!(
-            end_turn(&state, PlayerId::One),
-            Err(ActionError::WrongPhase)
-        );
-    }
-
     // -- reset_per_turn_summon_flags -----------------------------------------
 
     #[test]
@@ -717,211 +528,5 @@ mod tests {
             assert!(!summon.upgraded_this_turn);
             assert!(!summon.entered_main_this_turn);
         }
-    }
-
-    #[test]
-    fn end_turn_resets_per_turn_summon_flags_for_both_players() {
-        let flagged = SummonInstance {
-            played_this_turn: true,
-            upgraded_this_turn: true,
-            entered_main_this_turn: true,
-            ..whelp(PlayerId::One)
-        };
-        let mut state = base_state();
-        state.players.get_mut(PlayerId::One).main = Some(flagged.clone());
-        state.players.get_mut(PlayerId::Two).main = Some(SummonInstance {
-            controller: PlayerId::Two,
-            owner: PlayerId::Two,
-            ..flagged
-        });
-
-        let outcome = end_turn(&state, PlayerId::One).expect("legal from Main");
-
-        for player in [PlayerId::One, PlayerId::Two] {
-            let summon = outcome
-                .state
-                .players
-                .get(player)
-                .main
-                .as_ref()
-                .expect("main set");
-            assert!(!summon.played_this_turn, "{player:?}");
-            assert!(!summon.upgraded_this_turn, "{player:?}");
-            assert!(!summon.entered_main_this_turn, "{player:?}");
-        }
-    }
-
-    #[test]
-    fn a_summon_played_this_turn_can_be_upgraded_on_its_controllers_next_turn() {
-        // Simulates what `PlaySummon` will set once it lands: a freshly
-        // played Base Summon carries `played_this_turn = true` for the rest
-        // of the turn it was played (rules §17, §52).
-        let mut state = base_state();
-        state.players.get_mut(PlayerId::One).main = Some(SummonInstance {
-            played_this_turn: true,
-            ..whelp(PlayerId::One)
-        });
-
-        // Turn 1 (One) ends; Two's turn runs.
-        let after_one = end_turn(&state, PlayerId::One).expect("legal from Main");
-        assert!(
-            !after_one
-                .state
-                .players
-                .get(PlayerId::One)
-                .main
-                .as_ref()
-                .expect("main set")
-                .played_this_turn,
-            "the flag is already clear as soon as One's own turn ends"
-        );
-
-        // Two's turn ends; play returns to One.
-        let mut two_state = after_one.state;
-        two_state.turn.phase = Phase::Main;
-        let after_two = end_turn(&two_state, PlayerId::Two).expect("legal from Main");
-
-        assert_eq!(after_two.state.turn.active_player, PlayerId::One);
-        assert!(
-            !after_two
-                .state
-                .players
-                .get(PlayerId::One)
-                .main
-                .as_ref()
-                .expect("main set")
-                .played_this_turn,
-            "still clear on One's next turn, so upgrading is no longer blocked"
-        );
-    }
-
-    // -- convert_coin: anchoring and one-use ----------------------------------
-
-    #[test]
-    fn convert_coin_banks_an_anchored_type_and_removes_the_coin() {
-        let mut state = base_state();
-        state.players.get_mut(PlayerId::One).has_coin = true;
-
-        let outcome = convert_coin(&state, PlayerId::One, ManaType::Matter).expect("anchored");
-
-        assert_eq!(
-            outcome.events,
-            vec![GameEvent::CoinConverted {
-                player: PlayerId::One,
-                mana_type: ManaType::Matter,
-            }]
-        );
-        let player_state = outcome.state.players.get(PlayerId::One);
-        assert_eq!(player_state.mana.matter, 1);
-        assert!(!player_state.has_coin);
-    }
-
-    #[test]
-    fn convert_coin_rejects_an_out_of_anchor_type() {
-        let mut state = base_state();
-        state.players.get_mut(PlayerId::One).has_coin = true;
-
-        assert_eq!(
-            convert_coin(&state, PlayerId::One, ManaType::Spirit),
-            Err(ActionError::InvalidTarget)
-        );
-    }
-
-    #[test]
-    fn convert_coin_is_one_use() {
-        let mut state = base_state();
-        state.players.get_mut(PlayerId::One).has_coin = true;
-        let outcome = convert_coin(&state, PlayerId::One, ManaType::Matter).expect("first use");
-
-        assert_eq!(
-            convert_coin(&outcome.state, PlayerId::One, ManaType::Matter),
-            Err(ActionError::InvalidTarget)
-        );
-    }
-
-    #[test]
-    fn convert_coin_rejects_a_player_with_no_coin() {
-        let state = base_state();
-
-        assert_eq!(
-            convert_coin(&state, PlayerId::One, ManaType::Matter),
-            Err(ActionError::InvalidTarget)
-        );
-    }
-
-    #[test]
-    fn convert_coin_is_rejected_outside_the_owners_main_phase() {
-        let mut state = base_state();
-        state.players.get_mut(PlayerId::One).has_coin = true;
-        state.turn.phase = Phase::Combat;
-
-        assert_eq!(
-            convert_coin(&state, PlayerId::One, ManaType::Matter),
-            Err(ActionError::WrongPhase)
-        );
-    }
-
-    // -- choose_mana_type -------------------------------------------------------
-
-    #[test]
-    fn choose_mana_type_banks_the_chosen_anchored_type_and_clears_pending() {
-        let mut state = base_state();
-        state.players.get_mut(PlayerId::One).main = Some(adept(PlayerId::One));
-        state.pending = Some(PendingInput::ManaProduction {
-            player: PlayerId::One,
-            source: ManaSource::Player,
-        });
-
-        let outcome =
-            choose_mana_type(&state, PlayerId::One, ManaType::Mind).expect("mind is anchored");
-
-        assert_eq!(outcome.state.pending, None);
-        assert_eq!(outcome.state.players.get(PlayerId::One).mana.mind, 1);
-        assert_eq!(
-            outcome.events,
-            vec![GameEvent::ManaProduced {
-                player: PlayerId::One,
-                source: ManaSource::Player,
-                mana_type: ManaType::Mind,
-            }]
-        );
-    }
-
-    #[test]
-    fn choose_mana_type_rejects_a_type_outside_the_anchor() {
-        let mut state = base_state();
-        state.players.get_mut(PlayerId::One).main = Some(adept(PlayerId::One));
-        state.pending = Some(PendingInput::ManaProduction {
-            player: PlayerId::One,
-            source: ManaSource::Player,
-        });
-
-        assert_eq!(
-            choose_mana_type(&state, PlayerId::One, ManaType::Spirit),
-            Err(ActionError::InvalidTarget)
-        );
-    }
-
-    #[test]
-    fn choose_mana_type_without_a_pending_production_is_a_mismatch() {
-        let state = base_state();
-
-        assert_eq!(
-            choose_mana_type(&state, PlayerId::One, ManaType::Matter),
-            Err(ActionError::PendingInputMismatch)
-        );
-    }
-
-    #[test]
-    fn choose_mana_type_rejects_a_pending_decision_of_a_different_kind() {
-        let mut state = base_state();
-        state.pending = Some(PendingInput::Promotion {
-            player: PlayerId::One,
-        });
-
-        assert_eq!(
-            choose_mana_type(&state, PlayerId::One, ManaType::Matter),
-            Err(ActionError::PendingInputMismatch)
-        );
     }
 }
