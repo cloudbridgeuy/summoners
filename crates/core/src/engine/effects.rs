@@ -192,12 +192,21 @@ fn move_summon(
     };
     player_state.bench[to_slot.index()] = Some(summon);
 
-    state
-        .work
-        .push_back(WorkItem::MovementTrigger(MovementStep::LeavingBench, from));
-    state
-        .work
-        .push_back(WorkItem::MovementTrigger(MovementStep::EnteringBench, to));
+    // Rules §28: both steps are recorded against `to`, not `from` — the
+    // moved Summon is the only one either step could name, and by the time
+    // `engine::triggers::movement_trigger` drains these it already sits at
+    // `to` (the same reading `engine::destruction::resolve_movement_
+    // consequences` gives a one-way Promotion).
+    state.work.push_back(WorkItem::MovementTrigger(
+        MovementStep::LeavingBench,
+        controller,
+        to,
+    ));
+    state.work.push_back(WorkItem::MovementTrigger(
+        MovementStep::EnteringBench,
+        controller,
+        to,
+    ));
 
     (state, Vec::new())
 }
@@ -235,20 +244,30 @@ fn swap_positions(
     player_state.main = Some(incoming_main);
     player_state.bench[slot.index()] = Some(vacating_main);
 
+    // Rules §28: the swap above already moved both Summons, so each step
+    // names the position its Summon occupies now — the same convention
+    // `engine::board::retreat` uses for the same exchange. The Summon that
+    // left Main is at `Bench(slot)` for both `LeavingMain` and
+    // `EnteringBench`; the Summon that left the Bench is at `Main` for both
+    // `LeavingBench` and `EnteringMain`.
     state.work.push_back(WorkItem::MovementTrigger(
         MovementStep::LeavingMain,
-        Position::Main,
+        controller,
+        Position::Bench(slot),
     ));
     state.work.push_back(WorkItem::MovementTrigger(
         MovementStep::EnteringBench,
+        controller,
         Position::Bench(slot),
     ));
     state.work.push_back(WorkItem::MovementTrigger(
         MovementStep::LeavingBench,
-        Position::Bench(slot),
+        controller,
+        Position::Main,
     ));
     state.work.push_back(WorkItem::MovementTrigger(
         MovementStep::EnteringMain,
+        controller,
         Position::Main,
     ));
 
@@ -602,10 +621,12 @@ mod tests {
             VecDeque::from(vec![
                 WorkItem::MovementTrigger(
                     MovementStep::LeavingBench,
-                    Position::Bench(BenchSlot::First)
+                    PlayerId::One,
+                    Position::Bench(BenchSlot::Second)
                 ),
                 WorkItem::MovementTrigger(
                     MovementStep::EnteringBench,
+                    PlayerId::One,
                     Position::Bench(BenchSlot::Second)
                 ),
             ])
@@ -685,16 +706,26 @@ mod tests {
         assert_eq!(
             state.work,
             VecDeque::from(vec![
-                WorkItem::MovementTrigger(MovementStep::LeavingMain, Position::Main),
+                WorkItem::MovementTrigger(
+                    MovementStep::LeavingMain,
+                    PlayerId::One,
+                    Position::Bench(BenchSlot::First)
+                ),
                 WorkItem::MovementTrigger(
                     MovementStep::EnteringBench,
+                    PlayerId::One,
                     Position::Bench(BenchSlot::First)
                 ),
                 WorkItem::MovementTrigger(
                     MovementStep::LeavingBench,
-                    Position::Bench(BenchSlot::First)
+                    PlayerId::One,
+                    Position::Main
                 ),
-                WorkItem::MovementTrigger(MovementStep::EnteringMain, Position::Main),
+                WorkItem::MovementTrigger(
+                    MovementStep::EnteringMain,
+                    PlayerId::One,
+                    Position::Main
+                ),
             ])
         );
     }

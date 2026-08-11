@@ -1,15 +1,19 @@
-//! The resolution loop's full three-step contract: drain `state.work`
-//! (step 1), then — once `work` is empty and a double pass has closed the
-//! Priority window with something still unresolved on the current Stack
-//! segment — resolve the top `StackItem` and let its consequences feed
-//! back into `work` (step 2), and finally rest once both are settled
-//! (step 3).
+//! The resolution loop's full three-step contract: once a Priority window
+//! has closed, resolve whatever is left on the current Stack segment
+//! strictly top-first (step 1, rules §35) — a segment's own item(s) must
+//! finish before anything queued underneath it resumes (rules §38, §40) —
+//! then drain `state.work`, including whatever the segment's resolution
+//! just fed back into it (step 2), and finally rest once both are settled
+//! (step 3). A respondable trigger opening a new window mid-drain (rules
+//! §38) pauses the whole loop immediately, leaving the rest of `work` — and
+//! the segment base the trigger just pushed — exactly where they are until
+//! that window closes.
 
 use crate::domain::cards::{CardDefId, EffectLeaf, Query, QueryResult, find_def};
 use crate::domain::events::GameEvent;
 use crate::domain::ids::{PlayerId, Position};
 use crate::domain::state::{CardRef, GameState, StackItem, WorkItem};
-use crate::engine::{destruction, effects, loss, upkeep};
+use crate::engine::{destruction, effects, loss, triggers, upkeep};
 
 /// Drain `state.work`, then the Stack, until both are settled, a decision
 /// pauses the loop (`pending` becomes set), or the game ends (`outcome`
@@ -25,6 +29,33 @@ pub(crate) fn drain(state: &GameState) -> (GameState, Vec<GameEvent>) {
             break;
         }
 
+        // A respondable trigger can open a Priority window mid-drain
+        // (rules §38): once that happens, the rest of `work` — including
+        // any `FireTrigger` items discovery queued behind it — must wait
+        // for the window to close, the same way step 2 already waits
+        // before touching the Stack.
+        if state.turn.window.is_some() {
+            break;
+        }
+
+        // Step 1: the window is closed (the loop above already broke out
+        // otherwise), so if the current Stack segment still holds
+        // something, resolve its top item first (rules §35 — strictly
+        // top-first). A segment interrupts whatever `work` was doing to
+        // open its own window (rules §38); once that window closes, the
+        // segment's own item(s) must finish — and its base must come off
+        // `stack_segment_bases` — before the `work` items it interrupted
+        // resume underneath it (rules §40). Whatever this feeds back into
+        // `work` is picked up by step 2 on a later iteration, once this
+        // segment (and any it is nested in) is fully settled.
+        if stack_has_unresolved_items(&state) {
+            let (next_state, item_events) = resolve_top_stack_item(&state);
+            state = next_state;
+            events.extend(item_events);
+            continue;
+        }
+
+        // Step 2: the current Stack segment is settled. Drain `work`.
         if let Some(item) = state.work.pop_front() {
             let (next_state, item_events) = execute(&state, &item);
             state = next_state;
@@ -32,19 +63,7 @@ pub(crate) fn drain(state: &GameState) -> (GameState, Vec<GameEvent>) {
             continue;
         }
 
-        // Step 2: the work queue is settled. If the Priority window has
-        // closed (rules §33) and the current Stack segment still holds
-        // something, resolve its top item next (rules §35 — strictly
-        // top-first); whatever it enqueues onto `work` is picked up by step
-        // 1 on the next iteration.
-        if state.turn.window.is_none() && stack_has_unresolved_items(&state) {
-            let (next_state, item_events) = resolve_top_stack_item(&state);
-            state = next_state;
-            events.extend(item_events);
-            continue;
-        }
-
-        // Step 3: both the work queue and the current Stack segment are
+        // Step 3: both the current Stack segment and the work queue are
         // settled — rest here until the next action.
         break;
     }
@@ -52,11 +71,12 @@ pub(crate) fn drain(state: &GameState) -> (GameState, Vec<GameEvent>) {
     (state, events)
 }
 
-/// Whether the current Stack segment still holds an item to resolve.
-/// `stack_segment_bases` is storage-only today (there is exactly one
-/// implicit segment, based at 0), so this drains the whole Stack; once
-/// nested segments exist, resolving down to the current segment's base
-/// becomes a data change here, not a control-flow rewrite.
+/// Whether the current Stack segment still holds an item to resolve. With
+/// no segment open, the base defaults to 0 and this is the whole Stack;
+/// with one open (rules §38 — a respondable trigger, and anything played
+/// in response to it), it is only the part above that segment's base, so
+/// an outer, interrupted segment cannot be touched until this one empties
+/// back down to where it started.
 fn stack_has_unresolved_items(state: &GameState) -> bool {
     let base = state.stack_segment_bases.last().copied().unwrap_or(0);
     state.stack.len() > base
@@ -81,13 +101,11 @@ fn execute(state: &GameState, item: &WorkItem) -> (GameState, Vec<GameEvent>) {
             destruction::resolve_movement_consequences(state, *player)
         }
 
-        // Movement and ability triggers (§28, §36–38) have no fixture that
-        // reads one yet. Draining one of these items today does nothing and
-        // produces no event: an honest, documented no-op rather than a
-        // panic, so the loop can keep moving once later work starts
-        // consuming them for real.
-        WorkItem::MovementTrigger(_, _) | WorkItem::FireTrigger(_, _) => {
-            (state.clone(), Vec::new())
+        WorkItem::MovementTrigger(step, player, position) => {
+            triggers::movement_trigger(state, *step, *player, *position)
+        }
+        WorkItem::FireTrigger(player, position, event) => {
+            triggers::fire_queued(state, *player, *position, *event)
         }
 
         WorkItem::LossCheck(player) => loss::check(state, *player),
@@ -134,6 +152,25 @@ fn resolve_top_stack_item(state: &GameState) -> (GameState, Vec<GameEvent>) {
             state = next_state;
             events.extend(leaf_events);
         }
+        StackItem::Trigger {
+            controller,
+            targets,
+            effects,
+            ..
+        } => {
+            let (next_state, leaf_events) = apply_leaves(&state, controller, &targets, &effects);
+            state = next_state;
+            events.extend(leaf_events);
+        }
+    }
+
+    // Rules §38, §40: once popping that item drains the Stack back down to
+    // the current segment's own base, the segment is settled — drop the
+    // base so the next iteration's `stack_has_unresolved_items` reads
+    // whatever segment (or the implicit one at 0) sits below it, letting
+    // the `work` that segment interrupted resume underneath it.
+    if state.stack_segment_bases.last() == Some(&state.stack.len()) {
+        state.stack_segment_bases.pop();
     }
 
     (state, events)
@@ -171,8 +208,11 @@ fn resolve_spell(
 }
 
 /// Run every effect leaf in order through the shared interpreter, folding
-/// its state and events forward.
-fn apply_leaves(
+/// its state and events forward. `pub(crate)` so `engine::triggers` can
+/// resolve an immediate trigger's effects through the same single
+/// interpreter path as an attack, a Spell, and a respondable trigger's own
+/// Stack item.
+pub(crate) fn apply_leaves(
     state: &GameState,
     controller: PlayerId,
     targets: &[Position],
@@ -401,11 +441,15 @@ mod tests {
     }
 
     #[test]
-    fn drain_treats_movement_and_ability_triggers_as_silent_no_ops() {
+    fn drain_is_a_silent_no_op_for_a_movement_or_ability_trigger_with_no_matching_card() {
+        // Quarry Whelp carries no `CardNode::Trigger`, so both items find
+        // nothing to fire; `LeavingMain` also does not touch
+        // `entered_main_this_turn` (only `EnteringMain` does).
         let mut state = base_state();
         state.work = VecDeque::from(vec![
-            WorkItem::MovementTrigger(MovementStep::LeavingMain, Position::Main),
+            WorkItem::MovementTrigger(MovementStep::LeavingMain, PlayerId::Two, Position::Main),
             WorkItem::FireTrigger(
+                PlayerId::Two,
                 Position::Main,
                 crate::domain::cards::TriggerEvent::YourUpkeep,
             ),
@@ -416,6 +460,198 @@ mod tests {
         assert!(events.is_empty());
         assert!(state.work.is_empty());
         assert_eq!(state.outcome, None);
+    }
+
+    #[test]
+    fn drain_fires_an_entering_main_trigger_and_sets_the_entered_flag() {
+        // Rules §28, §36, §39: Hearth Warden's immediate trigger heals
+        // itself the moment it enters Main.
+        let mut state = base_state();
+        state.players.get_mut(PlayerId::Two).main = Some(SummonInstance {
+            chain: UpgradeChain::new(
+                CardRef {
+                    instance: CardInstanceId(2),
+                    def: CardDefId("hearth-warden"),
+                },
+                vec![],
+            ),
+            damage: 20,
+            ..whelp(PlayerId::Two)
+        });
+        state.work = VecDeque::from(vec![WorkItem::MovementTrigger(
+            MovementStep::EnteringMain,
+            PlayerId::Two,
+            Position::Main,
+        )]);
+
+        let (state, events) = drain(&state);
+
+        assert_eq!(
+            events,
+            vec![
+                GameEvent::TriggerFired {
+                    controller: PlayerId::Two,
+                    position: Position::Main,
+                    event: crate::domain::cards::TriggerEvent::EntersMain,
+                },
+                GameEvent::Healed {
+                    position: Position::Main,
+                    amount: 15,
+                },
+            ]
+        );
+        let healed = state
+            .players
+            .get(PlayerId::Two)
+            .main
+            .as_ref()
+            .expect("main");
+        assert_eq!(healed.damage, 5);
+        assert!(healed.entered_main_this_turn);
+    }
+
+    #[test]
+    fn drain_opens_a_window_for_a_respondable_trigger_and_resumes_the_interrupted_drain_below_it() {
+        // Rules §38, §40: a respondable destruction trigger creates a
+        // segment base and opens a window for the opponent of its
+        // controller; the drain stops there instead of running the rest
+        // of `work` or touching the Stack.
+        let mut state = base_state();
+        state.players.get_mut(PlayerId::One).main = Some(SummonInstance {
+            chain: UpgradeChain::new(
+                CardRef {
+                    instance: CardInstanceId(3),
+                    def: CardDefId("spite-thorn"),
+                },
+                vec![],
+            ),
+            ..whelp(PlayerId::One)
+        });
+        state.work = VecDeque::from(vec![
+            WorkItem::FireTrigger(
+                PlayerId::One,
+                Position::Main,
+                crate::domain::cards::TriggerEvent::AnySummonDestroyed,
+            ),
+            WorkItem::LossCheck(PlayerId::Two),
+        ]);
+
+        let (state, events) = drain(&state);
+
+        assert_eq!(
+            events,
+            vec![GameEvent::TriggerFired {
+                controller: PlayerId::One,
+                position: Position::Main,
+                event: crate::domain::cards::TriggerEvent::AnySummonDestroyed,
+            }]
+        );
+        assert_eq!(state.stack.len(), 1);
+        assert_eq!(state.stack_segment_bases, vec![0]);
+        assert_eq!(
+            state.turn.window,
+            Some(crate::domain::state::StackWindow {
+                holder: PlayerId::Two,
+                prior_pass: false,
+            })
+        );
+        assert_eq!(
+            state.work,
+            VecDeque::from(vec![WorkItem::LossCheck(PlayerId::Two)]),
+            "the interrupted item stays queued below the open segment"
+        );
+    }
+
+    #[test]
+    fn drain_resumes_the_interrupted_work_once_two_passes_close_the_triggers_window() {
+        // Rules §38, §40: once the opponent of the trigger's controller and
+        // then the controller both pass, the segment the trigger opened
+        // resolves — top-first, like any other Stack item — and only then
+        // does the destruction chain it interrupted continue underneath it.
+        let mut state = base_state();
+        state.players.get_mut(PlayerId::One).main = Some(SummonInstance {
+            chain: UpgradeChain::new(
+                CardRef {
+                    instance: CardInstanceId(3),
+                    def: CardDefId("spite-thorn"),
+                },
+                vec![],
+            ),
+            ..whelp(PlayerId::One)
+        });
+        state.work = VecDeque::from(vec![
+            WorkItem::FireTrigger(
+                PlayerId::One,
+                Position::Main,
+                crate::domain::cards::TriggerEvent::AnySummonDestroyed,
+            ),
+            WorkItem::LossCheck(PlayerId::Two),
+        ]);
+
+        let (state, _opening_events) = drain(&state);
+        // The window opened for the opponent of the trigger's controller
+        // (rules §38); both must pass in a row to close it (rules §32–33).
+        let after_first_pass = crate::engine::stack::pass(&state, PlayerId::Two)
+            .expect("Two holds Priority first, opposite the trigger's controller");
+        let after_second_pass = crate::engine::stack::pass(&after_first_pass.state, PlayerId::One)
+            .expect("One passes second, closing the window");
+        assert_eq!(
+            after_second_pass.state.turn.window, None,
+            "the window is closed, but the Stack still holds the Trigger \
+             item, so no handover runs yet"
+        );
+
+        let (state, events) = drain(&after_second_pass.state);
+
+        assert_eq!(
+            events,
+            vec![
+                GameEvent::StackItemResolved {
+                    item: StackItem::Trigger {
+                        controller: PlayerId::One,
+                        source: Position::Main,
+                        event: crate::domain::cards::TriggerEvent::AnySummonDestroyed,
+                        targets: vec![Position::Main],
+                        effects: vec![crate::domain::cards::EffectLeaf::DealDamage {
+                            amount: 15,
+                            immutable: false,
+                        }],
+                    },
+                },
+                GameEvent::DamageApplied {
+                    position: Position::Main,
+                    before: 0,
+                    after: 15,
+                },
+            ],
+            "the segment's own Trigger item resolved, dealing its Damage to \
+             Two's Main"
+        );
+        assert!(
+            state.stack.is_empty(),
+            "the segment's item is the only thing on the Stack"
+        );
+        assert!(
+            state.stack_segment_bases.is_empty(),
+            "the segment's base came off once its item resolved"
+        );
+        assert!(
+            state.work.is_empty(),
+            "the interrupted LossCheck, and the DestructionCheck the \
+             Trigger's Damage enqueued, both ran once the segment settled"
+        );
+        assert_eq!(
+            state
+                .players
+                .get(PlayerId::Two)
+                .main
+                .as_ref()
+                .expect("main")
+                .damage,
+            15,
+            "15 Damage lands, short of Quarry Whelp's 40 Life, so nothing \
+             is destroyed and the chain stays quiet"
+        );
     }
 
     #[test]

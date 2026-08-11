@@ -219,6 +219,7 @@ fn with_no_pending_and_no_window_only_the_active_player_may_act() {
 }
 
 mod demo;
+mod demo_triggers;
 
 #[test]
 fn play_summon_upgrade_summon_and_retreat_reach_their_own_handlers() {

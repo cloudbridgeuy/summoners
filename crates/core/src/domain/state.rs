@@ -5,7 +5,7 @@
 
 use std::collections::VecDeque;
 
-use crate::domain::cards::{CardDefId, TriggerEvent};
+use crate::domain::cards::{CardDefId, EffectLeaf, TriggerEvent};
 use crate::domain::ids::{CardInstanceId, PlayerId, Position};
 
 /// A card reference in a non-battlefield zone: the specific instance and the
@@ -229,6 +229,15 @@ pub enum StackItem {
         card: CardRef,
         targets: Vec<Position>,
     },
+    /// Rules §37–38: a respondable Triggered Ability, waiting to resolve
+    /// like any other Stack entry.
+    Trigger {
+        controller: PlayerId,
+        source: Position,
+        event: TriggerEvent,
+        targets: Vec<Position>,
+        effects: Vec<EffectLeaf>,
+    },
 }
 
 /// The fixed order movement triggers resolve in whenever Main and a Bench
@@ -258,10 +267,12 @@ pub enum WorkItem {
     PromoteBenchSummon(PlayerId),
     /// Rules §24 step 5: resolve the consequences of that promotion.
     ResolveMovementConsequences(PlayerId),
-    /// Rules §28: one step of the fixed movement-trigger order.
-    MovementTrigger(MovementStep, Position),
-    /// Rules §36–38: a Triggered Ability fires for the Summon here.
-    FireTrigger(Position, TriggerEvent),
+    /// Rules §28: one step of the fixed movement-trigger order, for the
+    /// Summon this player controls at `Position`.
+    MovementTrigger(MovementStep, PlayerId, Position),
+    /// Rules §36–38: a Triggered Ability fires for the Summon this player
+    /// controls at `Position`.
+    FireTrigger(PlayerId, Position, TriggerEvent),
     /// Rules §24 step 6, §2: check whether this player has now lost.
     LossCheck(PlayerId),
     /// Rules §10: ready every Summon the new active player controls.
@@ -444,8 +455,15 @@ mod tests {
                 },
                 targets: vec![Position::Main],
             },
+            StackItem::Trigger {
+                controller: PlayerId::One,
+                source: Position::Main,
+                event: TriggerEvent::AnySummonDestroyed,
+                targets: vec![Position::Main],
+                effects: vec![],
+            },
         ];
-        assert_eq!(items.len(), 2);
+        assert_eq!(items.len(), 3);
     }
 
     #[test]
@@ -468,8 +486,8 @@ mod tests {
             WorkItem::RecoverPrize(PlayerId::One),
             WorkItem::PromoteBenchSummon(PlayerId::One),
             WorkItem::ResolveMovementConsequences(PlayerId::One),
-            WorkItem::MovementTrigger(MovementStep::LeavingMain, Position::Main),
-            WorkItem::FireTrigger(Position::Main, TriggerEvent::YourUpkeep),
+            WorkItem::MovementTrigger(MovementStep::LeavingMain, PlayerId::One, Position::Main),
+            WorkItem::FireTrigger(PlayerId::One, Position::Main, TriggerEvent::YourUpkeep),
             WorkItem::LossCheck(PlayerId::One),
             WorkItem::ReadyAll,
             WorkItem::DrawCard,

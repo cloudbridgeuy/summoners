@@ -10,7 +10,7 @@
 //! later step for the same position never has to choose between two players
 //! still holding an over-damaged Summon there at once.
 
-use crate::domain::cards::{Query, QueryResult, find_def};
+use crate::domain::cards::{Query, QueryResult, TriggerEvent, find_def};
 use crate::domain::errors::ActionError;
 use crate::domain::events::GameEvent;
 use crate::domain::ids::{BenchSlot, PlayerId, Position};
@@ -18,6 +18,7 @@ use crate::domain::state::{
     GameState, MovementStep, PendingInput, PlayerState, SummonInstance, WorkItem,
 };
 use crate::engine::apply::ActionOutcome;
+use crate::engine::triggers;
 
 // ---------------------------------------------------------------------------
 // Shared reads
@@ -62,8 +63,10 @@ fn is_destroyed(state: &GameState, player: PlayerId, position: Position) -> bool
 
 /// The active player's opponent, then the active player (rules §41): when
 /// one event destroys Summons for both players at once, the opponent of the
-/// active player resolves their whole destruction first.
-fn ordered_players(state: &GameState) -> [PlayerId; 2] {
+/// active player resolves their whole destruction first. `pub(crate)` so
+/// `engine::triggers` can order simultaneous trigger candidates the same
+/// way.
+pub(crate) fn ordered_players(state: &GameState) -> [PlayerId; 2] {
     let active = state.turn.active_player;
     [active.opponent(), active]
 }
@@ -77,8 +80,10 @@ fn destroyed_controller(state: &GameState, position: Position) -> Option<PlayerI
         .find(|player| is_destroyed(state, *player, position))
 }
 
-/// `player`'s occupied Bench slots, in index order.
-fn occupied_bench_slots(state: &GameState, player: PlayerId) -> Vec<BenchSlot> {
+/// `player`'s occupied Bench slots, in index order. `pub(crate)` so
+/// `engine::triggers` can build the same Main-then-Bench ordering (rules
+/// §41) for trigger discovery.
+pub(crate) fn occupied_bench_slots(state: &GameState, player: PlayerId) -> Vec<BenchSlot> {
     let bench = &state.players.get(player).bench;
     BenchSlot::ALL
         .into_iter()
@@ -143,6 +148,19 @@ pub(crate) fn discard_destroyed_chain(
         .get_mut(owner)
         .discard
         .extend(summon.chain.layers().copied());
+
+    // Rules §36–38, §41: any Summon still in play may carry an
+    // `AnySummonDestroyed` trigger; queue every match, opponent of the
+    // active player first, ahead of the rest of this destruction chain
+    // (`enqueue_destruction` already queued the steps that follow this one
+    // as one contiguous block — see the module doc comment — so pushing to
+    // the front here still keeps that whole block contiguous, just behind
+    // these new items instead of immediately next).
+    state = triggers::discover_front(
+        &state,
+        &ordered_players(&state),
+        TriggerEvent::AnySummonDestroyed,
+    );
 
     (state, vec![GameEvent::SummonDestroyed { position, owner }])
 }
@@ -271,8 +289,8 @@ fn promote_from_slot(
 /// Main here, so only `LeavingBench` and `EnteringMain` apply. The vacated
 /// slot is already gone by the time this runs, so both steps are recorded
 /// against `Position::Main` rather than the Bench slot they left — an
-/// honest simplification, harmless today because no fixture reads a
-/// movement trigger's position yet. A Promotion that found no Bench Summon
+/// honest simplification, harmless today because the promoted Summon is the
+/// only one either step could name. A Promotion that found no Bench Summon
 /// leaves Main empty here too, so nothing is queued.
 pub(crate) fn resolve_movement_consequences(
     state: &GameState,
@@ -286,10 +304,12 @@ pub(crate) fn resolve_movement_consequences(
         // these two behind it instead of ahead of it.
         state.work.push_front(WorkItem::MovementTrigger(
             MovementStep::EnteringMain,
+            player,
             Position::Main,
         ));
         state.work.push_front(WorkItem::MovementTrigger(
             MovementStep::LeavingBench,
+            player,
             Position::Main,
         ));
     }
@@ -472,6 +492,43 @@ mod tests {
 
         assert_eq!(next_state, state);
         assert!(events.is_empty());
+    }
+
+    #[test]
+    fn discard_destroyed_chain_queues_a_matching_any_summon_destroyed_trigger() {
+        // Rules §37, §41: Spite Thorn's respondable trigger fires whenever
+        // any Summon is destroyed, including its own controller's own
+        // Bench Summon being destroyed elsewhere.
+        let mut state = base_state();
+        state.players.get_mut(PlayerId::Two).main = Some(lethal(PlayerId::Two));
+        state.players.get_mut(PlayerId::One).bench[0] = Some(SummonInstance {
+            chain: UpgradeChain::new(
+                CardRef {
+                    instance: CardInstanceId(9),
+                    def: CardDefId("spite-thorn"),
+                },
+                vec![],
+            ),
+            ..summon(PlayerId::One)
+        });
+
+        let (state, events) = discard_destroyed_chain(&state, Position::Main);
+
+        assert_eq!(
+            events,
+            vec![GameEvent::SummonDestroyed {
+                position: Position::Main,
+                owner: PlayerId::Two,
+            }]
+        );
+        assert_eq!(
+            state.work,
+            VecDeque::from(vec![WorkItem::FireTrigger(
+                PlayerId::One,
+                Position::Bench(BenchSlot::First),
+                TriggerEvent::AnySummonDestroyed,
+            )])
+        );
     }
 
     // -- record_main_loss --------------------------------------------------
@@ -716,8 +773,16 @@ mod tests {
         assert_eq!(
             state.work,
             VecDeque::from(vec![
-                WorkItem::MovementTrigger(MovementStep::LeavingBench, Position::Main),
-                WorkItem::MovementTrigger(MovementStep::EnteringMain, Position::Main),
+                WorkItem::MovementTrigger(
+                    MovementStep::LeavingBench,
+                    PlayerId::Two,
+                    Position::Main
+                ),
+                WorkItem::MovementTrigger(
+                    MovementStep::EnteringMain,
+                    PlayerId::Two,
+                    Position::Main
+                ),
                 WorkItem::LossCheck(PlayerId::Two),
             ])
         );

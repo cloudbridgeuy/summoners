@@ -257,24 +257,29 @@ pub(crate) fn retreat(
     next_player.bench[slot.index()] = Some(vacating_main);
 
     // Rules §28: a Main/Bench exchange fires these four movement triggers
-    // in a fixed order. Nothing yet drains `work` or fires a Triggered
-    // Ability for them, so they sit in the queue inert until that handling
-    // exists; enqueueing them now keeps this Retreat's own behavior
-    // rules-accurate regardless of when that handling lands.
+    // in a fixed order. The swap above already moved both Summons, so each
+    // step names the position its Summon occupies now: the one that left
+    // Main is at `Bench(slot)` for both `LeavingMain` and `EnteringBench`;
+    // the one that left the Bench is at `Main` for both `LeavingBench` and
+    // `EnteringMain`.
     next.work.push_back(WorkItem::MovementTrigger(
         MovementStep::LeavingMain,
-        Position::Main,
+        player,
+        Position::Bench(slot),
     ));
     next.work.push_back(WorkItem::MovementTrigger(
         MovementStep::EnteringBench,
+        player,
         Position::Bench(slot),
     ));
     next.work.push_back(WorkItem::MovementTrigger(
         MovementStep::LeavingBench,
-        Position::Bench(slot),
+        player,
+        Position::Main,
     ));
     next.work.push_back(WorkItem::MovementTrigger(
         MovementStep::EnteringMain,
+        player,
         Position::Main,
     ));
 
@@ -693,16 +698,26 @@ mod tests {
         assert_eq!(
             work,
             vec![
-                WorkItem::MovementTrigger(MovementStep::LeavingMain, Position::Main),
+                WorkItem::MovementTrigger(
+                    MovementStep::LeavingMain,
+                    PlayerId::One,
+                    Position::Bench(BenchSlot::First)
+                ),
                 WorkItem::MovementTrigger(
                     MovementStep::EnteringBench,
+                    PlayerId::One,
                     Position::Bench(BenchSlot::First)
                 ),
                 WorkItem::MovementTrigger(
                     MovementStep::LeavingBench,
-                    Position::Bench(BenchSlot::First)
+                    PlayerId::One,
+                    Position::Main
                 ),
-                WorkItem::MovementTrigger(MovementStep::EnteringMain, Position::Main),
+                WorkItem::MovementTrigger(
+                    MovementStep::EnteringMain,
+                    PlayerId::One,
+                    Position::Main
+                ),
             ]
         );
     }
