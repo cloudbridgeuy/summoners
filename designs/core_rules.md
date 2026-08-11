@@ -29,7 +29,7 @@ The Owner is the player whose deck or collection the card originally belongs to.
 8.	The first player begins their first turn.
 At the start of play, each player has one Starter in Main, zero Benched Summons, five cards in hand, two Prize Cards, thirteen cards in the Deck, and zero Mana. The second player additionally has the Coin.
 7. The Second Player's Coin
-The Coin is a one-use resource. At any point when the second player could legally spend Mana, they may exchange the Coin for one Generic Mana. The Mana is added to their Mana Pool and the Coin is removed from the game. The Coin may be saved for any later turn and is public information.
+The Coin is a one-use resource. It is not Mana. At any point when the second player could legally spend Mana, they may exchange the Coin for one Mana. Its Type is chosen from the Mana Types of the Summons they control in Main or on the Bench. The Mana is added to their Mana Pool and the Coin is removed from the game. The Coin may be saved for any later turn and is public information.
 8. The Battlefield
 Each player has one Main position and three Bench positions. The Main Summon normally attacks and receives opposing attacks. Benched Summons still generate Mana and may have Skills, Passive Abilities, and Triggered Abilities.
 During the Main Phase, a player may play a Base Summon from hand into an empty Bench position. A player cannot normally have more than three Benched Summons.
@@ -40,11 +40,11 @@ Players alternate complete turns. A turn progresses through Upkeep, Main Phase, 
 10.	Draw one card. If you cannot draw because your Deck is empty, you lose immediately.
 11.	Generate Mana from the player and Summons and add it to your Mana Pool.
 11. Mana
-Mana is a persistent resource. The player naturally generates one Mana each turn. Each Summon they control also generates Mana during Upkeep. Once generated, Mana moves to the player and remains in the Mana Pool until spent. It is not lost when the producing Summon moves, upgrades, changes control, or is destroyed.
+Mana is a persistent resource, and every Mana has a Type. During their Upkeep, the player naturally generates one Mana; cards may change the amount. The player chooses its Type from the Mana Types of the Summons they control in Main or on the Bench. Each Summon they control also generates Mana during Upkeep. Once generated, Mana moves to the player and remains in the Mana Pool until spent. It is not lost when the producing Summon moves, upgrades, changes control, or is destroyed.
 Mana is public information and may be tracked with colored coins, counters, d20s, or other dice.
-12. Mana Types and Generic Mana
-Mana may have different Types. Their identities and mechanical roles are defined separately from the core engine. If a Summon has multiple Mana Types, its controller chooses which one it produces during Upkeep unless the card says otherwise.
-Costs may include Typed Mana and Generic Mana. Typed costs require the indicated type. Generic costs may be paid with Mana of any type.
+12. Mana Types and Generic Costs
+Every Mana has a Type. Type identities and mechanical roles are defined separately from the core engine. There is no Generic Mana: the Mana Pool holds typed Mana only. If a Summon has multiple Mana Types, its controller chooses which one it produces during Upkeep unless the card says otherwise.
+Costs may include Typed components and Generic components. Typed components require the indicated Type. Generic components may be paid with Mana of any Type.
 13. Ready and Exhausted
 A Ready Summon is upright and may activate a Skill. An Exhausted Summon is turned sideways and cannot normally activate a Skill. All Summons normally Ready during their controller's Upkeep. Cards may Ready or Exhaust Summons outside that process.
 14. Summons Enter Exhausted
@@ -140,8 +140,8 @@ The active player is not required to attack. If they decline, the game still pro
 Once Combat is finished and the Stack is empty, the active player's turn ends. Unused Mana remains in the Mana Pool. Exhausted Summons remain Exhausted until Readied by an effect or during their controller's next Upkeep. The opposing player then begins their turn.
 49. Mana Production After Upgrading
 Mana is generated only during Upkeep. If a Summon generates Mana and later upgrades during the same turn, the upgraded form does not generate additional Mana. Its new Mana characteristics apply at a later Upkeep if it remains in play.
-50. Generic Mana Payment
-Generic costs may be paid using any Mana Type. For example, a cost of two Fire plus one Generic can be paid with two Fire and one Water, three Fire, or any other combination satisfying the two required Fire Mana plus one additional Mana.
+50. Generic Cost Payment
+A Generic cost component may be paid using Mana of any Type. For example, a cost of two Fire plus one Generic can be paid with two Fire and one Water, three Fire, or any other combination satisfying the two required Fire Mana plus one additional Mana.
 51. Multi-Type Summons
 If a Summon has more than one Mana Type and normally produces one Mana, its controller chooses one of those Types during Upkeep unless the card says otherwise. It does not normally generate one Mana of every listed Type.
 52. Once-Per-Turn Upgrade Limit
@@ -168,7 +168,7 @@ The Starter is a chosen Base Summon outside the 20-card Deck. Once revealed, it 
 60. First-Turn Victory
 There is no special first-turn protection. The first player may attack normally. If the defending Starter is destroyed while its controller has no Benched Summon, that player loses immediately. First-turn victories are legal but should be difficult through balance rather than forbidden by rule.
 61. First-Player and Second-Player Balance
-The coin-toss winner chooses whether to play first or second. The second player receives the one-use Coin that may become one Generic Mana. There are no additional first-turn restrictions in the core engine; balance is intended to come from the Coin, card statistics, Mana costs, Starter durability, Spell design, and deck construction.
+The coin-toss winner chooses whether to play first or second. The second player receives the one-use Coin that may become one Mana of a Type among their in-play Summons' Mana Types. There are no additional first-turn restrictions in the core engine; balance is intended to come from the Coin, card statistics, Mana costs, Starter durability, Spell design, and deck construction.
 62. Hidden and Public Information
 Public information
 •	Summons in play

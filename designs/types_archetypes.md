@@ -29,15 +29,16 @@ The names are deliberately plain. They read as fundamental forces rather than fa
 
 Defined in the core rules (see rules §11–12); restated here because the type system depends on it:
 
-- During Upkeep, the player naturally generates **one Generic Mana**.
+- **All Mana is typed.** There is no Generic Mana resource.
+- During Upkeep, the player naturally generates **one Mana of a Type they choose from the Mana Types of the Summons they control** in Main or on the Bench.
 - Summons generate **typed Mana** matching their Mana Type(s); a multi-type Summon's controller chooses which one type it produces.
-- **Typed Mana may pay Generic costs. Generic Mana may not pay typed costs.**
+- Costs may include **typed components** and **Generic components**. Typed components require the named Type; Generic components accept Mana of any Type.
 
 Consequences:
 
-- Generic Mana is the floor resource: a player is never fully stuck, but cannot fake a realm identity they did not build for.
-- The Bench is the mana base. Typed production depends entirely on the Summons brought into play, making Bench composition a strategic resource decision.
-- The second player's Coin (one Generic Mana) is a tempo tool, not a color fixer.
+- Natural production is anchored to the board: the player chooses among the Mana Types of the Summons they control, so a player cannot fake a realm identity they did not bring into play. The floor resource remains, because Main is never empty and at least one Type is therefore always available.
+- The Bench is the mana base twice over: Summons produce typed Mana, and their Types define what the player's natural Mana may become. Bench composition is a strategic resource decision.
+- The second player's Coin converts into one Mana whose Type must come from their in-play Summons' Mana Types: a tempo tool, not a color fixer.
 
 ---
 

@@ -44,7 +44,9 @@ managed pre-commit hook and leaves any unmanaged hook unchanged.
 ## Sources
 
 - `designs/core_rules.md` defines the current prototype rules and their open areas.
-- `designs/core_rules.docx` is the source document retained with the Markdown rules.
+- `designs/core_rules.docx` is the source document retained with the Markdown
+  rules. The Markdown file supersedes the `.docx` where they differ; the
+  2026-08-10 Mana rewrite exists only in the Markdown.
 - `designs/types_archetypes.md` defines card-design identities and balance intent. It is not a rules document.
 
 When the documents overlap, use the core rules for engine behavior and the
@@ -58,7 +60,7 @@ types/archetypes document for content-design intent.
 - **Bench:** up to three reserve positions whose Summons can still produce Mana and provide abilities.
 - **Base / Enhanced / Elite:** the ordered Summon forms in an upgrade chain.
 - **Ready / Exhausted:** the physical state that normally controls voluntary Skill activation.
-- **Mana Pool:** persistent public resources owned by a player. Typed Mana and Generic Mana have different payment rules.
+- **Mana Pool:** persistent public resources owned by a player. All Mana is typed. Generic cost components accept Mana of any Type, while typed components require the named Type.
 - **Skill:** an ability a Ready Summon can voluntarily activate by paying its cost and becoming Exhausted.
 - **Passive Ability:** a continuous effect that normally does not use the Stack.
 - **Triggered Ability:** an automatic response to a stated event. It can resolve immediately or create a respondable Stack effect.
