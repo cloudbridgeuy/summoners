@@ -7,8 +7,10 @@
 //! code outside this crate should depend on today's shape.
 //!
 //! The fixture registry at the bottom is a minimal set of vanilla Summons —
-//! `Life`, `Produces`, `RetreatCost`, and `Form` nodes only — sufficient for
-//! `scenario::from_scenario`'s chain-order and board tests. The four
+//! `Life`, `Produces`, `RetreatCost`, `Form`, and a plain `Attack` node
+//! only — sufficient for `scenario::from_scenario`'s chain-order and board
+//! tests, and for a normal attack to have a cost and a Damage amount to
+//! pay and apply. The four
 //! signature cards from `designs/types_archetypes.md` (Colossus of the
 //! Quarry, Warden of Set Paths, Griefsinger, Old Sow of the Barrow), their
 //! Base/Enhanced fixture lineage, the four Spells, and the vanilla
@@ -136,7 +138,6 @@ pub(crate) enum CardNode {
     Produces(Vec<ManaType>),
     RetreatCost(u32),
     Form(Form),
-    #[allow(dead_code)]
     Attack {
         cost: Cost,
         effects: Vec<EffectLeaf>,
@@ -156,14 +157,17 @@ pub(crate) enum CardNode {
     Passive(Modifier),
 }
 
-/// A question `CardDef::find` can answer about one printed card.
-/// `CurrentForm` backs chain-order validation in `scenario::from_scenario`;
-/// `ProducedManaTypes` backs the rules §18 Mana-Type-superset check in
-/// `engine::board`; `RetreatCost` backs the printed Retreat Cost lookup
-/// there too. More variants arrive alongside the handler that first needs
-/// them, matching the rest of this crate's stubs.
+/// A question `CardDef::find` can answer about one printed card. `Attack`
+/// backs the normal-attack cost and Damage lookup in `engine::stack` and
+/// `engine::resolution` (rules §29–30); `CurrentForm` backs chain-order
+/// validation in `scenario::from_scenario`; `ProducedManaTypes` backs the
+/// rules §18 Mana-Type-superset check in `engine::board`; `RetreatCost`
+/// backs the printed Retreat Cost lookup there too. More variants arrive
+/// alongside the handler that first needs them, matching the rest of this
+/// crate's stubs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Query {
+    Attack,
     CurrentForm,
     ProducedManaTypes,
     RetreatCost,
@@ -172,6 +176,10 @@ pub(crate) enum Query {
 /// One answer `CardDef::find` can return, matching the `Query` asked.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum QueryResult {
+    Attack {
+        cost: Cost,
+        effects: Vec<EffectLeaf>,
+    },
     CurrentForm(Form),
     ProducedManaTypes(Vec<ManaType>),
     RetreatCost(u32),
@@ -192,6 +200,10 @@ impl CardDef {
     /// touching call sites.
     pub(crate) fn find(&self, query: Query) -> Option<QueryResult> {
         self.nodes.iter().find_map(|node| match (query, node) {
+            (Query::Attack, CardNode::Attack { cost, effects }) => Some(QueryResult::Attack {
+                cost: *cost,
+                effects: effects.clone(),
+            }),
             (Query::CurrentForm, CardNode::Form(form)) => Some(QueryResult::CurrentForm(*form)),
             (Query::ProducedManaTypes, CardNode::Produces(types)) => {
                 Some(QueryResult::ProducedManaTypes(types.clone()))
@@ -220,6 +232,13 @@ pub(crate) fn registry() -> Vec<CardDef> {
                 CardNode::Produces(vec![ManaType::Matter]),
                 CardNode::RetreatCost(1),
                 CardNode::Form(Form::Base),
+                CardNode::Attack {
+                    cost: Cost::default(),
+                    effects: vec![EffectLeaf::DealDamage {
+                        amount: 10,
+                        immutable: false,
+                    }],
+                },
             ],
         },
         CardDef {
@@ -231,6 +250,16 @@ pub(crate) fn registry() -> Vec<CardDef> {
                 CardNode::Produces(vec![ManaType::Matter]),
                 CardNode::RetreatCost(2),
                 CardNode::Form(Form::Enhanced),
+                CardNode::Attack {
+                    cost: Cost {
+                        generic: 1,
+                        ..Cost::default()
+                    },
+                    effects: vec![EffectLeaf::DealDamage {
+                        amount: 20,
+                        immutable: false,
+                    }],
+                },
             ],
         },
         CardDef {
@@ -242,6 +271,16 @@ pub(crate) fn registry() -> Vec<CardDef> {
                 CardNode::Produces(vec![ManaType::Matter]),
                 CardNode::RetreatCost(3),
                 CardNode::Form(Form::Elite),
+                CardNode::Attack {
+                    cost: Cost {
+                        generic: 2,
+                        ..Cost::default()
+                    },
+                    effects: vec![EffectLeaf::DealDamage {
+                        amount: 40,
+                        immutable: false,
+                    }],
+                },
             ],
         },
         // Chain 2 — two steps.
@@ -254,6 +293,13 @@ pub(crate) fn registry() -> Vec<CardDef> {
                 CardNode::Produces(vec![ManaType::Matter, ManaType::Mind]),
                 CardNode::RetreatCost(2),
                 CardNode::Form(Form::Base),
+                CardNode::Attack {
+                    cost: Cost::default(),
+                    effects: vec![EffectLeaf::DealDamage {
+                        amount: 10,
+                        immutable: false,
+                    }],
+                },
             ],
         },
         CardDef {
@@ -265,6 +311,16 @@ pub(crate) fn registry() -> Vec<CardDef> {
                 CardNode::Produces(vec![ManaType::Matter, ManaType::Mind]),
                 CardNode::RetreatCost(2),
                 CardNode::Form(Form::Enhanced),
+                CardNode::Attack {
+                    cost: Cost {
+                        generic: 1,
+                        ..Cost::default()
+                    },
+                    effects: vec![EffectLeaf::DealDamage {
+                        amount: 20,
+                        immutable: false,
+                    }],
+                },
             ],
         },
     ]

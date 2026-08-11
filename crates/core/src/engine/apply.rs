@@ -12,7 +12,7 @@ use crate::domain::errors::ActionError;
 use crate::domain::events::GameEvent;
 use crate::domain::ids::PlayerId;
 use crate::domain::state::{GameState, PendingInput};
-use crate::engine::{resolution, upkeep};
+use crate::engine::{resolution, stack, turn};
 
 /// The result of one accepted action: the next state and the ordered facts
 /// that describe how it got there (decision 3).
@@ -82,10 +82,11 @@ fn check_actor(state: &GameState, actor: PlayerId) -> Result<(), ActionError> {
 
 /// Route an action that passed the actor gate to its handler.
 ///
-/// Half the arms now call into their owning module's handler; the rest are
-/// still placeholders that reject with `ActionError::NotYetImplemented`.
-/// Later work replaces the remaining arms one at a time; this shape exists
-/// so those changes touch a single line each.
+/// Eight of the twelve arms now call into their owning module's handler;
+/// the rest are still placeholders that reject with
+/// `ActionError::NotYetImplemented`. Later work replaces the remaining arms
+/// one at a time; this shape exists so those changes touch a single line
+/// each.
 fn dispatch(state: &GameState, action: &GameAction) -> Result<ActionOutcome, ActionError> {
     match action {
         GameAction::PlaySummon { player, card, slot } => {
@@ -103,14 +104,18 @@ fn dispatch(state: &GameState, action: &GameAction) -> Result<ActionOutcome, Act
             slot,
             mana_hint,
         } => crate::engine::board::retreat(state, *player, *slot, *mana_hint),
-        GameAction::DeclareAttack { .. } => Err(ActionError::NotYetImplemented),
-        GameAction::EndTurn { player } => upkeep::end_turn(state, *player),
-        GameAction::PassPriority { .. } => Err(ActionError::NotYetImplemented),
+        GameAction::DeclareAttack {
+            player,
+            target,
+            mana_hint,
+        } => stack::declare_attack(state, *player, *target, *mana_hint),
+        GameAction::EndTurn { player } => turn::end_turn(state, *player),
+        GameAction::PassPriority { player } => stack::pass(state, *player),
         GameAction::ConvertCoin { player, mana_type } => {
-            upkeep::convert_coin(state, *player, *mana_type)
+            turn::convert_coin(state, *player, *mana_type)
         }
         GameAction::ChooseManaType { player, mana_type } => {
-            upkeep::choose_mana_type(state, *player, *mana_type)
+            turn::choose_mana_type(state, *player, *mana_type)
         }
         GameAction::ChoosePromotion { .. } => Err(ActionError::NotYetImplemented),
         GameAction::ChoosePrize { .. } => Err(ActionError::NotYetImplemented),
@@ -125,7 +130,7 @@ mod tests {
     use crate::domain::ids::{BenchSlot, CardInstanceId, ManaType, Position};
     use crate::domain::state::{
         CardRef, GameOutcome, LossReason, ManaBank, ManaSource, PerPlayer, Phase, PlayerState,
-        StackWindow, SummonInstance, TurnState, UpgradeChain,
+        StackItem, StackWindow, SummonInstance, TurnState, UpgradeChain,
     };
     use std::collections::VecDeque;
 
@@ -191,6 +196,33 @@ mod tests {
             instance: CardInstanceId(instance),
             def: CardDefId(def),
         }
+    }
+
+    /// Run the full `EndTurn` sequence through `apply` — opening the §47
+    /// window, the defender passing first, then the active player passing
+    /// second — as three separate submitted actions, and report the
+    /// combined ordered event batch across all three the way a caller
+    /// watching the whole exchange would see it.
+    fn full_end_turn(state: &GameState, player: PlayerId) -> Result<ActionOutcome, ActionError> {
+        let opened = apply(state, &end_turn(player))?;
+        let defender = player.opponent();
+        let after_defender_pass = apply(
+            &opened.state,
+            &GameAction::PassPriority { player: defender },
+        )?;
+        let last = apply(
+            &after_defender_pass.state,
+            &GameAction::PassPriority { player },
+        )?;
+
+        let mut events = opened.events;
+        events.extend(after_defender_pass.events);
+        events.extend(last.events);
+
+        Ok(ActionOutcome {
+            state: last.state,
+            events,
+        })
     }
 
     #[test]
@@ -293,28 +325,33 @@ mod tests {
 
     #[test]
     fn with_no_pending_and_no_window_only_the_active_player_may_act() {
-        // `PassPriority` still has no handler, so it isolates the
-        // actor-gate boundary from the six now-wired actions' own behavior.
+        // `CastSpell` still has no handler, so it isolates the actor-gate
+        // boundary from the now-wired actions' own behavior.
         let state = base_state();
-        let pass_priority = GameAction::PassPriority {
+        let cast_spell = GameAction::CastSpell {
             player: PlayerId::One,
+            card: CardInstanceId(1),
+            targets: vec![],
+            mana_hint: None,
         };
 
         assert!(matches!(
-            apply(&state, &pass_priority),
+            apply(&state, &cast_spell),
             Err(ActionError::NotYetImplemented)
         ));
     }
 
     #[test]
-    fn every_dispatch_arm_currently_rejects_as_not_yet_implemented() {
-        // PlaySummon, UpgradeSummon, and Retreat now have real handlers in
-        // `engine::board`, and EndTurn, ConvertCoin, and ChooseManaType now
-        // have real handlers in `engine::upkeep`. Against this fixture's
+    fn every_unwired_action_still_rejects_as_not_yet_implemented() {
+        // PlaySummon, UpgradeSummon, and Retreat have real handlers in
+        // `engine::board`; EndTurn, ConvertCoin, and ChooseManaType have
+        // real handlers in `engine::upkeep`; DeclareAttack and PassPriority
+        // now have real handlers in `engine::stack`. Against this fixture's
         // empty hand, empty Bench, resting Main Phase board, each of those
-        // six reaches its own rule check or its own behavior instead of
+        // eight reaches its own rule check or its own behavior instead of
         // falling through to `NotYetImplemented`, so they are exercised by
-        // `engine::board`'s and `engine::upkeep`'s own tests instead of here.
+        // their owning module's own tests instead of here. Four arms remain
+        // genuinely unbuilt.
         let state = base_state();
         let actions = vec![
             GameAction::CastSpell {
@@ -330,14 +367,6 @@ mod tests {
                 targets: vec![],
                 mana_hint: None,
             },
-            GameAction::DeclareAttack {
-                player: PlayerId::One,
-                target: Position::Main,
-                mana_hint: None,
-            },
-            GameAction::PassPriority {
-                player: PlayerId::One,
-            },
             GameAction::ChoosePromotion {
                 player: PlayerId::One,
                 slot: BenchSlot::First,
@@ -348,7 +377,7 @@ mod tests {
             },
         ];
 
-        assert_eq!(actions.len(), 6);
+        assert_eq!(actions.len(), 4);
         for action in &actions {
             assert_eq!(apply(&state, action), Err(ActionError::NotYetImplemented));
         }
@@ -364,7 +393,8 @@ mod tests {
         let mut state = base_state();
         state.players.get_mut(PlayerId::Two).deck = vec![card_ref(100, "quarry-whelp")];
 
-        let outcome = apply(&state, &end_turn(PlayerId::One)).expect("legal from a resting Main");
+        let outcome =
+            full_end_turn(&state, PlayerId::One).expect("legal from a resting Main, both pass");
 
         assert_eq!(outcome.state.pending, None);
         assert_eq!(outcome.state.turn.active_player, PlayerId::Two);
@@ -372,6 +402,12 @@ mod tests {
         assert_eq!(
             outcome.events,
             vec![
+                GameEvent::PriorityPassed {
+                    player: PlayerId::Two,
+                },
+                GameEvent::PriorityPassed {
+                    player: PlayerId::One,
+                },
                 GameEvent::TurnBegan {
                     player: PlayerId::Two,
                 },
@@ -401,11 +437,18 @@ mod tests {
         });
         state.players.get_mut(PlayerId::Two).deck = vec![card_ref(201, "quarry-whelp")];
 
-        let outcome = apply(&state, &end_turn(PlayerId::One)).expect("legal from a resting Main");
+        let outcome =
+            full_end_turn(&state, PlayerId::One).expect("legal from a resting Main, both pass");
 
         assert_eq!(
             outcome.events,
             vec![
+                GameEvent::PriorityPassed {
+                    player: PlayerId::Two,
+                },
+                GameEvent::PriorityPassed {
+                    player: PlayerId::One,
+                },
                 GameEvent::TurnBegan {
                     player: PlayerId::Two,
                 },
@@ -494,11 +537,119 @@ mod tests {
     }
 
     #[test]
+    fn demo_declare_pass_pass_resolves_the_attack_through_apply() {
+        // The full §29–35 chain driven only through `apply`: declaring opens
+        // the window with the defender first (rules §31, §46), each side
+        // passes once, and the second pass both closes the window and lets
+        // `engine::resolution::drain` resolve the Attack now sitting on top
+        // of the Stack — all inside that same `apply` call, since nothing
+        // is left to respond to it.
+        let state = base_state();
+
+        let declared = apply(
+            &state,
+            &GameAction::DeclareAttack {
+                player: PlayerId::One,
+                target: Position::Main,
+                mana_hint: None,
+            },
+        )
+        .expect("Quarry Whelp's Attack is free and Main is a legal target");
+
+        assert_eq!(
+            declared.events,
+            vec![GameEvent::AttackDeclared {
+                player: PlayerId::One,
+                target: Position::Main,
+            }],
+            "the free cost pays without emitting ManaDeducted"
+        );
+        assert!(declared.state.turn.normal_attack_used);
+        assert_eq!(declared.state.turn.phase, Phase::Combat);
+        assert_eq!(
+            declared.state.turn.window,
+            Some(StackWindow {
+                holder: PlayerId::Two,
+                prior_pass: false,
+            }),
+            "the defender holds Priority first"
+        );
+        assert_eq!(
+            declared.state.stack,
+            vec![StackItem::Attack {
+                attacker: PlayerId::One,
+                target: Position::Main,
+            }]
+        );
+
+        let defender_passed = apply(
+            &declared.state,
+            &GameAction::PassPriority {
+                player: PlayerId::Two,
+            },
+        )
+        .expect("the defender holds Priority");
+
+        assert_eq!(
+            defender_passed.events,
+            vec![GameEvent::PriorityPassed {
+                player: PlayerId::Two
+            }],
+            "one pass never resolves anything by itself"
+        );
+        assert!(!defender_passed.state.stack.is_empty());
+
+        let resolved = apply(
+            &defender_passed.state,
+            &GameAction::PassPriority {
+                player: PlayerId::One,
+            },
+        )
+        .expect("the attacker holds Priority second");
+
+        assert_eq!(
+            resolved.events,
+            vec![
+                GameEvent::PriorityPassed {
+                    player: PlayerId::One
+                },
+                GameEvent::StackItemResolved {
+                    item: StackItem::Attack {
+                        attacker: PlayerId::One,
+                        target: Position::Main,
+                    }
+                },
+                GameEvent::DamageApplied {
+                    position: Position::Main,
+                    before: 0,
+                    after: 10,
+                },
+            ],
+            "the double pass both closes the window and drains the Attack \
+             it left on top of the Stack, in that order"
+        );
+        assert!(resolved.state.stack.is_empty());
+        assert_eq!(resolved.state.turn.window, None);
+        assert_eq!(
+            resolved
+                .state
+                .players
+                .get(PlayerId::Two)
+                .main
+                .as_ref()
+                .expect("Two's Main summon is still there")
+                .damage,
+            10
+        );
+    }
+
+    #[test]
     fn demo_a_draw_from_an_empty_deck_ends_the_game_immediately() {
         // `base_state` already gives both players an empty Deck.
         let state = base_state();
 
-        let outcome = apply(&state, &end_turn(PlayerId::One)).expect("legal from a resting Main");
+        let outcome =
+            full_end_turn(&state, PlayerId::One).expect("legal from a resting Main, both pass");
 
         assert_eq!(
             outcome.state.outcome,
@@ -510,6 +661,12 @@ mod tests {
         assert_eq!(
             outcome.events,
             vec![
+                GameEvent::PriorityPassed {
+                    player: PlayerId::Two,
+                },
+                GameEvent::PriorityPassed {
+                    player: PlayerId::One,
+                },
                 GameEvent::TurnBegan {
                     player: PlayerId::Two,
                 },
