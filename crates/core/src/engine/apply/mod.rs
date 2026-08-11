@@ -82,11 +82,7 @@ fn check_actor(state: &GameState, actor: PlayerId) -> Result<(), ActionError> {
 
 /// Route an action that passed the actor gate to its handler.
 ///
-/// Eleven of the twelve arms now call into their owning module's handler;
-/// the rest are still placeholders that reject with
-/// `ActionError::NotYetImplemented`. Later work replaces the remaining arms
-/// one at a time; this shape exists so those changes touch a single line
-/// each.
+/// Every arm calls into its owning module's handler.
 fn dispatch(state: &GameState, action: &GameAction) -> Result<ActionOutcome, ActionError> {
     match action {
         GameAction::PlaySummon { player, card, slot } => {
@@ -103,7 +99,22 @@ fn dispatch(state: &GameState, action: &GameAction) -> Result<ActionOutcome, Act
             targets,
             mana_hint,
         } => stack::cast_spell(state, *player, *card, targets.clone(), *mana_hint),
-        GameAction::ActivateSkill { .. } => Err(ActionError::NotYetImplemented),
+        GameAction::ActivateSkill {
+            player,
+            position,
+            skill,
+            targets,
+            mana_hint,
+        } => crate::engine::skills::activate_skill(
+            state,
+            crate::engine::skills::SkillActivation {
+                player: *player,
+                position: *position,
+                skill: *skill,
+                targets: targets.clone(),
+                mana_hint: *mana_hint,
+            },
+        ),
         GameAction::Retreat {
             player,
             slot,

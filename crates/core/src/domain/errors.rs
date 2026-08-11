@@ -48,10 +48,6 @@ pub enum ActionError {
     /// The supplied `mana_hint` cannot pay any Generic component of this
     /// cost (decision 14).
     InvalidManaHint,
-    /// Placeholder for behavior that has not been built yet. Every action
-    /// whose handler has not landed returns this; it carries no rule name
-    /// because no rule was actually checked.
-    NotYetImplemented,
 }
 
 /// Why `scenario::from_scenario` rejected a `Scenario`. Parsing accepts any
@@ -102,9 +98,8 @@ mod tests {
             ActionError::InvalidTarget,
             ActionError::PendingInputMismatch,
             ActionError::InvalidManaHint,
-            ActionError::NotYetImplemented,
         ];
-        assert_eq!(errors.len(), 16);
+        assert_eq!(errors.len(), 15);
     }
 
     #[test]
