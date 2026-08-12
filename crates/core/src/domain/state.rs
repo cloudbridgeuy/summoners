@@ -101,6 +101,10 @@ pub struct PlayerState {
     pub main_losses: u8,
     /// Rules §7: only the second player starts with the Coin.
     pub has_coin: bool,
+    /// Rules §44: Enchantments this player has cast, still in play. Cleared
+    /// only by an effect that removes one; `scenario::from_scenario` cannot
+    /// seed a starting Enchantment yet — `Scenario` carries no field for it.
+    pub enchantments: Vec<CardRef>,
 }
 
 /// A homogeneous pair, one value per player. Every read or write goes
@@ -281,6 +285,15 @@ pub enum WorkItem {
     DrawCard,
     /// Rules §10–12: generate Mana from this source; may set `pending`.
     ProduceMana(ManaSource),
+    /// Rules §9: once every other Upkeep step has drained, the turn moves
+    /// forward into the Main Phase on its own — phases only move forward,
+    /// so nothing else ever leaves `Phase::Upkeep`. Queued last by
+    /// `engine::turn::handover`, after `ReadyAll`, any `YourUpkeep`
+    /// triggers, `DrawCard`, and `ProduceMana(ManaSource::Player)`, so it
+    /// always lands after a `ManaProduction` pause and its answer too — the
+    /// drain loop resumes the same queue where it left off once `pending`
+    /// clears.
+    BeginMainPhase,
 }
 
 /// One plain, cloneable value: the whole match. The same state and the same

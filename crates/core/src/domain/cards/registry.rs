@@ -8,7 +8,8 @@
 //! find_def` unchanged.
 
 use super::{
-    CardDef, CardDefId, CardKind, CardNode, Cost, EffectLeaf, Form, SpellTiming, TriggerEvent,
+    CardDef, CardDefId, CardKind, CardNode, Cost, EffectCondition, EffectLeaf, Form, Modifier,
+    ResponseBlock, SpellTiming, TriggerEvent,
 };
 use crate::domain::ids::ManaType;
 
@@ -67,13 +68,16 @@ pub(crate) fn registry() -> Vec<CardDef> {
                 CardNode::Produces(vec![ManaType::Matter]),
                 CardNode::RetreatCost(3),
                 CardNode::Form(Form::Elite),
+                // Matter + Matter + 1 Generic: 90 Damage, no text
+                // (`designs/types_archetypes.md` §3, the Matter benchmark).
                 CardNode::Attack {
                     cost: Cost {
-                        generic: 2,
+                        matter: 2,
+                        generic: 1,
                         ..Cost::default()
                     },
                     effects: vec![EffectLeaf::DealDamage {
-                        amount: 40,
+                        amount: 90,
                         immutable: false,
                     }],
                 },
@@ -323,6 +327,309 @@ pub(crate) fn registry() -> Vec<CardDef> {
                     ..Cost::default()
                 },
                 effects: vec![EffectLeaf::ReadySummon],
+            }],
+        },
+        // Signature chains — one three-step Base/Enhanced/Elite chain per
+        // `designs/types_archetypes.md` §5 pair, climbing from a mono-type
+        // Base to a dual-type Elite under the Mana-Type-superset upgrade
+        // rule (rules §18). Base and Enhanced stats are test data invented
+        // to fill the chain beneath each printed Elite; only the Elite
+        // stats and text are drawn from the design document.
+        //
+        // Matter/Mind — the Warden of Set Paths.
+        CardDef {
+            id: CardDefId("warden-initiate"),
+            name: "Warden Initiate",
+            kind: CardKind::Summon,
+            nodes: vec![
+                CardNode::Life(50),
+                CardNode::Produces(vec![ManaType::Matter]),
+                CardNode::RetreatCost(2),
+                CardNode::Form(Form::Base),
+                CardNode::Attack {
+                    cost: Cost::default(),
+                    effects: vec![EffectLeaf::DealDamage {
+                        amount: 10,
+                        immutable: false,
+                    }],
+                },
+            ],
+        },
+        CardDef {
+            id: CardDefId("warden-pathkeeper"),
+            name: "Warden Pathkeeper",
+            kind: CardKind::Summon,
+            nodes: vec![
+                CardNode::Life(100),
+                CardNode::Produces(vec![ManaType::Matter, ManaType::Mind]),
+                CardNode::RetreatCost(2),
+                CardNode::Form(Form::Enhanced),
+                CardNode::Attack {
+                    cost: Cost {
+                        generic: 1,
+                        ..Cost::default()
+                    },
+                    effects: vec![EffectLeaf::DealDamage {
+                        amount: 20,
+                        immutable: false,
+                    }],
+                },
+            ],
+        },
+        CardDef {
+            id: CardDefId("warden-of-set-paths"),
+            name: "Warden of Set Paths",
+            kind: CardKind::Summon,
+            nodes: vec![
+                CardNode::Life(150),
+                CardNode::Produces(vec![ManaType::Matter, ManaType::Mind]),
+                CardNode::RetreatCost(3),
+                CardNode::Form(Form::Elite),
+                // Skill (Matter + Mind): Rearrange — exchange the opposing
+                // Main with a Benched Summon of the acting player's choice.
+                // The design's alternative branch (moving one opposing
+                // Benched Summon to another Bench position) is not
+                // represented; see `EffectLeaf::SwapOpposingPositions`.
+                CardNode::Skill {
+                    cost: Cost {
+                        matter: 1,
+                        mind: 1,
+                        ..Cost::default()
+                    },
+                    effects: vec![EffectLeaf::SwapOpposingPositions],
+                },
+                // Passive: opposing Retreats cost 1 more.
+                CardNode::Passive(Modifier::OpposingRetreatCostDelta(1)),
+                // Attack (Matter + 2 Generic): 50 Damage, +30 if the
+                // defending Summon entered Main this turn.
+                CardNode::Attack {
+                    cost: Cost {
+                        matter: 1,
+                        generic: 2,
+                        ..Cost::default()
+                    },
+                    effects: vec![
+                        EffectLeaf::DealDamage {
+                            amount: 50,
+                            immutable: false,
+                        },
+                        EffectLeaf::ConditionalBonus {
+                            condition: EffectCondition::DefenderEnteredMainThisTurn,
+                            amount: 30,
+                        },
+                    ],
+                },
+            ],
+        },
+        // Mind/Spirit — the Griefsinger.
+        CardDef {
+            id: CardDefId("griefsinger-wisp"),
+            name: "Griefsinger Wisp",
+            kind: CardKind::Summon,
+            nodes: vec![
+                CardNode::Life(40),
+                CardNode::Produces(vec![ManaType::Mind]),
+                CardNode::RetreatCost(1),
+                CardNode::Form(Form::Base),
+                CardNode::Attack {
+                    cost: Cost::default(),
+                    effects: vec![EffectLeaf::DealDamage {
+                        amount: 10,
+                        immutable: false,
+                    }],
+                },
+            ],
+        },
+        CardDef {
+            id: CardDefId("griefsinger-mourner"),
+            name: "Griefsinger Mourner",
+            kind: CardKind::Summon,
+            nodes: vec![
+                CardNode::Life(80),
+                CardNode::Produces(vec![ManaType::Mind, ManaType::Spirit]),
+                CardNode::RetreatCost(1),
+                CardNode::Form(Form::Enhanced),
+                CardNode::Attack {
+                    cost: Cost {
+                        generic: 1,
+                        ..Cost::default()
+                    },
+                    effects: vec![EffectLeaf::DealDamage {
+                        amount: 20,
+                        immutable: false,
+                    }],
+                },
+            ],
+        },
+        CardDef {
+            id: CardDefId("griefsinger"),
+            name: "Griefsinger",
+            kind: CardKind::Summon,
+            nodes: vec![
+                CardNode::Life(110),
+                CardNode::Produces(vec![ManaType::Mind, ManaType::Spirit]),
+                CardNode::RetreatCost(1),
+                CardNode::Form(Form::Elite),
+                // Trigger (Stack): when any Summon is destroyed, return one
+                // Spell from the discard pile to hand. The design's "you
+                // may" is simplified to an unconditional return; the engine
+                // has no optional-sub-effect vocabulary yet, matching the
+                // same simplification already made for other "may" text in
+                // this registry.
+                CardNode::Trigger {
+                    event: TriggerEvent::AnySummonDestroyed,
+                    respondable: true,
+                    effects: vec![EffectLeaf::ReturnSpellFromDiscard],
+                },
+                // Skill (Mind + Spirit): Foresee — look at Prizes, draw a
+                // card, then return one Spell from hand to the deck top.
+                // The design's "you may return" is likewise simplified to
+                // unconditional.
+                CardNode::Skill {
+                    cost: Cost {
+                        mind: 1,
+                        spirit: 1,
+                        ..Cost::default()
+                    },
+                    effects: vec![
+                        EffectLeaf::LookAtPrizes,
+                        EffectLeaf::DrawCards { amount: 1 },
+                        EffectLeaf::ReturnSpellToDeckTop,
+                    ],
+                },
+                // Attack (Mind + Spirit + 1): 40 Damage; if a Spell was
+                // played this turn, +40 and this attack cannot be
+                // responded to by Attack Spells.
+                CardNode::Attack {
+                    cost: Cost {
+                        mind: 1,
+                        spirit: 1,
+                        generic: 1,
+                        ..Cost::default()
+                    },
+                    effects: vec![
+                        EffectLeaf::DealDamage {
+                            amount: 40,
+                            immutable: false,
+                        },
+                        EffectLeaf::ConditionalBonus {
+                            condition: EffectCondition::SpellPlayedThisTurn,
+                            amount: 40,
+                        },
+                        EffectLeaf::BlockResponses {
+                            condition: EffectCondition::SpellPlayedThisTurn,
+                            block: ResponseBlock::AttackSpells,
+                        },
+                    ],
+                },
+            ],
+        },
+        // Matter/Spirit — the Old Sow of the Barrow.
+        CardDef {
+            id: CardDefId("sow-piglet"),
+            name: "Sow Piglet",
+            kind: CardKind::Summon,
+            nodes: vec![
+                CardNode::Life(50),
+                CardNode::Produces(vec![ManaType::Spirit]),
+                CardNode::RetreatCost(2),
+                CardNode::Form(Form::Base),
+                CardNode::Attack {
+                    cost: Cost::default(),
+                    effects: vec![EffectLeaf::DealDamage {
+                        amount: 10,
+                        immutable: false,
+                    }],
+                },
+            ],
+        },
+        CardDef {
+            id: CardDefId("sow-matriarch"),
+            name: "Sow Matriarch",
+            kind: CardKind::Summon,
+            nodes: vec![
+                CardNode::Life(110),
+                CardNode::Produces(vec![ManaType::Matter, ManaType::Spirit]),
+                CardNode::RetreatCost(3),
+                CardNode::Form(Form::Enhanced),
+                CardNode::Attack {
+                    cost: Cost {
+                        generic: 1,
+                        ..Cost::default()
+                    },
+                    effects: vec![EffectLeaf::DealDamage {
+                        amount: 20,
+                        immutable: false,
+                    }],
+                },
+            ],
+        },
+        CardDef {
+            id: CardDefId("old-sow-of-the-barrow"),
+            name: "Old Sow of the Barrow",
+            kind: CardKind::Summon,
+            nodes: vec![
+                CardNode::Life(170),
+                CardNode::Produces(vec![ManaType::Matter, ManaType::Spirit]),
+                CardNode::RetreatCost(4),
+                CardNode::Form(Form::Elite),
+                // Passive: during your Upkeep, heal 10 Damage from this
+                // Summon. Mechanically identical to the engine's existing
+                // `YourUpkeep` Trigger fixture (Dawn Tender), so it is
+                // represented the same way rather than as a `Modifier`: the
+                // `Modifier` vocabulary has no "heal on a schedule" shape,
+                // and a non-respondable Trigger already produces the exact
+                // observable behavior the design's "Passive" text asks for.
+                CardNode::Trigger {
+                    event: TriggerEvent::YourUpkeep,
+                    respondable: false,
+                    effects: vec![EffectLeaf::Heal { amount: 10 }],
+                },
+                // Skill (Matter + Spirit): Root and Renew — heal 30 Damage
+                // from this Summon; it cannot be moved out of Main by
+                // opposing effects until the controller's next turn.
+                CardNode::Skill {
+                    cost: Cost {
+                        matter: 1,
+                        spirit: 1,
+                        ..Cost::default()
+                    },
+                    effects: vec![
+                        EffectLeaf::Heal { amount: 30 },
+                        EffectLeaf::CannotBeMovedByOpponent,
+                    ],
+                },
+                // Attack (Matter + Spirit + 2): 70 Damage. This damage
+                // cannot be increased and cannot be prevented.
+                CardNode::Attack {
+                    cost: Cost {
+                        matter: 1,
+                        spirit: 1,
+                        generic: 2,
+                        ..Cost::default()
+                    },
+                    effects: vec![EffectLeaf::DealDamage {
+                        amount: 70,
+                        immutable: true,
+                    }],
+                },
+            ],
+        },
+        // The vanilla Enchantment (design decision 1): no Attack, Skill, or
+        // Passive text, an empty effects list. Enough to prove
+        // `stack::cast_spell` accepts `CardKind::Enchantment` and
+        // `resolution::resolve_spell` routes it to `PlayerState::enchantments`
+        // instead of the discard pile (rules §44).
+        CardDef {
+            id: CardDefId("standing-ward"),
+            name: "Standing Ward",
+            kind: CardKind::Enchantment,
+            nodes: vec![CardNode::Enchantment {
+                cost: Cost {
+                    generic: 1,
+                    ..Cost::default()
+                },
+                effects: vec![],
             }],
         },
     ]

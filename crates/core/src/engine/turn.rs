@@ -16,7 +16,9 @@ use crate::domain::cards::TriggerEvent;
 use crate::domain::errors::ActionError;
 use crate::domain::events::GameEvent;
 use crate::domain::ids::{ManaType, PlayerId};
-use crate::domain::state::{GameState, ManaSource, PendingInput, Phase, TurnState, WorkItem};
+use crate::domain::state::{
+    DurationMarker, GameState, ManaSource, PendingInput, Phase, PlayerState, TurnState, WorkItem,
+};
 use crate::engine::apply::ActionOutcome;
 use crate::engine::stack::window_after_play;
 use crate::engine::triggers::discover_back;
@@ -55,15 +57,39 @@ pub(crate) fn end_turn(state: &GameState, player: PlayerId) -> Result<ActionOutc
     })
 }
 
+/// Clear `DurationMarker::CannotBeMovedByOpponent` from every Summon on
+/// `player_state`'s own board (Main and Bench) — the Old Sow's `Root and
+/// Renew` expiring (rules §44). Distinct from
+/// `reset_per_turn_summon_flags`, which runs for both players every
+/// handover; this runs only for the player becoming newly active, since the
+/// marker is only ever cleared from its own holder's board once that
+/// holder's next turn comes around (see the call site in `handover`).
+fn expire_cannot_be_moved_by_opponent(player_state: &mut PlayerState) {
+    if let Some(summon) = player_state.main.as_mut() {
+        summon
+            .duration_markers
+            .retain(|marker| *marker != DurationMarker::CannotBeMovedByOpponent);
+    }
+    for slot in player_state.bench.iter_mut().flatten() {
+        slot.duration_markers
+            .retain(|marker| *marker != DurationMarker::CannotBeMovedByOpponent);
+    }
+}
+
 /// The direct turn handoff (rules §48), reached once both players pass
 /// consecutively with an empty Stack (see `engine::stack::pass`). Every
 /// Summon's per-turn flags reset for both players (see
 /// `reset_per_turn_summon_flags`), the opponent's Upkeep begins, and
-/// `Ready`, draw, and natural production are queued as work for the
-/// resolution loop to drain. `state.turn.active_player` is still the
-/// player whose turn is ending — opening the §47 window and passing
-/// Priority back and forth never changes it — so this needs no separate
-/// player argument.
+/// `Ready`, draw, natural production, and finally the Main Phase advance
+/// itself (`WorkItem::BeginMainPhase`, rules §9) are queued as work for the
+/// resolution loop to drain. Queuing the advance last, behind everything
+/// else Upkeep does, is what keeps it correct even when `ProduceMana`
+/// pauses for a Mana Type choice: the drain loop resumes this same queue
+/// once that choice is answered, so the Main Phase is still reached only
+/// after the choice lands, never before. `state.turn.active_player` is
+/// still the player whose turn is ending — opening the §47 window and
+/// passing Priority back and forth never changes it — so this needs no
+/// separate player argument.
 pub(crate) fn handover(state: &GameState) -> ActionOutcome {
     let mut state = state.clone();
     let player = state.turn.active_player;
@@ -78,6 +104,18 @@ pub(crate) fn handover(state: &GameState) -> ActionOutcome {
     };
     reset_per_turn_summon_flags(state.players.get_mut(player));
     reset_per_turn_summon_flags(state.players.get_mut(opponent));
+    // The Old Sow's `Root and Renew` (rules §44) sets `CannotBeMovedByOpponent`
+    // on the Sow's own controller's board during that controller's Main
+    // Phase, to survive exactly one opposing turn. It only ever expires on
+    // the handover that makes its holder newly active again — the handover
+    // right after `player` set it hands play to `opponent` and leaves the
+    // marker alone (it protects through the whole of `opponent`'s coming
+    // turn); the handover after that makes the original holder active again
+    // and is where the marker is cleared. Clearing unconditionally from
+    // whoever is newly active on every handover reaches that same holder on
+    // exactly that later handover, and is a harmless no-op the rest of the
+    // time, since the marker can only ever sit on its own holder's board.
+    expire_cannot_be_moved_by_opponent(state.players.get_mut(opponent));
     state.work.push_back(WorkItem::ReadyAll);
     // Rules §36, §41: a Trigger on `YourUpkeep` fires for the newly active
     // player's own board, Main then Bench, ahead of the draw and natural
@@ -87,6 +125,9 @@ pub(crate) fn handover(state: &GameState) -> ActionOutcome {
     state
         .work
         .push_back(WorkItem::ProduceMana(ManaSource::Player));
+    // Rules §9: "Phases only move forward." Queued last, so the Main Phase
+    // is reached only once every other Upkeep step above has drained.
+    state.work.push_back(WorkItem::BeginMainPhase);
 
     ActionOutcome {
         state,
@@ -231,6 +272,7 @@ mod tests {
             mana: ManaBank::default(),
             main_losses: 0,
             has_coin: false,
+            enchantments: vec![],
         }
     }
 
@@ -323,6 +365,7 @@ mod tests {
                 WorkItem::ReadyAll,
                 WorkItem::DrawCard,
                 WorkItem::ProduceMana(ManaSource::Player),
+                WorkItem::BeginMainPhase,
             ])
         );
     }
@@ -376,6 +419,11 @@ mod tests {
             ]
         );
         assert!(state.work.is_empty());
+        assert_eq!(
+            state.turn.phase,
+            Phase::Main,
+            "the drained queue's own last item lands the new turn in its Main Phase (rules §9)"
+        );
         assert_eq!(
             state
                 .players
@@ -486,12 +534,24 @@ mod tests {
             played_this_turn: true,
             ..whelp(PlayerId::One)
         });
+        // Each player needs a card to draw so their own Upkeep can drain
+        // all the way through to `WorkItem::BeginMainPhase` below, instead
+        // of stalling on an empty-Deck loss this test has no interest in.
+        state.players.get_mut(PlayerId::One).deck = vec![CardRef {
+            instance: CardInstanceId(30),
+            def: CardDefId("quarry-whelp"),
+        }];
+        state.players.get_mut(PlayerId::Two).deck = vec![CardRef {
+            instance: CardInstanceId(31),
+            def: CardDefId("quarry-whelp"),
+        }];
 
-        // Turn 1 (One) ends; Two's turn runs.
+        // Turn 1 (One) ends; Two's turn runs, its Upkeep drained in full —
+        // reaching Main on its own (rules §9), with no hand edit needed.
         let after_one = full_end_turn(&state, PlayerId::One);
+        let (after_one, _) = crate::engine::resolution::drain(&after_one.state);
         assert!(
             !after_one
-                .state
                 .players
                 .get(PlayerId::One)
                 .main
@@ -501,15 +561,19 @@ mod tests {
             "the flag is already clear as soon as One's own turn ends"
         );
 
-        // Two's turn ends; play returns to One.
-        let mut two_state = after_one.state;
-        two_state.turn.phase = Phase::Main;
-        let after_two = full_end_turn(&two_state, PlayerId::Two);
+        // Two's turn ends; play returns to One, whose own Upkeep drains the
+        // same way.
+        let after_two = full_end_turn(&after_one, PlayerId::Two);
+        let (after_two, _) = crate::engine::resolution::drain(&after_two.state);
 
-        assert_eq!(after_two.state.turn.active_player, PlayerId::One);
+        assert_eq!(after_two.turn.active_player, PlayerId::One);
+        assert_eq!(
+            after_two.turn.phase,
+            Phase::Main,
+            "One's own Upkeep reaches Main on its own too, with no hand edit"
+        );
         assert!(
             !after_two
-                .state
                 .players
                 .get(PlayerId::One)
                 .main

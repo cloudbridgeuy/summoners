@@ -41,6 +41,7 @@ fn player_state(owner: PlayerId) -> PlayerState {
         mana: ManaBank::default(),
         main_losses: 0,
         has_coin: false,
+        enchantments: vec![],
     }
 }
 
@@ -684,6 +685,7 @@ fn a_double_pass_with_an_empty_stack_hands_the_turn_over_immediately() {
             WorkItem::ReadyAll,
             WorkItem::DrawCard,
             WorkItem::ProduceMana(crate::domain::state::ManaSource::Player),
+            WorkItem::BeginMainPhase,
         ])
     );
 }

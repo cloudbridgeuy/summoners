@@ -94,6 +94,7 @@ mod tests {
             mana: ManaBank::default(),
             main_losses: 0,
             has_coin: false,
+            enchantments: vec![],
         }
     }
 

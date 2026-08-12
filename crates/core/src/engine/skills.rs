@@ -21,7 +21,7 @@ use crate::domain::cards::{EffectLeaf, Query, QueryResult, find_def};
 use crate::domain::errors::ActionError;
 use crate::domain::events::GameEvent;
 use crate::domain::ids::{ManaType, PlayerId, Position};
-use crate::domain::state::{GameState, Phase, PlayerState, SummonInstance};
+use crate::domain::state::{DurationMarker, GameState, Phase, PlayerState, SummonInstance};
 use crate::engine::apply::ActionOutcome;
 use crate::engine::effects;
 use crate::engine::payment::{self, PaymentError};
@@ -62,7 +62,11 @@ fn require_free_main_phase(state: &GameState) -> Result<(), ActionError> {
 
 /// Fold `effects` over `state` through the shared leaf interpreter, in
 /// printed order, the same way `engine::resolution` runs a Spell's or an
-/// attack's effects.
+/// attack's effects — including `engine::resolution::apply_leaves`'s same
+/// immutable-Damage gate on `ConditionalBonus` (rules §30); no current
+/// Skill fixture pairs the two, but a Skill's effects fold through the same
+/// vocabulary a Trigger or an Attack does, so this copy stays consistent
+/// with it.
 fn apply_leaves(
     state: &GameState,
     controller: PlayerId,
@@ -71,7 +75,11 @@ fn apply_leaves(
 ) -> (GameState, Vec<GameEvent>) {
     let mut state = state.clone();
     let mut events = Vec::new();
+    let damage_is_immutable = effects::immutable_damage_in(effects);
     for leaf in effects {
+        if damage_is_immutable && matches!(leaf, EffectLeaf::ConditionalBonus { .. }) {
+            continue;
+        }
         let (next_state, leaf_events) = effects::apply_leaf(&state, controller, targets, leaf);
         state = next_state;
         events.extend(leaf_events);
@@ -86,14 +94,20 @@ fn apply_leaves(
 /// moment where a changed target could turn a bad choice into a legal miss;
 /// an illegal target simply means the whole action is illegal.
 fn validate_targets(
-    player_state: &PlayerState,
+    state: &GameState,
+    controller: PlayerId,
     leaves: &[EffectLeaf],
     targets: &[Position],
 ) -> Result<(), ActionError> {
+    let player_state = state.players.get(controller);
     for leaf in leaves {
         match leaf {
             EffectLeaf::MoveSummon => validate_move_summon(player_state, targets)?,
             EffectLeaf::SwapPositions => validate_swap_positions(player_state, targets)?,
+            EffectLeaf::SwapOpposingPositions => {
+                let opponent_state = state.players.get(controller.opponent());
+                validate_swap_opposing_positions(opponent_state, targets)?
+            }
             _ => {}
         }
     }
@@ -146,6 +160,43 @@ fn validate_swap_positions(
     Ok(())
 }
 
+/// `SwapOpposingPositions` exchanges the opponent's Main Summon with the one
+/// on their named Bench slot — the Warden's `Rearrange` (exchange branch;
+/// rules §16). Unlike `validate_move_summon` and `validate_swap_positions`,
+/// this reaches into the OPPONENT's board rather than the activating
+/// player's own. The named slot must hold a Summon, the opponent's Main must
+/// hold a Summon, and that Main must not carry
+/// `DurationMarker::CannotBeMovedByOpponent` — the Old Sow's `Root and
+/// Renew` answering it (rules §44). Rejecting here, before the leaf ever
+/// runs, is the primary enforcement point for that rule; `engine::effects::
+/// swap_opposing_positions` also re-checks the marker on its own as
+/// defense-in-depth, but a rejection observed through `apply` should always
+/// come from here, as `ActionError::InvalidTarget`, not as a silent miss.
+fn validate_swap_opposing_positions(
+    opponent_state: &PlayerState,
+    targets: &[Position],
+) -> Result<(), ActionError> {
+    let Some(&target) = targets.first() else {
+        return Err(ActionError::InvalidTarget);
+    };
+    let Position::Bench(slot) = target else {
+        return Err(ActionError::InvalidTarget);
+    };
+    if opponent_state.bench[slot.index()].is_none() {
+        return Err(ActionError::InvalidTarget);
+    }
+    let Some(main_summon) = opponent_state.main.as_ref() else {
+        return Err(ActionError::InvalidTarget);
+    };
+    if main_summon
+        .duration_markers
+        .contains(&DurationMarker::CannotBeMovedByOpponent)
+    {
+        return Err(ActionError::InvalidTarget);
+    }
+    Ok(())
+}
+
 /// One `ActivateSkill` action's fields, bundled so `activate_skill` reads
 /// them as one value instead of five separate arguments.
 pub(crate) struct SkillActivation {
@@ -193,7 +244,7 @@ pub(crate) fn activate_skill(
         return Err(ActionError::InvalidTarget);
     };
 
-    validate_targets(player_state, &effects, &targets)?;
+    validate_targets(state, player, &effects, &targets)?;
 
     let payment = match payment::deduct(player_state.mana, cost, mana_hint) {
         Ok(payment) => payment,
@@ -279,6 +330,7 @@ mod tests {
             mana: ManaBank::default(),
             main_losses: 0,
             has_coin: false,
+            enchantments: vec![],
         }
     }
 

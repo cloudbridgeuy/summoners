@@ -38,6 +38,7 @@ fn player_state(owner: PlayerId) -> PlayerState {
         mana: ManaBank::default(),
         main_losses: 0,
         has_coin: false,
+        enchantments: vec![],
     }
 }
 
@@ -220,6 +221,7 @@ fn with_no_pending_and_no_window_only_the_active_player_may_act() {
 
 mod demo;
 mod demo_triggers;
+mod scenario_probes;
 
 #[test]
 fn play_summon_upgrade_summon_and_retreat_reach_their_own_handlers() {

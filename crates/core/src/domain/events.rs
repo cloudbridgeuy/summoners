@@ -75,6 +75,17 @@ pub enum GameEvent {
         player: PlayerId,
         card: CardInstanceId,
     },
+    /// Rules §25, §44: `player` looked at their own face-down Prizes — the
+    /// Griefsinger's `Foresee`. Names which cards, the same as `CardDrawn`
+    /// and `PrizeRecovered` already do: this crate models no hidden
+    /// information (`GameState` is one fully visible value, decision 3), so
+    /// naming the cards leaks nothing a reader could not already see by
+    /// reading `PlayerState::prizes` directly. This event's only job is
+    /// marking that the look happened.
+    PrizesViewed {
+        player: PlayerId,
+        prizes: Vec<CardInstanceId>,
+    },
     /// Rules §24 step 4.
     SummonPromoted { player: PlayerId, from: BenchSlot },
     /// Rules §26: a normal Retreat exchanged Main and one Bench slot.
@@ -177,6 +188,10 @@ mod tests {
                 player: PlayerId::One,
                 card: CardInstanceId(1),
             },
+            GameEvent::PrizesViewed {
+                player: PlayerId::One,
+                prizes: vec![CardInstanceId(1), CardInstanceId(2)],
+            },
             GameEvent::SummonPromoted {
                 player: PlayerId::One,
                 from: BenchSlot::First,
@@ -204,6 +219,6 @@ mod tests {
                 reason: LossReason::ThirdMainLoss,
             },
         ];
-        assert_eq!(events.len(), 21);
+        assert_eq!(events.len(), 22);
     }
 }
