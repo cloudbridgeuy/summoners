@@ -25,17 +25,13 @@
 //! respondable fixture to discover and resolve. A third, Dawn Tender, fires
 //! an immediate Heal at the start of its controller's own Upkeep (rules
 //! §36), exercising the same discovery path `engine::turn::handover` queues
-//! every turn. A fourth Spell
-//! with a Ready effect arrives with the work that first gives Ready its own
-//! rules. The four
-//! signature cards from `designs/types_archetypes.md` (Colossus of the
-//! Quarry, Warden of Set Paths, Griefsinger, Old Sow of the Barrow), their
-//! Base/Enhanced fixture lineage, and the vanilla Enchantment (design
-//! decision 1) arrive with the work that first gives them abilities to
-//! test; this module already settles the vocabulary those fixtures will
-//! use (`EffectLeaf`, `CardNode`, `Modifier`), so a few variants below have
-//! no production caller yet. Stats and names are test data, not final card
-//! designs (decision 9).
+//! every turn. A fourth Spell carries a Ready effect (rules §53). The
+//! registry also carries the four signature cards from
+//! `designs/types_archetypes.md` (Colossus of the Quarry, Warden of Set
+//! Paths, Griefsinger, Old Sow of the Barrow), each atop its own
+//! Base/Enhanced/Elite fixture lineage, and the vanilla Enchantment (design
+//! decision 1). Stats and names are test data, not final card designs
+//! (decision 9).
 
 use crate::domain::actions::SkillIndex;
 use crate::domain::ids::ManaType;
@@ -45,11 +41,8 @@ use crate::domain::ids::ManaType;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct CardDefId(pub &'static str);
 
-/// The three card families (rules §3). The registry below is Summons only;
-/// `Spell` and `Enchantment` stay unconstructed until fixtures of those
-/// kinds land.
+/// The three card families (rules §3).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)]
 pub(crate) enum CardKind {
     Summon,
     Spell,
@@ -88,31 +81,25 @@ pub enum TriggerEvent {
     AnySummonDestroyed,
 }
 
-/// A condition an effect leaf can test before applying a bonus. No fixture
-/// in the vanilla registry carries a conditional effect yet. `pub` for the
-/// same reason `EffectLeaf` is: `EffectLeaf::ConditionalBonus` names it and
-/// `EffectLeaf` is reachable from the public `StackItem::Trigger`.
+/// A condition an effect leaf can test before applying a bonus. `pub` for
+/// the same reason `EffectLeaf` is: `EffectLeaf::ConditionalBonus` names it
+/// and `EffectLeaf` is reachable from the public `StackItem::Trigger`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)]
 pub enum EffectCondition {
     DefenderEnteredMainThisTurn,
     SpellPlayedThisTurn,
 }
 
-/// The family of response an effect can block. No fixture in the vanilla
-/// registry blocks a response yet. `pub` for the same reason
+/// The family of response an effect can block. `pub` for the same reason
 /// `EffectCondition` is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)]
 pub enum ResponseBlock {
     AttackSpells,
 }
 
 /// A typed plus Generic Mana cost (rules §12). Every component may be zero;
-/// a Skill's cost may be free (rules §15). No vanilla fixture carries a
-/// costed node yet, so this struct has no production caller until one does.
+/// a Skill's cost may be free (rules §15).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-#[allow(dead_code)]
 pub(crate) struct Cost {
     pub matter: u32,
     pub mind: u32,
@@ -127,7 +114,6 @@ pub(crate) struct Cost {
 /// since a respondable trigger's effects wait on the Stack like any other
 /// entry.
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[allow(dead_code)]
 pub enum EffectLeaf {
     DealDamage {
         amount: u32,
@@ -142,7 +128,10 @@ pub enum EffectLeaf {
         condition: EffectCondition,
         amount: u32,
     },
-    BlockResponses(ResponseBlock),
+    BlockResponses {
+        condition: EffectCondition,
+        block: ResponseBlock,
+    },
     ReturnSpellFromDiscard,
     LookAtPrizes,
     DrawCards {
@@ -156,12 +145,17 @@ pub enum EffectLeaf {
     /// Not part of the design document's first leaf set; added for the
     /// Ready-effect Spell fixture below.
     ReadySummon,
+    /// The Warden of Set Paths' `Rearrange` (exchange branch): swap the
+    /// opposing Main Summon with a Bench Summon of the acting player's
+    /// choice. The design's alternative branch — moving one opposing
+    /// Benched Summon to another Bench position — is not represented; the
+    /// engine has no "choose one of two effect lists" vocabulary yet, so
+    /// only the exchange branch is playable.
+    SwapOpposingPositions,
 }
 
-/// The first Modifier: a Passive's continuous adjustment (rules §16). No
-/// vanilla fixture carries a Passive node yet.
+/// The first Modifier: a Passive's continuous adjustment (rules §16).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)]
 pub(crate) enum Modifier {
     OpposingRetreatCostDelta(i32),
 }
@@ -189,10 +183,17 @@ pub(crate) enum CardNode {
         respondable: bool,
         effects: Vec<EffectLeaf>,
     },
-    #[allow(dead_code)]
     Passive(Modifier),
     Spell {
         timing: SpellTiming,
+        cost: Cost,
+        effects: Vec<EffectLeaf>,
+    },
+    /// A vanilla Enchantment's persistent effect leaves (rules §44). No
+    /// Attack, Skill, or condition text yet — the vanilla fixture below
+    /// carries an empty `effects` list and stays in play doing nothing but
+    /// existing, which is enough to prove casting and persistence.
+    Enchantment {
         cost: Cost,
         effects: Vec<EffectLeaf>,
     },
@@ -221,6 +222,12 @@ pub(crate) enum Query {
     Skill(SkillIndex),
     Spell,
     Trigger,
+    /// Rules §16: a printed Passive's continuous `Modifier`, read by
+    /// `engine::board::opposing_retreat_cost_delta` when it scans the
+    /// opponent's in-play card trees for `Modifier::OpposingRetreatCostDelta`.
+    Passive,
+    /// Rules §44: a printed Enchantment's cost and persistent effect leaves.
+    Enchantment,
 }
 
 /// One answer `CardDef::find` can return, matching the `Query` asked.
@@ -246,6 +253,11 @@ pub(crate) enum QueryResult {
     Trigger {
         event: TriggerEvent,
         respondable: bool,
+        effects: Vec<EffectLeaf>,
+    },
+    Passive(Modifier),
+    Enchantment {
+        cost: Cost,
         effects: Vec<EffectLeaf>,
     },
 }
@@ -319,6 +331,13 @@ impl CardDef {
                 respondable: *respondable,
                 effects: effects.clone(),
             }),
+            (Query::Passive, CardNode::Passive(modifier)) => Some(QueryResult::Passive(*modifier)),
+            (Query::Enchantment, CardNode::Enchantment { cost, effects }) => {
+                Some(QueryResult::Enchantment {
+                    cost: *cost,
+                    effects: effects.clone(),
+                })
+            }
             _ => None,
         })
     }
@@ -409,7 +428,10 @@ mod tests {
                 condition: EffectCondition::SpellPlayedThisTurn,
                 amount: 20,
             },
-            EffectLeaf::BlockResponses(ResponseBlock::AttackSpells),
+            EffectLeaf::BlockResponses {
+                condition: EffectCondition::SpellPlayedThisTurn,
+                block: ResponseBlock::AttackSpells,
+            },
             EffectLeaf::ReturnSpellFromDiscard,
             EffectLeaf::LookAtPrizes,
             EffectLeaf::DrawCards { amount: 1 },
@@ -417,8 +439,9 @@ mod tests {
             EffectLeaf::ProduceMana,
             EffectLeaf::CannotBeMovedByOpponent,
             EffectLeaf::ReadySummon,
+            EffectLeaf::SwapOpposingPositions,
         ];
-        assert_eq!(leaves.len(), 13);
+        assert_eq!(leaves.len(), 14);
     }
 
     #[test]
@@ -458,8 +481,12 @@ mod tests {
                 cost: Cost::default(),
                 effects: vec![EffectLeaf::Heal { amount: 10 }],
             },
+            CardNode::Enchantment {
+                cost: Cost::default(),
+                effects: vec![],
+            },
         ];
-        assert_eq!(nodes.len(), 9);
+        assert_eq!(nodes.len(), 10);
     }
 
     #[test]
@@ -568,11 +595,13 @@ mod tests {
     fn registry_holds_a_two_step_and_a_three_step_chain() {
         let defs = registry();
         let summons = defs.iter().filter(|def| def.kind == CardKind::Summon);
-        // Five chain-fixture Summons, plus the three single-Skill fixtures
-        // (Quarry Scout, Quarry Warden-Guard, Quarry Well-Tender), plus the
-        // three single-Trigger fixtures (Hearth Warden, Spite Thorn, Dawn
-        // Tender).
-        assert_eq!(summons.count(), 11);
+        // Five original chain-fixture Summons, plus the three
+        // single-Skill fixtures (Quarry Scout, Quarry Warden-Guard, Quarry
+        // Well-Tender), plus the three single-Trigger fixtures (Hearth
+        // Warden, Spite Thorn, Dawn Tender), plus three new three-step
+        // signature chains (Warden of Set Paths, Griefsinger, Old Sow of
+        // the Barrow) at three Summons each.
+        assert_eq!(summons.count(), 20);
     }
 
     #[test]
@@ -580,6 +609,13 @@ mod tests {
         let defs = registry();
         let spells = defs.iter().filter(|def| def.kind == CardKind::Spell);
         assert_eq!(spells.count(), 4);
+    }
+
+    #[test]
+    fn registry_holds_the_one_vanilla_enchantment() {
+        let defs = registry();
+        let enchantments = defs.iter().filter(|def| def.kind == CardKind::Enchantment);
+        assert_eq!(enchantments.count(), 1);
     }
 
     #[test]
@@ -694,5 +730,48 @@ mod tests {
         let two_step = ["set-path-adept", "set-path-warden"];
         let forms: Vec<Form> = two_step.iter().map(|id| form_of(id)).collect();
         assert_eq!(forms, vec![Form::Base, Form::Enhanced]);
+
+        let warden_chain = [
+            "warden-initiate",
+            "warden-pathkeeper",
+            "warden-of-set-paths",
+        ];
+        let forms: Vec<Form> = warden_chain.iter().map(|id| form_of(id)).collect();
+        assert_eq!(forms, vec![Form::Base, Form::Enhanced, Form::Elite]);
+
+        let griefsinger_chain = ["griefsinger-wisp", "griefsinger-mourner", "griefsinger"];
+        let forms: Vec<Form> = griefsinger_chain.iter().map(|id| form_of(id)).collect();
+        assert_eq!(forms, vec![Form::Base, Form::Enhanced, Form::Elite]);
+
+        let sow_chain = ["sow-piglet", "sow-matriarch", "old-sow-of-the-barrow"];
+        let forms: Vec<Form> = sow_chain.iter().map(|id| form_of(id)).collect();
+        assert_eq!(forms, vec![Form::Base, Form::Enhanced, Form::Elite]);
+    }
+
+    #[test]
+    fn find_reads_the_passive_modifier() {
+        let warden = find_def(CardDefId("warden-of-set-paths")).expect("fixture exists");
+        assert_eq!(
+            warden.find(Query::Passive),
+            Some(QueryResult::Passive(Modifier::OpposingRetreatCostDelta(1)))
+        );
+
+        let whelp = find_def(CardDefId("quarry-whelp")).expect("fixture exists");
+        assert_eq!(whelp.find(Query::Passive), None);
+    }
+
+    #[test]
+    fn find_reads_the_enchantment_cost_and_effects() {
+        let ward = find_def(CardDefId("standing-ward")).expect("fixture exists");
+        assert_eq!(
+            ward.find(Query::Enchantment),
+            Some(QueryResult::Enchantment {
+                cost: Cost {
+                    generic: 1,
+                    ..Cost::default()
+                },
+                effects: vec![],
+            })
+        );
     }
 }

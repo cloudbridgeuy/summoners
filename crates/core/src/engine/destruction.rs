@@ -262,7 +262,11 @@ pub(crate) fn answer_promotion(
 /// Move the Bench Summon at `slot` to the empty Main (rules §24 step 4).
 /// Ready carries over unchanged — unlike a played or upgraded Summon (rules
 /// §17, §19), Promotion is a movement, not a new arrival, so nothing here
-/// forces it to Exhausted.
+/// forces it to Exhausted. `entered_main_this_turn` is left alone: the
+/// caller's `resolve_movement_consequences` (step 5, right after this one)
+/// always queues an `EnteringMain` step for the same Summon, and draining
+/// that through `engine::triggers::movement_trigger` sets the flag — the one
+/// place in this crate that does.
 fn promote_from_slot(
     state: &GameState,
     player: PlayerId,
@@ -270,10 +274,9 @@ fn promote_from_slot(
 ) -> (GameState, Vec<GameEvent>) {
     let mut state = state.clone();
     let player_state = state.players.get_mut(player);
-    let Some(mut summon) = player_state.bench[slot.index()].take() else {
+    let Some(summon) = player_state.bench[slot.index()].take() else {
         return (state, Vec::new());
     };
-    summon.entered_main_this_turn = true;
     player_state.main = Some(summon);
 
     (
@@ -358,6 +361,7 @@ mod tests {
             mana: ManaBank::default(),
             main_losses: 0,
             has_coin: false,
+            enchantments: vec![],
         }
     }
 
@@ -709,6 +713,12 @@ mod tests {
         state.pending = Some(PendingInput::Promotion {
             player: PlayerId::Two,
         });
+        // Mirrors what `enqueue_destruction` already left queued, right
+        // behind the paused `PromoteBenchSummon` step, before the multi-slot
+        // Bench forced this pause (rules §24 step 5 follows step 4).
+        state
+            .work
+            .push_back(WorkItem::ResolveMovementConsequences(PlayerId::Two));
 
         let outcome =
             answer_promotion(&state, PlayerId::Two, BenchSlot::Second).expect("a slot is filled");
@@ -725,7 +735,6 @@ mod tests {
             !promoted.ready,
             "Promotion is a movement, not a new arrival"
         );
-        assert!(promoted.entered_main_this_turn);
         assert_eq!(outcome.state.players.get(PlayerId::Two).bench[1], None);
         assert_eq!(
             outcome.events,
@@ -734,6 +743,21 @@ mod tests {
                 from: BenchSlot::Second,
             }]
         );
+
+        // `answer_promotion` itself only moves the Summon (rules §24 step
+        // 4); `entered_main_this_turn` is set later, when the queued
+        // `ResolveMovementConsequences` step (already sitting in `work`
+        // above, exactly as it would be mid-destruction-chain) enqueues an
+        // `EnteringMain` trigger and draining runs it through
+        // `engine::triggers::movement_trigger`.
+        let (drained, _) = crate::engine::resolution::drain(&outcome.state);
+        let drained_promoted = drained
+            .players
+            .get(PlayerId::Two)
+            .main
+            .as_ref()
+            .expect("promotion still filled Main after drain");
+        assert!(drained_promoted.entered_main_this_turn);
     }
 
     #[test]

@@ -11,12 +11,15 @@
 //! (rules §47–48), so `pass` calls straight into that handover rather than
 //! leaving the state resting with nobody able to act.
 
-use crate::domain::cards::{CardKind, Query, QueryResult, SpellTiming, find_def};
+use crate::domain::cards::{
+    CardKind, Cost, EffectLeaf, Query, QueryResult, ResponseBlock, SpellTiming, find_def,
+};
 use crate::domain::errors::ActionError;
 use crate::domain::events::GameEvent;
 use crate::domain::ids::{CardInstanceId, ManaType, PlayerId, Position};
 use crate::domain::state::{GameState, Phase, StackItem, StackWindow};
 use crate::engine::apply::ActionOutcome;
+use crate::engine::effects::condition_holds;
 use crate::engine::payment::{self, PaymentError};
 use crate::engine::turn;
 
@@ -98,19 +101,25 @@ pub(crate) fn declare_attack(
     })
 }
 
-/// Cast a Spell (rules §34). A Support Spell may be cast proactively during
-/// its controller's own resting Main Phase (rules §45: "cast legal Support
-/// Spells") or, like an Attack Spell, as a response while the caster holds
-/// Priority (rules §34: "Support Spells may normally be played proactively
-/// during their controller's turn or as a legal response"; §46: "the
-/// defending player may play a legal Support Spell, play a legal Attack
-/// Spell if its timing allows, or pass"). An Attack Spell may only be cast
-/// as a response while the caster holds Priority — casting one proactively,
-/// with no window open, is rejected the same as casting one out of Combat
-/// altogether. Casting pays the printed cost exactly like `declare_attack`
-/// pays an Attack's cost, pushes the Spell onto the Stack, opens the same
-/// Priority window `declare_attack` and `engine::turn::end_turn` already
-/// open (rules §32), and marks the turn's Spell flag.
+/// Cast a Spell or an Enchantment (rules §34, §44). A Support Spell may be
+/// cast proactively during its controller's own resting Main Phase (rules
+/// §45: "cast legal Support Spells") or, like an Attack Spell, as a
+/// response while the caster holds Priority (rules §34: "Support Spells may
+/// normally be played proactively during their controller's turn or as a
+/// legal response"; §46: "the defending player may play a legal Support
+/// Spell, play a legal Attack Spell if its timing allows, or pass"). An
+/// Attack Spell may only be cast as a response while the caster holds
+/// Priority — casting one proactively, with no window open, is rejected the
+/// same as casting one out of Combat altogether. An Enchantment follows the
+/// same timing a Support Spell does; rules §44 gives it no Combat-only
+/// text. Casting an Attack Spell as a response is also rejected outright
+/// when the open Attack's printed effects carry a
+/// `BlockResponses { block: AttackSpells, .. }` whose condition currently
+/// holds (the Griefsinger's Attack). Casting pays the printed cost exactly
+/// like `declare_attack` pays an Attack's cost, pushes the card onto the
+/// Stack, opens the same Priority window `declare_attack` and
+/// `engine::turn::end_turn` already open (rules §32), and marks the turn's
+/// Spell flag.
 pub(crate) fn cast_spell(
     state: &GameState,
     player: PlayerId,
@@ -131,11 +140,16 @@ pub(crate) fn cast_spell(
     let Some(def) = find_def(card_ref.def) else {
         return Err(ActionError::UnknownCard);
     };
-    if def.kind != CardKind::Spell {
-        return Err(ActionError::UnknownCard);
-    }
-    let Some(QueryResult::Spell { timing, cost, .. }) = def.find(Query::Spell) else {
-        return Err(ActionError::UnknownCard);
+    let (timing, cost): (SpellTiming, Cost) = match def.kind {
+        CardKind::Spell => match def.find(Query::Spell) {
+            Some(QueryResult::Spell { timing, cost, .. }) => (timing, cost),
+            _ => return Err(ActionError::UnknownCard),
+        },
+        CardKind::Enchantment => match def.find(Query::Enchantment) {
+            Some(QueryResult::Enchantment { cost, .. }) => (SpellTiming::Support, cost),
+            _ => return Err(ActionError::UnknownCard),
+        },
+        CardKind::Summon => return Err(ActionError::UnknownCard),
     };
 
     let resting_in_own_main = state.turn.window.is_none()
@@ -147,6 +161,9 @@ pub(crate) fn cast_spell(
         SpellTiming::Attack => holds_priority,
     };
     if !legal_timing {
+        return Err(ActionError::WrongPhase);
+    }
+    if timing == SpellTiming::Attack && holds_priority && attack_responses_blocked(state) {
         return Err(ActionError::WrongPhase);
     }
 
@@ -188,6 +205,36 @@ pub(crate) fn cast_spell(
     Ok(ActionOutcome {
         state: next,
         events,
+    })
+}
+
+/// Whether the open Attack at the top of the Stack currently blocks Attack
+/// Spell responses (rules §32–33, the Griefsinger's Attack). Reads the
+/// attacker's printed Attack effects fresh, the same way
+/// `engine::resolution::resolve_attack` re-reads them at resolution time,
+/// rather than trusting anything cached on the `StackItem::Attack` itself.
+/// Anything other than an open Attack on top — no Stack item, or the top
+/// item is a Spell or a Trigger — never blocks.
+fn attack_responses_blocked(state: &GameState) -> bool {
+    let Some(StackItem::Attack { attacker, target }) = state.stack.last() else {
+        return false;
+    };
+    let attacker_state = state.players.get(*attacker);
+    let Some(main_summon) = &attacker_state.main else {
+        return false;
+    };
+    let Some(top_def) = find_def(main_summon.chain.top().def) else {
+        return false;
+    };
+    let Some(QueryResult::Attack { effects, .. }) = top_def.find(Query::Attack) else {
+        return false;
+    };
+    effects.iter().any(|leaf| match leaf {
+        EffectLeaf::BlockResponses {
+            condition,
+            block: ResponseBlock::AttackSpells,
+        } => condition_holds(state, *attacker, &[*target], *condition),
+        _ => false,
     })
 }
 

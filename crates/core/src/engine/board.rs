@@ -5,7 +5,7 @@
 //! then clones that state and mutates the clone, so a rejected action never
 //! touches the caller's original value (the design's transition contract).
 
-use crate::domain::cards::{CardDef, CardKind, Cost, Form, Query, QueryResult, find_def};
+use crate::domain::cards::{CardDef, CardKind, Cost, Form, Modifier, Query, QueryResult, find_def};
 use crate::domain::errors::ActionError;
 use crate::domain::events::GameEvent;
 use crate::domain::ids::{BenchSlot, CardInstanceId, ManaType, PlayerId, Position};
@@ -49,13 +49,29 @@ fn retreat_cost(def: &CardDef) -> Option<u32> {
     }
 }
 
-/// Rules §16: the opponent may print a Passive that raises the cost of this
-/// Retreat (`Modifier::OpposingRetreatCostDelta`). No fixture in today's
-/// registry carries that Passive, so this always returns zero; wiring the
-/// real modifier later only needs to change this function's body, not its
-/// callers.
-fn opposing_retreat_cost_delta(_state: &GameState, _player: PlayerId) -> i32 {
-    0
+/// Rules §16: `player`'s opponent may print a Passive that raises the cost
+/// of this Retreat (`Modifier::OpposingRetreatCostDelta`, the Warden of Set
+/// Paths). Scans every Summon `player`'s opponent controls, reading each
+/// one's topmost card only — the same "topmost card alone defines current
+/// characteristics" reading `retreat_cost` and `produced_types` already
+/// give the chain (rules §20) — and sums every matching Passive found.
+fn opposing_retreat_cost_delta(state: &GameState, player: PlayerId) -> i32 {
+    let opponent_state = state.players.get(player.opponent());
+    let positions = [
+        Position::Main,
+        Position::Bench(BenchSlot::First),
+        Position::Bench(BenchSlot::Second),
+        Position::Bench(BenchSlot::Third),
+    ];
+    positions
+        .iter()
+        .filter_map(|&position| summon_at(opponent_state, position))
+        .filter_map(|summon| find_def(summon.chain.top().def))
+        .filter_map(|top_def| match top_def.find(Query::Passive) {
+            Some(QueryResult::Passive(Modifier::OpposingRetreatCostDelta(delta))) => Some(delta),
+            _ => None,
+        })
+        .sum()
 }
 
 /// Reject an action outside Main with nothing open on the Stack, or while a
@@ -249,10 +265,9 @@ pub(crate) fn retreat(
     let Some(vacating_main) = next_player.main.take() else {
         return Err(ActionError::EmptyPosition);
     };
-    let Some(mut incoming_main) = next_player.bench[slot.index()].take() else {
+    let Some(incoming_main) = next_player.bench[slot.index()].take() else {
         return Err(ActionError::EmptyPosition);
     };
-    incoming_main.entered_main_this_turn = true;
     next_player.main = Some(incoming_main);
     next_player.bench[slot.index()] = Some(vacating_main);
 
@@ -261,7 +276,10 @@ pub(crate) fn retreat(
     // step names the position its Summon occupies now: the one that left
     // Main is at `Bench(slot)` for both `LeavingMain` and `EnteringBench`;
     // the one that left the Bench is at `Main` for both `LeavingBench` and
-    // `EnteringMain`.
+    // `EnteringMain`. `entered_main_this_turn` is not set here: draining the
+    // queued `EnteringMain` step through `engine::triggers::movement_trigger`
+    // sets it — the one place in this crate that does, since every path onto
+    // Main enqueues that same step.
     next.work.push_back(WorkItem::MovementTrigger(
         MovementStep::LeavingMain,
         player,
@@ -344,6 +362,7 @@ mod tests {
             mana: ManaBank::default(),
             main_losses: 0,
             has_coin: false,
+            enchantments: vec![],
         }
     }
 
@@ -631,12 +650,6 @@ mod tests {
             player.main.as_ref().map(|s| s.chain.base().def),
             Some(CardDefId("set-path-adept"))
         );
-        assert!(
-            player
-                .main
-                .as_ref()
-                .is_some_and(|s| s.entered_main_this_turn)
-        );
         assert_eq!(
             player.bench[0].as_ref().map(|s| s.chain.base().def),
             Some(CardDefId("quarry-whelp"))
@@ -650,6 +663,19 @@ mod tests {
             }
         );
         assert!(outcome.state.turn.normal_retreat_used);
+
+        // `retreat` itself only queues the four movement triggers (rules
+        // §28); it never sets `entered_main_this_turn` directly. Draining
+        // the queue runs the `EnteringMain` step through
+        // `engine::triggers::movement_trigger`, the one place that does.
+        let (drained, _) = crate::engine::resolution::drain(&outcome.state);
+        let drained_player = drained.players.get(PlayerId::One);
+        assert!(
+            drained_player
+                .main
+                .as_ref()
+                .is_some_and(|s| s.entered_main_this_turn)
+        );
     }
 
     #[test]

@@ -194,6 +194,9 @@ fn build_player_state(
         mana: scenario_player.mana,
         main_losses: scenario_player.main_losses,
         has_coin: scenario_player.has_coin,
+        // `Scenario` carries no field for a starting Enchantment yet, so
+        // parsing can never seed one; every parsed board starts with none.
+        enchantments: vec![],
     })
 }
 

@@ -101,6 +101,10 @@ pub struct PlayerState {
     pub main_losses: u8,
     /// Rules §7: only the second player starts with the Coin.
     pub has_coin: bool,
+    /// Rules §44: Enchantments this player has cast, still in play. Cleared
+    /// only by an effect that removes one; `scenario::from_scenario` cannot
+    /// seed a starting Enchantment yet — `Scenario` carries no field for it.
+    pub enchantments: Vec<CardRef>,
 }
 
 /// A homogeneous pair, one value per player. Every read or write goes

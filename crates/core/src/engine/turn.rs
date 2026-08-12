@@ -16,7 +16,9 @@ use crate::domain::cards::TriggerEvent;
 use crate::domain::errors::ActionError;
 use crate::domain::events::GameEvent;
 use crate::domain::ids::{ManaType, PlayerId};
-use crate::domain::state::{GameState, ManaSource, PendingInput, Phase, TurnState, WorkItem};
+use crate::domain::state::{
+    DurationMarker, GameState, ManaSource, PendingInput, Phase, PlayerState, TurnState, WorkItem,
+};
 use crate::engine::apply::ActionOutcome;
 use crate::engine::stack::window_after_play;
 use crate::engine::triggers::discover_back;
@@ -55,6 +57,25 @@ pub(crate) fn end_turn(state: &GameState, player: PlayerId) -> Result<ActionOutc
     })
 }
 
+/// Clear `DurationMarker::CannotBeMovedByOpponent` from every Summon on
+/// `player_state`'s own board (Main and Bench) — the Old Sow's `Root and
+/// Renew` expiring (rules §44). Distinct from
+/// `reset_per_turn_summon_flags`, which runs for both players every
+/// handover; this runs only for the player becoming newly active, since the
+/// marker is only ever cleared from its own holder's board once that
+/// holder's next turn comes around (see the call site in `handover`).
+fn expire_cannot_be_moved_by_opponent(player_state: &mut PlayerState) {
+    if let Some(summon) = player_state.main.as_mut() {
+        summon
+            .duration_markers
+            .retain(|marker| *marker != DurationMarker::CannotBeMovedByOpponent);
+    }
+    for slot in player_state.bench.iter_mut().flatten() {
+        slot.duration_markers
+            .retain(|marker| *marker != DurationMarker::CannotBeMovedByOpponent);
+    }
+}
+
 /// The direct turn handoff (rules §48), reached once both players pass
 /// consecutively with an empty Stack (see `engine::stack::pass`). Every
 /// Summon's per-turn flags reset for both players (see
@@ -78,6 +99,18 @@ pub(crate) fn handover(state: &GameState) -> ActionOutcome {
     };
     reset_per_turn_summon_flags(state.players.get_mut(player));
     reset_per_turn_summon_flags(state.players.get_mut(opponent));
+    // The Old Sow's `Root and Renew` (rules §44) sets `CannotBeMovedByOpponent`
+    // on the Sow's own controller's board during that controller's Main
+    // Phase, to survive exactly one opposing turn. It only ever expires on
+    // the handover that makes its holder newly active again — the handover
+    // right after `player` set it hands play to `opponent` and leaves the
+    // marker alone (it protects through the whole of `opponent`'s coming
+    // turn); the handover after that makes the original holder active again
+    // and is where the marker is cleared. Clearing unconditionally from
+    // whoever is newly active on every handover reaches that same holder on
+    // exactly that later handover, and is a harmless no-op the rest of the
+    // time, since the marker can only ever sit on its own holder's board.
+    expire_cannot_be_moved_by_opponent(state.players.get_mut(opponent));
     state.work.push_back(WorkItem::ReadyAll);
     // Rules §36, §41: a Trigger on `YourUpkeep` fires for the newly active
     // player's own board, Main then Bench, ahead of the draw and natural
@@ -231,6 +264,7 @@ mod tests {
             mana: ManaBank::default(),
             main_losses: 0,
             has_coin: false,
+            enchantments: vec![],
         }
     }
 
