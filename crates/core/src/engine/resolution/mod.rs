@@ -89,6 +89,7 @@ fn execute(state: &GameState, item: &WorkItem) -> (GameState, Vec<GameEvent>) {
         WorkItem::ReadyAll => upkeep::ready_all(state),
         WorkItem::DrawCard => execute_draw(state),
         WorkItem::ProduceMana(source) => upkeep::produce_mana(state, *source),
+        WorkItem::BeginMainPhase => upkeep::begin_main_phase(state),
 
         WorkItem::DestructionCheck(position) => destruction::check(state, *position),
         WorkItem::DiscardDestroyedChain(position) => {

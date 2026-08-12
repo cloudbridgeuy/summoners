@@ -285,6 +285,15 @@ pub enum WorkItem {
     DrawCard,
     /// Rules §10–12: generate Mana from this source; may set `pending`.
     ProduceMana(ManaSource),
+    /// Rules §9: once every other Upkeep step has drained, the turn moves
+    /// forward into the Main Phase on its own — phases only move forward,
+    /// so nothing else ever leaves `Phase::Upkeep`. Queued last by
+    /// `engine::turn::handover`, after `ReadyAll`, any `YourUpkeep`
+    /// triggers, `DrawCard`, and `ProduceMana(ManaSource::Player)`, so it
+    /// always lands after a `ManaProduction` pause and its answer too — the
+    /// drain loop resumes the same queue where it left off once `pending`
+    /// clears.
+    BeginMainPhase,
 }
 
 /// One plain, cloneable value: the whole match. The same state and the same

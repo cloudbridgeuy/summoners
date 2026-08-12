@@ -261,13 +261,6 @@ fn a_single_destruction_check_can_end_both_players_mains_at_once() {
 /// registry that can move an opposing Main at all, so this scenario uses
 /// it to observe both halves: rejected outright while the marker holds,
 /// legal again once it has expired.
-///
-/// Nothing in this slice's resolution loop moves `Phase::Upkeep` back to
-/// `Phase::Main` on its own yet after a handover (`engine::turn`'s own
-/// test suite works around the same gap by hand — see
-/// `a_summon_played_this_turn_can_be_upgraded_on_its_controllers_next_turn`
-/// in `engine::turn`'s tests); `advance_turn` below does the same before
-/// handing the state back, so this probe is not blocked by that gap.
 #[test]
 fn a_rooted_main_blocks_rearrange_for_the_opponents_whole_turn_then_allows_it() {
     let scenario = Scenario {
@@ -414,10 +407,10 @@ fn a_rooted_main_blocks_rearrange_for_the_opponents_whole_turn_then_allows_it() 
 /// answer a `ManaProduction` pause automatically with Matter — every
 /// dual-type fixture this file hands off with (the Warden of Set Paths,
 /// the Old Sow of the Barrow) anchors Matter alongside its second Type, so
-/// this is always a legal answer here. Finally, reset `Phase::Upkeep` back
-/// to `Phase::Main` by hand: nothing in this slice's engine does that on
-/// its own yet, the same gap `engine::turn`'s own tests already work
-/// around the same way.
+/// this is always a legal answer here. `full_end_turn` and `apply` both
+/// drain the resolution loop after every step, so the returned state has
+/// already reached the new turn's own Main Phase on its own (rules §9) by
+/// the time this returns — nothing here needs to touch `state.turn.phase`.
 fn advance_turn(state: &GameState, player: PlayerId) -> ActionOutcome {
     let mut outcome = full_end_turn(state, player).expect("legal from a resting Main Phase");
     if let Some(PendingInput::ManaProduction {
@@ -435,7 +428,6 @@ fn advance_turn(state: &GameState, player: PlayerId) -> ActionOutcome {
         outcome.events.extend(answered.events);
         outcome.state = answered.state;
     }
-    outcome.state.turn.phase = Phase::Main;
     outcome
 }
 
@@ -685,5 +677,95 @@ fn a_resolved_enchantment_stays_in_play_through_a_full_turn_handover() {
         handed_over.state.players.get(PlayerId::One).enchantments,
         vec![card_ref(5, "standing-ward")],
         "the Enchantment survives a full turn handover unchanged"
+    );
+}
+
+/// Rules §9: "Phases only move forward" — once a turn hands off, the new
+/// active player's Upkeep must itself progress into a Main Phase they can
+/// actually act in, not rest in Upkeep forever. This drives the whole
+/// exchange through `apply` and `scenario::from_scenario` only, with no
+/// hand-editing of `state.turn.phase` anywhere: `full_end_turn` submits
+/// `EndTurn` and both `PassPriority` answers as three real actions, each
+/// one draining the resolution loop the way any outside caller's action
+/// would, so by the time `advance_turn` returns, Two's own Upkeep — Ready,
+/// draw, and natural production — has already run to completion and left
+/// `state.turn.phase` at `Phase::Main` on its own. Two then plays a Base
+/// Summon from hand, legal only because that Main Phase is real: before
+/// this behavior existed, `PlaySummon` rejected every Main Phase action for
+/// the rest of the game with `WrongPhase`, since nothing ever advanced past
+/// the first Upkeep.
+#[test]
+fn a_second_turn_reaches_its_own_main_phase_and_can_act_in_it() {
+    let scenario = Scenario {
+        players: PerPlayer::new(
+            ScenarioPlayer {
+                deck: vec![card_ref(50, "quarry-whelp")],
+                hand: vec![],
+                prizes: vec![],
+                discard: vec![],
+                mana: ManaBank::default(),
+                main_losses: 0,
+                has_coin: false,
+                main: Some(ScenarioSummon {
+                    chain: vec![card_ref(1, "quarry-whelp")],
+                    damage: 0,
+                    ready: true,
+                }),
+                bench: [None, None, None],
+            },
+            ScenarioPlayer {
+                deck: vec![card_ref(150, "quarry-whelp")],
+                hand: vec![card_ref(151, "quarry-whelp")],
+                prizes: vec![],
+                discard: vec![],
+                mana: ManaBank::default(),
+                main_losses: 0,
+                has_coin: false,
+                main: Some(ScenarioSummon {
+                    chain: vec![card_ref(101, "quarry-whelp")],
+                    damage: 0,
+                    ready: true,
+                }),
+                bench: [None, None, None],
+            },
+        ),
+        active_player: PlayerId::One,
+    };
+    let state = from_scenario(&scenario).expect("both boards are legal");
+
+    let handed_over = advance_turn(&state, PlayerId::One);
+    assert_eq!(handed_over.state.turn.active_player, PlayerId::Two);
+    assert_eq!(
+        handed_over.state.turn.phase,
+        Phase::Main,
+        "Two's own Upkeep — Ready, draw, and production — drained all the \
+         way through to the Main Phase advance on its own (rules §9)"
+    );
+    assert!(handed_over.state.work.is_empty());
+
+    let played = apply(
+        &handed_over.state,
+        &GameAction::PlaySummon {
+            player: PlayerId::Two,
+            card: CardInstanceId(151),
+            slot: BenchSlot::First,
+        },
+    )
+    .expect("Two's Main Phase has genuinely begun, so playing a Base Summon is legal");
+
+    assert_eq!(
+        played.events,
+        vec![GameEvent::SummonPlayed {
+            player: PlayerId::Two,
+            card: CardInstanceId(151),
+            slot: BenchSlot::First,
+        }]
+    );
+    assert_eq!(
+        played.state.players.get(PlayerId::Two).bench[0]
+            .as_ref()
+            .map(|summon| summon.chain.top().def),
+        Some(CardDefId("quarry-whelp")),
+        "the freshly played Base Summon now occupies Two's Bench"
     );
 }

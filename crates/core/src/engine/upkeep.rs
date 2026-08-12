@@ -15,7 +15,9 @@
 use crate::domain::cards::{Query, QueryResult, find_def};
 use crate::domain::events::GameEvent;
 use crate::domain::ids::{BenchSlot, ManaType, Position};
-use crate::domain::state::{GameState, ManaSource, PendingInput, PlayerState, SummonInstance};
+use crate::domain::state::{
+    GameState, ManaSource, PendingInput, Phase, PlayerState, SummonInstance,
+};
 
 // ---------------------------------------------------------------------------
 // The anchoring rule
@@ -251,6 +253,22 @@ pub(crate) fn produce_mana(state: &GameState, source: ManaSource) -> (GameState,
             (state, Vec::new())
         }
     }
+}
+
+/// `WorkItem::BeginMainPhase` (rules §9): once every other Upkeep step has
+/// drained, the turn moves forward into the Main Phase on its own — phases
+/// only move forward, so nothing else ever advances out of `Phase::Upkeep`.
+/// `engine::turn::handover` queues this last, after `ReadyAll`, any
+/// `YourUpkeep` triggers, `DrawCard`, and `ProduceMana(ManaSource::Player)`,
+/// so it always runs once every one of those has finished — including a
+/// `ManaProduction` pause and its answer, since the drain loop resumes this
+/// same queue exactly where it paused once `pending` clears. A plain state
+/// change with nothing to report, the same way `engine::loss::check`'s
+/// short-of-a-loss path reports nothing.
+pub(crate) fn begin_main_phase(state: &GameState) -> (GameState, Vec<GameEvent>) {
+    let mut state = state.clone();
+    state.turn.phase = Phase::Main;
+    (state, Vec::new())
 }
 
 #[cfg(test)]
@@ -498,6 +516,19 @@ mod tests {
         assert!(events.is_empty());
         assert_eq!(state.pending, None);
         assert_eq!(state.players.get(PlayerId::One).mana, ManaBank::default());
+    }
+
+    // -- begin_main_phase -----------------------------------------------------
+
+    #[test]
+    fn begin_main_phase_advances_upkeep_to_main_and_reports_nothing() {
+        let mut state = base_state();
+        state.turn.phase = Phase::Upkeep;
+
+        let (state, events) = begin_main_phase(&state);
+
+        assert_eq!(state.turn.phase, Phase::Main);
+        assert!(events.is_empty());
     }
 
     // -- reset_per_turn_summon_flags -----------------------------------------

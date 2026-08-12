@@ -80,11 +80,16 @@ fn expire_cannot_be_moved_by_opponent(player_state: &mut PlayerState) {
 /// consecutively with an empty Stack (see `engine::stack::pass`). Every
 /// Summon's per-turn flags reset for both players (see
 /// `reset_per_turn_summon_flags`), the opponent's Upkeep begins, and
-/// `Ready`, draw, and natural production are queued as work for the
-/// resolution loop to drain. `state.turn.active_player` is still the
-/// player whose turn is ending — opening the §47 window and passing
-/// Priority back and forth never changes it — so this needs no separate
-/// player argument.
+/// `Ready`, draw, natural production, and finally the Main Phase advance
+/// itself (`WorkItem::BeginMainPhase`, rules §9) are queued as work for the
+/// resolution loop to drain. Queuing the advance last, behind everything
+/// else Upkeep does, is what keeps it correct even when `ProduceMana`
+/// pauses for a Mana Type choice: the drain loop resumes this same queue
+/// once that choice is answered, so the Main Phase is still reached only
+/// after the choice lands, never before. `state.turn.active_player` is
+/// still the player whose turn is ending — opening the §47 window and
+/// passing Priority back and forth never changes it — so this needs no
+/// separate player argument.
 pub(crate) fn handover(state: &GameState) -> ActionOutcome {
     let mut state = state.clone();
     let player = state.turn.active_player;
@@ -120,6 +125,9 @@ pub(crate) fn handover(state: &GameState) -> ActionOutcome {
     state
         .work
         .push_back(WorkItem::ProduceMana(ManaSource::Player));
+    // Rules §9: "Phases only move forward." Queued last, so the Main Phase
+    // is reached only once every other Upkeep step above has drained.
+    state.work.push_back(WorkItem::BeginMainPhase);
 
     ActionOutcome {
         state,
@@ -357,6 +365,7 @@ mod tests {
                 WorkItem::ReadyAll,
                 WorkItem::DrawCard,
                 WorkItem::ProduceMana(ManaSource::Player),
+                WorkItem::BeginMainPhase,
             ])
         );
     }
@@ -410,6 +419,11 @@ mod tests {
             ]
         );
         assert!(state.work.is_empty());
+        assert_eq!(
+            state.turn.phase,
+            Phase::Main,
+            "the drained queue's own last item lands the new turn in its Main Phase (rules §9)"
+        );
         assert_eq!(
             state
                 .players
@@ -520,12 +534,24 @@ mod tests {
             played_this_turn: true,
             ..whelp(PlayerId::One)
         });
+        // Each player needs a card to draw so their own Upkeep can drain
+        // all the way through to `WorkItem::BeginMainPhase` below, instead
+        // of stalling on an empty-Deck loss this test has no interest in.
+        state.players.get_mut(PlayerId::One).deck = vec![CardRef {
+            instance: CardInstanceId(30),
+            def: CardDefId("quarry-whelp"),
+        }];
+        state.players.get_mut(PlayerId::Two).deck = vec![CardRef {
+            instance: CardInstanceId(31),
+            def: CardDefId("quarry-whelp"),
+        }];
 
-        // Turn 1 (One) ends; Two's turn runs.
+        // Turn 1 (One) ends; Two's turn runs, its Upkeep drained in full —
+        // reaching Main on its own (rules §9), with no hand edit needed.
         let after_one = full_end_turn(&state, PlayerId::One);
+        let (after_one, _) = crate::engine::resolution::drain(&after_one.state);
         assert!(
             !after_one
-                .state
                 .players
                 .get(PlayerId::One)
                 .main
@@ -535,15 +561,19 @@ mod tests {
             "the flag is already clear as soon as One's own turn ends"
         );
 
-        // Two's turn ends; play returns to One.
-        let mut two_state = after_one.state;
-        two_state.turn.phase = Phase::Main;
-        let after_two = full_end_turn(&two_state, PlayerId::Two);
+        // Two's turn ends; play returns to One, whose own Upkeep drains the
+        // same way.
+        let after_two = full_end_turn(&after_one, PlayerId::Two);
+        let (after_two, _) = crate::engine::resolution::drain(&after_two.state);
 
-        assert_eq!(after_two.state.turn.active_player, PlayerId::One);
+        assert_eq!(after_two.turn.active_player, PlayerId::One);
+        assert_eq!(
+            after_two.turn.phase,
+            Phase::Main,
+            "One's own Upkeep reaches Main on its own too, with no hand edit"
+        );
         assert!(
             !after_two
-                .state
                 .players
                 .get(PlayerId::One)
                 .main
