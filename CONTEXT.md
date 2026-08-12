@@ -2,8 +2,15 @@
 
 ## Status
 
-The repository is at bootstrap. No game rule is implemented yet. This file is
-an index of stable product language from the design inputs, not an API contract.
+A deterministic, pure game engine exists in `crates/core`. It enforces turn
+structure, Mana, the board, Combat, the Stack, Spells, Skills, Triggered
+Abilities, destruction, Prize recovery, promotion, and loss conditions for the
+rules described below. There is no CLI, server, client, or card loader yet.
+The engine reads no file, calls no network, uses no clock, and uses no random
+source. Every entry point takes one state value and one action, and returns a
+new state value; it never mutates anything the caller still holds. This file
+is an index of stable product language from the design inputs and the engine
+that now exists, not an API contract.
 
 ## Behavior
 
@@ -41,6 +48,214 @@ managed pre-commit hook and leaves any unmanaged hook unchanged.
   hook
 - **THEN** it reports that the hook is unmanaged and leaves it unchanged
 
+### Requirement: Turn structure and phase order
+
+A turn moves through Upkeep, Main Phase, and Combat, and phases only move
+forward (rules §9). Ending a turn opens one last Combat Priority window with
+the defender first; once both players have passed and the Stack is empty, the
+turn hands off completely in one step: every Summon the new active player
+controls becomes Ready, they draw one card, Mana production runs for the
+player and every Summon they control, and their own Main Phase begins before
+either player can act again (rules §9–10, §47–48).
+
+#### Scenario: A turn hands off after both players pass
+
+- **WHEN** the active player ends their turn and both players pass Priority
+  once each with the Stack empty
+- **THEN** the turn hands to the opponent, who is Readied, draws one card,
+  produces Mana, and reaches their own Main Phase before either player can
+  act again
+
+#### Scenario: A new turn reaches a Main Phase a player can act in
+
+- **WHEN** a second turn's handover finishes
+- **THEN** the new active player can play a Base Summon from hand, because
+  their Main Phase — not just their Upkeep — has genuinely begun
+
+### Requirement: Mana, the Coin, and paying costs
+
+Every Mana is typed Matter, Mind, or Spirit; there is no separate Generic
+pool (rules §11–12). During Upkeep, the player's own natural production and
+every Summon they control each generate Mana, choosing among the Types
+anchored to the player's board when more than one is available, and pausing
+for that choice when it is. The second player's one-use Coin converts to one
+Mana of a Type their board already produces, and is then removed from the
+game (rules §7). Paying a cost spends typed components from their matching
+pool first; a Generic component is paid from a named pool or, without one,
+from the largest remaining pool (rules §11–12, §50).
+
+#### Scenario: A dual-type board pauses for a Mana Type choice
+
+- **WHEN** a player's board anchors more than one Mana Type during Upkeep
+- **THEN** natural production pauses until the player chooses which Type to
+  add, and no Mana is banked until they answer
+
+#### Scenario: The Coin converts to one Mana and cannot be reused
+
+- **WHEN** the second player converts their Coin for a Type their board
+  produces
+- **THEN** the Coin leaves the game, and converting again is rejected
+
+### Requirement: Playing, upgrading, and retreating Summons
+
+Playing a Base Summon fills an empty Bench slot and it enters Exhausted
+(rules §14, §17). Upgrading a Summon must strictly climb Base, Enhanced,
+Elite, and the new top must still print every Mana Type the current top
+prints (rules §18–20). Retreating pays the printed Retreat Cost — raised by
+any opposing card that says opposing Retreats cost more — and exchanges Main
+with a chosen Bench Summon, firing all four movement triggers in a fixed
+order (rules §26, §28).
+
+#### Scenario: An upgrade must climb Form and keep every printed Type
+
+- **WHEN** a proposed upgrade would drop a Mana Type the current top already
+  prints
+- **THEN** the upgrade is rejected as an illegal upgrade target
+
+#### Scenario: Retreating fires movement triggers in a fixed order
+
+- **WHEN** a player retreats, exchanging Main with a Bench Summon
+- **THEN** Leaving Main, Entering Bench, Leaving Bench, and Entering Main
+  fire in that order, and any immediate Triggered Ability on the arriving
+  Summon resolves as part of the same action
+
+### Requirement: Combat, the Stack, and Priority
+
+Declaring the turn's one normal attack pays the printed Attack cost, puts the
+attack on the Stack, and gives the defending player Priority first (rules
+§29–31, §46). Priority moves to the other player on every Spell played or
+every pass; two consecutive passes close the current Priority window, and if
+the Stack is then completely empty the turn hands off immediately (rules
+§32–33, §47). Whatever sits on top of the Stack resolves first, so a response
+played after an attack resolves before that attack does (rules §35).
+
+#### Scenario: A declared attack resolves after both players pass once
+
+- **WHEN** a player declares their normal attack and both players pass
+  Priority once each
+- **THEN** the attack resolves, applying Damage to the defending Main
+
+#### Scenario: A response resolves before the attack it answered
+
+- **WHEN** the defender casts a legal Attack Spell while holding Priority
+- **THEN** the Spell resolves first, and only afterward does the original
+  attack resolve
+
+### Requirement: Spells and Enchantments
+
+A Support Spell may be cast proactively in its own caster's resting Main
+Phase, or as a response while its caster holds Priority; an Attack Spell may
+only be cast as a response (rules §34, §45–46). Casting pays the printed
+cost, puts the card on the Stack, and opens a Priority window. A resolved
+Spell moves to its caster's discard pile; a resolved Enchantment instead
+remains in play until something removes it (rules §44, §56). A card's own
+printed Attack effect can block Attack Spell responses to it under a stated
+condition.
+
+#### Scenario: A Support Spell heals through the Stack
+
+- **WHEN** a Support Spell that heals is cast in its caster's own Main Phase
+  and both players pass
+- **THEN** it resolves, healing the named target, and it moves to the
+  caster's discard pile
+
+#### Scenario: An Enchantment persists through a turn handover
+
+- **WHEN** an Enchantment resolves
+- **THEN** it stays in play rather than discarding, and it is still in play
+  after a full turn hands off to the opponent
+
+### Requirement: Skills
+
+Activating a Skill requires the Summon to be Ready. Activation checks
+Readiness, pays the cost, exhausts the Summon, then resolves the Skill's
+effect, always in that order (rules §15). No currently printed Skill uses the
+Stack, so every Skill resolves immediately (rules §43).
+
+#### Scenario: Exhaustion happens before the Skill's effect
+
+- **WHEN** a Summon activates a Skill
+- **THEN** the Summon becomes Exhausted before the effect resolves, even when
+  the effect itself would otherwise re-Ready it
+
+#### Scenario: A protective Skill blocks an opposing Skill until it expires
+
+- **WHEN** a Skill protects a Summon from being moved by the opponent until
+  its controller's next turn
+- **THEN** an opposing Skill that would move it is rejected for the whole of
+  the opponent's next turn, and becomes legal again only once the
+  controller's following turn begins
+
+### Requirement: Triggered abilities
+
+A Triggered Ability fires on its stated event, discovered opponent-of-active-
+player first and Main before Bench within a player (rules §28, §36–41). A
+respondable Trigger opens a new Priority window for the opponent of its
+controller before anything already queued behind it continues; a
+non-respondable Trigger applies immediately, with no window opening for it
+(rules §37–39).
+
+#### Scenario: A respondable trigger interrupts a chain already in progress
+
+- **WHEN** a respondable Triggered Ability fires in the middle of an
+  already-queued destruction chain
+- **THEN** a new Priority window opens before the rest of that chain runs,
+  and the chain resumes only once the window closes
+
+#### Scenario: An immediate trigger resolves without opening a window
+
+- **WHEN** a non-respondable Triggered Ability, such as a Summon healing on
+  entering Main, fires
+- **THEN** it resolves as part of the same action, and no Priority window
+  opens for it
+
+### Requirement: Destruction, Prize recovery, and promotion
+
+A Summon is destroyed once its Damage reaches its Life (rules §21, §23). A
+destroyed Main Summon's whole upgrade chain discards, its owner records one
+Main loss, they recover one Prize Card if any remain (the opponent chooses
+which face-down card), a Bench Summon promotes into the empty Main if any
+remain (the owner chooses which when more than one is available), and only
+then do the remaining movement consequences and a losing-condition check run
+— always in that order (rules §24–25, §28). A destroyed Bench Summon skips
+straight to discarding and a losing-condition check.
+
+#### Scenario: A lethal attack destroys, recovers a Prize, and promotes
+
+- **WHEN** an attack finishes a Main Summon's Life and its owner has both a
+  Prize Card and a Bench Summon available
+- **THEN** the chain discards, one Main loss is recorded, the opponent picks
+  which Prize Card is recovered, the owner picks which Bench Summon is
+  promoted, and the promoted Summon occupies Main once the chain settles
+
+#### Scenario: One event can destroy both players' Mains at once
+
+- **WHEN** a single action's Damage finishes both players' Main Summons
+  together
+- **THEN** the opponent of the active player's whole destruction chain
+  resolves before the active player's own chain begins (rules §41–42)
+
+### Requirement: Loss conditions and immediate ending
+
+The game ends the moment any losing condition is met: a third Main loss, no
+Bench Summon available to promote into an empty Main, or an attempted draw
+from an empty Deck (rules §2, §10, §24, §58). A third Main loss ends the game
+even if another losing condition is pending at the very same moment, and once
+the game has ended every later action is rejected.
+
+#### Scenario: A third Main loss ends the game outright
+
+- **WHEN** a player's third Main Summon is destroyed, even with a Bench
+  promotion still queued behind it
+- **THEN** the game ends immediately in the opponent's favor, and the queued
+  promotion never resolves
+
+#### Scenario: An empty-deck draw ends the game before Mana production
+
+- **WHEN** a player must draw from an empty Deck during Upkeep
+- **THEN** the game ends immediately, and that Upkeep's Mana production never
+  runs
+
 ## Sources
 
 - `designs/core_rules.md` defines the current prototype rules and their open areas.
@@ -48,6 +263,10 @@ managed pre-commit hook and leaves any unmanaged hook unchanged.
   rules. The Markdown file supersedes the `.docx` where they differ; the
   2026-08-10 Mana rewrite exists only in the Markdown.
 - `designs/types_archetypes.md` defines card-design identities and balance intent. It is not a rules document.
+- `designs/rust_c_engine_architecture.md` describes the intended boundary
+  between an authoritative Rust engine and a future C/Raylib application. No
+  such application exists yet; `crates/core` is the Rust half this document
+  describes.
 
 When the documents overlap, use the core rules for engine behavior and the
 types/archetypes document for content-design intent.
@@ -61,9 +280,12 @@ types/archetypes document for content-design intent.
 - **Base / Enhanced / Elite:** the ordered Summon forms in an upgrade chain.
 - **Ready / Exhausted:** the physical state that normally controls voluntary Skill activation.
 - **Mana Pool:** persistent public resources owned by a player. All Mana is typed. Generic cost components accept Mana of any Type, while typed components require the named Type.
+- **Coin:** the second player's one-use resource. It converts into one Mana of a Type their board already produces, then leaves the game.
 - **Skill:** an ability a Ready Summon can voluntarily activate by paying its cost and becoming Exhausted.
 - **Passive Ability:** a continuous effect that normally does not use the Stack.
 - **Triggered Ability:** an automatic response to a stated event. It can resolve immediately or create a respondable Stack effect.
+- **Spell:** a card played from hand for one use. A Support Spell may be played proactively or as a response; an Attack Spell only as a response.
+- **Enchantment:** a card played from hand like a Spell, but it remains in play after resolving instead of discarding.
 - **Priority:** the exclusive right to add one legal Spell to the Stack or pass.
 - **Stack:** the last-in, first-out sequence of attacks and respondable effects.
 - **Prize Card:** one of two face-down comeback resources recovered after the first two Main losses.
@@ -74,10 +296,19 @@ types/archetypes document for content-design intent.
 - One player controls one Main Summon and up to three Benched Summons.
 - A Summon upgrade chain is one Summon; only the top card defines current characteristics, while Damage remains.
 - Attacks target battlefield positions, not a specific Summon that can move away.
-- Two consecutive passes start Stack resolution. Ordinary voluntary actions stop until resolution ends or a triggered respondable effect opens a new Priority window.
+- Two consecutive passes close the current Priority window. If the Stack is
+  then empty, the turn hands off; otherwise whatever sits on top of the Stack
+  resolves next. A triggered respondable effect discovered along the way can
+  open a fresh Priority window before that resolution continues.
 - Destruction, forced promotion, movement triggers, other automatic triggers, and loss checks occur during resolution.
 - Losing is immediate. Unresolved effects stop, and games do not end in a draw.
 - The fixed movement-trigger order is Leaving Main, Entering Bench, Leaving Bench, Entering Main.
+- Mana production anchors to the board: a player only ever chooses among the
+  Mana Types the Summons they control actually print, never a Type they have
+  no Summon for.
+- Recovering a Prize Card and promoting a Bench Summon have opposite
+  choosers: the opponent of the player recovering the Prize chooses which
+  face-down card it is, but that player's own Bench decides who is promoted.
 
 ## Content-design language
 
@@ -92,3 +323,29 @@ The core rules list open balance and tournament areas. The archetype document
 also leaves rate gaps, early dual gates, wording conventions, and Mana
 stranding for later simulation and playtest. Do not encode these as settled
 rules without a new decision.
+
+The engine itself leaves further ground open that a reader should not
+mistake for settled:
+
+- No effect in the engine prevents Damage from landing at all. A card whose
+  printed Attack is marked unpreventable and unincreasable is unchangeable
+  once dealt — nothing can add to it after the fact — but that "unpreventable"
+  half of its text currently describes a state the engine can already never
+  violate, not a prevention effect it actively defeats.
+- The card set is a fixture registry held in code, not a card file loaded
+  from anywhere. Its names, stats, and text are working test data for
+  exercising every rule at least once, not a finished, published card list.
+- The design's "you may" wording on a few printed effects — returning a
+  Spell from the discard pile, and the look-then-draw-then-return sequence on
+  one Skill — is currently played out as an unconditional action. The engine
+  has no vocabulary yet for an optional sub-effect a player can decline.
+- One Skill's printed text offers a choice between two different effects
+  (exchange the opposing Main with a Bench Summon, or move one opposing
+  Benched Summon to another Bench position). Only the first branch exists in
+  the engine.
+- No printed Skill currently uses the Stack, so the rule that lets a Skill's
+  own text put it there remains unexercised.
+- `GameState` is one fully visible value with no hidden-information layer:
+  a Prize Card, a face-down Deck, and an opponent's hand are all readable by
+  anything that can see the state. Whatever hides them from a real opponent
+  is future shell work, not something this crate does.
