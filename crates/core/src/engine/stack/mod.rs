@@ -59,7 +59,7 @@ pub(crate) fn declare_attack(
     let Some(main_summon) = &player_state.main else {
         return Err(ActionError::EmptyPosition);
     };
-    let Some(top_def) = find_def(main_summon.chain.top().def) else {
+    let Some(top_def) = find_def(&state.cards, main_summon.chain.top().def) else {
         return Err(ActionError::UnknownCard);
     };
     let Some(QueryResult::Attack { cost, .. }) = top_def.find(Query::Attack) else {
@@ -137,7 +137,7 @@ pub(crate) fn cast_spell(
     };
     let card_ref = player_state.hand[hand_index];
 
-    let Some(def) = find_def(card_ref.def) else {
+    let Some(def) = find_def(&state.cards, card_ref.def) else {
         return Err(ActionError::UnknownCard);
     };
     let (timing, cost): (SpellTiming, Cost) = match def.kind {
@@ -223,7 +223,7 @@ fn attack_responses_blocked(state: &GameState) -> bool {
     let Some(main_summon) = &attacker_state.main else {
         return false;
     };
-    let Some(top_def) = find_def(main_summon.chain.top().def) else {
+    let Some(top_def) = find_def(&state.cards, main_summon.chain.top().def) else {
         return false;
     };
     let Some(QueryResult::Attack { effects, .. }) = top_def.find(Query::Attack) else {

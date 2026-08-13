@@ -12,7 +12,7 @@
 //! decision 12 makes that union a pause point only when it holds more than
 //! one Type.
 
-use crate::domain::cards::{Query, QueryResult, find_def};
+use crate::domain::cards::{CardSet, Query, QueryResult, find_def};
 use crate::domain::events::GameEvent;
 use crate::domain::ids::{BenchSlot, ManaType, Position};
 use crate::domain::state::{
@@ -57,8 +57,9 @@ fn controlled_positions(player_state: &PlayerState) -> Vec<Position> {
 /// happens if a caller builds a `GameState` by hand with a bad reference;
 /// treating it as "produces nothing" is the honest fallback for a pure
 /// function that cannot error.
-fn produced_types(summon: &SummonInstance) -> Vec<ManaType> {
-    match find_def(summon.chain.top().def).and_then(|def| def.find(Query::ProducedManaTypes)) {
+fn produced_types(cards: &CardSet, summon: &SummonInstance) -> Vec<ManaType> {
+    match find_def(cards, summon.chain.top().def).and_then(|def| def.find(Query::ProducedManaTypes))
+    {
         Some(QueryResult::ProducedManaTypes(types)) => types,
         _ => Vec::new(),
     }
@@ -76,10 +77,10 @@ fn mana_type_index(mana_type: ManaType) -> usize {
 /// controls in Main or on the Bench (rules §11–12, decision 13's anchoring
 /// rule). Deduplicated and returned in the fixed Matter, Mind, Spirit
 /// order, so the result is deterministic regardless of board layout.
-pub(crate) fn anchor_types(player_state: &PlayerState) -> Vec<ManaType> {
+pub(crate) fn anchor_types(cards: &CardSet, player_state: &PlayerState) -> Vec<ManaType> {
     let mut seen = [false; 3];
     for summon in controlled_summons(player_state) {
-        for mana_type in produced_types(summon) {
+        for mana_type in produced_types(cards, summon) {
             seen[mana_type_index(mana_type)] = true;
         }
     }
@@ -94,12 +95,14 @@ pub(crate) fn anchor_types(player_state: &PlayerState) -> Vec<ManaType> {
 /// names one Summon's own production rather than the player's natural
 /// production — no caller enqueues that path yet, so this exists for the
 /// type to have a total, non-panicking implementation.
-fn summon_types(player_state: &PlayerState, position: Position) -> Vec<ManaType> {
+fn summon_types(cards: &CardSet, player_state: &PlayerState, position: Position) -> Vec<ManaType> {
     let summon = match position {
         Position::Main => player_state.main.as_ref(),
         Position::Bench(slot) => player_state.bench[slot.index()].as_ref(),
     };
-    summon.map(produced_types).unwrap_or_default()
+    summon
+        .map(|summon| produced_types(cards, summon))
+        .unwrap_or_default()
 }
 
 /// The Mana Types available for one `ManaSource`, dispatching to the
@@ -107,10 +110,14 @@ fn summon_types(player_state: &PlayerState, position: Position) -> Vec<ManaType>
 /// because `engine::turn::choose_mana_type` answers a paused
 /// `ManaProduction` decision against the same set this module's own
 /// `produce_mana` used to pause it.
-pub(crate) fn available_types(player_state: &PlayerState, source: ManaSource) -> Vec<ManaType> {
+pub(crate) fn available_types(
+    cards: &CardSet,
+    player_state: &PlayerState,
+    source: ManaSource,
+) -> Vec<ManaType> {
     match source {
-        ManaSource::Player => anchor_types(player_state),
-        ManaSource::Summon(position) => summon_types(player_state, position),
+        ManaSource::Player => anchor_types(cards, player_state),
+        ManaSource::Summon(position) => summon_types(cards, player_state, position),
     }
 }
 
@@ -232,7 +239,7 @@ pub(crate) fn draw_card(state: &GameState) -> (GameState, Vec<GameEvent>, DrawOu
 pub(crate) fn produce_mana(state: &GameState, source: ManaSource) -> (GameState, Vec<GameEvent>) {
     let mut state = state.clone();
     let player = state.turn.active_player;
-    let available = available_types(state.players.get(player), source);
+    let available = available_types(&state.cards, state.players.get(player), source);
 
     match available.as_slice() {
         [] => (state, Vec::new()),
@@ -275,7 +282,7 @@ pub(crate) fn begin_main_phase(state: &GameState) -> (GameState, Vec<GameEvent>)
 #[allow(clippy::expect_used)]
 mod tests {
     use super::*;
-    use crate::domain::cards::CardDefId;
+    use crate::domain::cards::fixtures;
     use crate::domain::ids::{CardInstanceId, PlayerId};
     use crate::domain::state::{CardRef, ManaBank, PerPlayer, Phase, TurnState, UpgradeChain};
     use std::collections::VecDeque;
@@ -285,7 +292,7 @@ mod tests {
             chain: UpgradeChain::new(
                 CardRef {
                     instance: CardInstanceId(instance),
-                    def: CardDefId(def),
+                    def: fixtures::id(def),
                 },
                 vec![],
             ),
@@ -351,6 +358,7 @@ mod tests {
             work: VecDeque::new(),
             pending: None,
             outcome: None,
+            cards: fixtures::card_set(),
         }
     }
 
@@ -363,7 +371,10 @@ mod tests {
             ..empty_player_state()
         };
 
-        assert_eq!(anchor_types(&player_state), vec![ManaType::Matter]);
+        assert_eq!(
+            anchor_types(&fixtures::card_set(), &player_state),
+            vec![ManaType::Matter]
+        );
     }
 
     #[test]
@@ -374,7 +385,7 @@ mod tests {
         };
 
         assert_eq!(
-            anchor_types(&player_state),
+            anchor_types(&fixtures::card_set(), &player_state),
             vec![ManaType::Matter, ManaType::Mind]
         );
     }
@@ -393,14 +404,17 @@ mod tests {
         // anchor deduplicates rather than accumulating one entry per
         // Summon.
         assert_eq!(
-            anchor_types(&player_state),
+            anchor_types(&fixtures::card_set(), &player_state),
             vec![ManaType::Matter, ManaType::Mind]
         );
     }
 
     #[test]
     fn anchor_types_is_empty_for_a_board_with_no_summons() {
-        assert_eq!(anchor_types(&empty_player_state()), Vec::<ManaType>::new());
+        assert_eq!(
+            anchor_types(&fixtures::card_set(), &empty_player_state()),
+            Vec::<ManaType>::new()
+        );
     }
 
     // -- ready_all ---------------------------------------------------------
@@ -431,13 +445,13 @@ mod tests {
         let mut state = base_state();
         let top = CardRef {
             instance: CardInstanceId(50),
-            def: CardDefId("quarry-whelp"),
+            def: fixtures::id("quarry-whelp"),
         };
         state.players.get_mut(PlayerId::One).deck = vec![
             top,
             CardRef {
                 instance: CardInstanceId(51),
-                def: CardDefId("quarry-whelp"),
+                def: fixtures::id("quarry-whelp"),
             },
         ];
 

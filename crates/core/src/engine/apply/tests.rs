@@ -1,5 +1,5 @@
 use super::*;
-use crate::domain::cards::CardDefId;
+use crate::domain::cards::fixtures;
 use crate::domain::ids::{BenchSlot, CardInstanceId, ManaType, Position};
 use crate::domain::state::{
     CardRef, GameOutcome, LossReason, ManaBank, ManaSource, PerPlayer, Phase, PlayerState,
@@ -12,7 +12,7 @@ fn summon(owner: PlayerId) -> SummonInstance {
         chain: UpgradeChain::new(
             CardRef {
                 instance: CardInstanceId(1),
-                def: CardDefId("quarry-whelp"),
+                def: fixtures::id("quarry-whelp"),
             },
             vec![],
         ),
@@ -58,6 +58,7 @@ fn base_state() -> GameState {
         work: VecDeque::new(),
         pending: None,
         outcome: None,
+        cards: fixtures::card_set(),
     }
 }
 
@@ -68,7 +69,7 @@ fn end_turn(player: PlayerId) -> GameAction {
 fn card_ref(instance: u32, def: &'static str) -> CardRef {
     CardRef {
         instance: CardInstanceId(instance),
-        def: CardDefId(def),
+        def: fixtures::id(def),
     }
 }
 

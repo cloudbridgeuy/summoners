@@ -181,12 +181,11 @@ fn return_spell_from_discard(
     controller: PlayerId,
 ) -> (GameState, Vec<GameEvent>) {
     let mut state = state.clone();
+    let cards = state.cards.clone();
     let player_state = state.players.get_mut(controller);
-    let Some(index) = player_state
-        .discard
-        .iter()
-        .position(|card_ref| find_def(card_ref.def).is_some_and(|def| def.kind == CardKind::Spell))
-    else {
+    let Some(index) = player_state.discard.iter().position(|card_ref| {
+        find_def(&cards, card_ref.def).is_some_and(|def| def.kind == CardKind::Spell)
+    }) else {
         return (state, Vec::new());
     };
     let card = player_state.discard.remove(index);
@@ -204,12 +203,11 @@ fn return_spell_to_deck_top(
     controller: PlayerId,
 ) -> (GameState, Vec<GameEvent>) {
     let mut state = state.clone();
+    let cards = state.cards.clone();
     let player_state = state.players.get_mut(controller);
-    let Some(index) = player_state
-        .hand
-        .iter()
-        .position(|card_ref| find_def(card_ref.def).is_some_and(|def| def.kind == CardKind::Spell))
-    else {
+    let Some(index) = player_state.hand.iter().position(|card_ref| {
+        find_def(&cards, card_ref.def).is_some_and(|def| def.kind == CardKind::Spell)
+    }) else {
         return (state, Vec::new());
     };
     let card = player_state.hand.remove(index);

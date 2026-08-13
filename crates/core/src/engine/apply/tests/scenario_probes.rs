@@ -73,7 +73,7 @@ fn every_signature_chains_elite_is_reachable_through_from_scenario() {
             active_player: PlayerId::One,
         };
 
-        let state = from_scenario(&scenario).unwrap_or_else(|error| {
+        let state = from_scenario(fixtures::card_set(), &scenario).unwrap_or_else(|error| {
             panic!("{base}/{enhanced}/{elite} is a legal Base/Enhanced/Elite lineage: {error:?}")
         });
 
@@ -84,7 +84,7 @@ fn every_signature_chains_elite_is_reachable_through_from_scenario() {
                 .main
                 .as_ref()
                 .map(|summon| summon.chain.top().def),
-            Some(CardDefId(elite)),
+            Some(fixtures::id(elite)),
             "{base}/{enhanced}/{elite}'s printed Elite must sit on top of the parsed chain"
         );
     }
@@ -151,7 +151,7 @@ fn a_single_destruction_check_can_end_both_players_mains_at_once() {
         ),
         active_player: PlayerId::One,
     };
-    let state = from_scenario(&scenario).expect("both boards are legal");
+    let state = from_scenario(fixtures::card_set(), &scenario).expect("both boards are legal");
 
     let declared = apply(
         &state,
@@ -245,7 +245,7 @@ fn a_single_destruction_check_can_end_both_players_mains_at_once() {
     assert_eq!(two.main_losses, 1);
     assert_eq!(
         two.main.as_ref().map(|summon| summon.chain.top().def),
-        Some(CardDefId("quarry-whelp")),
+        Some(fixtures::id("quarry-whelp")),
         "Two's promoted Bench Summon now occupies Main"
     );
     assert_eq!(two.bench, [None, None, None]);
@@ -322,7 +322,7 @@ fn a_rooted_main_blocks_rearrange_for_the_opponents_whole_turn_then_allows_it() 
         ),
         active_player: PlayerId::Two,
     };
-    let state = from_scenario(&scenario).expect("both boards are legal");
+    let state = from_scenario(fixtures::card_set(), &scenario).expect("both boards are legal");
 
     // Two roots their own Main: Root and Renew, cost Matter + Spirit.
     let rooted = apply(
@@ -393,12 +393,12 @@ fn a_rooted_main_blocks_rearrange_for_the_opponents_whole_turn_then_allows_it() 
     let two = second_rearrange.state.players.get(PlayerId::Two);
     assert_eq!(
         two.main.as_ref().map(|summon| summon.chain.top().def),
-        Some(CardDefId("quarry-whelp")),
+        Some(fixtures::id("quarry-whelp")),
         "Two's former Bench Summon now occupies Main"
     );
     assert_eq!(
         two.bench[0].as_ref().map(|summon| summon.chain.top().def),
-        Some(CardDefId("old-sow-of-the-barrow")),
+        Some(fixtures::id("old-sow-of-the-barrow")),
         "the Old Sow itself was swapped onto the vacated Bench slot"
     );
 }
@@ -489,7 +489,7 @@ fn a_destruction_trigger_opens_a_nested_window_before_its_own_chain_finishes() {
         ),
         active_player: PlayerId::One,
     };
-    let state = from_scenario(&scenario).expect("both boards are legal");
+    let state = from_scenario(fixtures::card_set(), &scenario).expect("both boards are legal");
 
     let declared = apply(
         &state,
@@ -581,7 +581,7 @@ fn a_destruction_trigger_opens_a_nested_window_before_its_own_chain_finishes() {
     assert_eq!(two.hand, vec![card_ref(210, "ember-lance")]);
     assert_eq!(
         two.main.as_ref().map(|summon| summon.chain.top().def),
-        Some(CardDefId("griefsinger")),
+        Some(fixtures::id("griefsinger")),
         "the interrupted destruction chain resumed and completed once the nested window closed"
     );
     assert_eq!(two.bench, [None, None, None]);
@@ -635,7 +635,7 @@ fn a_resolved_enchantment_stays_in_play_through_a_full_turn_handover() {
         ),
         active_player: PlayerId::One,
     };
-    let state = from_scenario(&scenario).expect("both boards are legal");
+    let state = from_scenario(fixtures::card_set(), &scenario).expect("both boards are legal");
 
     let cast = apply(
         &state,
@@ -731,7 +731,7 @@ fn a_second_turn_reaches_its_own_main_phase_and_can_act_in_it() {
         ),
         active_player: PlayerId::One,
     };
-    let state = from_scenario(&scenario).expect("both boards are legal");
+    let state = from_scenario(fixtures::card_set(), &scenario).expect("both boards are legal");
 
     let handed_over = advance_turn(&state, PlayerId::One);
     assert_eq!(handed_over.state.turn.active_player, PlayerId::Two);
@@ -765,7 +765,7 @@ fn a_second_turn_reaches_its_own_main_phase_and_can_act_in_it() {
         played.state.players.get(PlayerId::Two).bench[0]
             .as_ref()
             .map(|summon| summon.chain.top().def),
-        Some(CardDefId("quarry-whelp")),
+        Some(fixtures::id("quarry-whelp")),
         "the freshly played Base Summon now occupies Two's Bench"
     );
 }

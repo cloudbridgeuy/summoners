@@ -2,7 +2,7 @@
 //! module's items through `super::*`.
 
 use super::*;
-use crate::domain::cards::CardDefId;
+use crate::domain::cards::fixtures;
 use crate::domain::ids::{CardInstanceId, PlayerId, Position};
 use crate::domain::state::{
     CardRef, ManaBank, ManaSource, MovementStep, PendingInput, PerPlayer, Phase, PlayerState,
@@ -15,7 +15,7 @@ fn whelp(owner: PlayerId) -> SummonInstance {
         chain: UpgradeChain::new(
             CardRef {
                 instance: CardInstanceId(1),
-                def: CardDefId("quarry-whelp"),
+                def: fixtures::id("quarry-whelp"),
             },
             vec![],
         ),
@@ -36,7 +36,7 @@ fn player_state(owner: PlayerId) -> PlayerState {
         bench: [None, None, None],
         deck: vec![CardRef {
             instance: CardInstanceId(10),
-            def: CardDefId("quarry-whelp"),
+            def: fixtures::id("quarry-whelp"),
         }],
         hand: vec![],
         prizes: vec![],
@@ -64,6 +64,7 @@ fn base_state() -> GameState {
         work: VecDeque::new(),
         pending: None,
         outcome: None,
+        cards: fixtures::card_set(),
     }
 }
 
@@ -185,7 +186,7 @@ fn drain_stops_as_soon_as_produce_mana_pauses_on_a_choice() {
         chain: UpgradeChain::new(
             CardRef {
                 instance: CardInstanceId(2),
-                def: CardDefId("set-path-adept"),
+                def: fixtures::id("set-path-adept"),
             },
             vec![],
         ),
@@ -296,7 +297,7 @@ fn drain_fires_an_entering_main_trigger_and_sets_the_entered_flag() {
         chain: UpgradeChain::new(
             CardRef {
                 instance: CardInstanceId(2),
-                def: CardDefId("hearth-warden"),
+                def: fixtures::id("hearth-warden"),
             },
             vec![],
         ),
@@ -346,7 +347,7 @@ fn drain_opens_a_window_for_a_respondable_trigger_and_resumes_the_interrupted_dr
         chain: UpgradeChain::new(
             CardRef {
                 instance: CardInstanceId(3),
-                def: CardDefId("spite-thorn"),
+                def: fixtures::id("spite-thorn"),
             },
             vec![],
         ),
@@ -398,7 +399,7 @@ fn drain_resumes_the_interrupted_work_once_two_passes_close_the_triggers_window(
         chain: UpgradeChain::new(
             CardRef {
                 instance: CardInstanceId(3),
-                def: CardDefId("spite-thorn"),
+                def: fixtures::id("spite-thorn"),
             },
             vec![],
         ),
@@ -606,7 +607,7 @@ fn drain_resolves_a_support_spell_and_discards_it_to_its_casters_pile() {
     });
     let card = CardRef {
         instance: CardInstanceId(99),
-        def: CardDefId("renewing-balm"),
+        def: fixtures::id("renewing-balm"),
     };
     state.stack = vec![StackItem::Spell {
         caster: PlayerId::One,
@@ -652,7 +653,7 @@ fn drain_resolves_an_attack_spell_against_the_opponents_main() {
     state.turn.window = None;
     let card = CardRef {
         instance: CardInstanceId(99),
-        def: CardDefId("ember-lance"),
+        def: fixtures::id("ember-lance"),
     };
     state.stack = vec![StackItem::Spell {
         caster: PlayerId::One,
@@ -698,7 +699,7 @@ fn drain_resolves_a_draw_spell_and_settles_the_loss_check_it_enqueues() {
     state.turn.window = None;
     let card = CardRef {
         instance: CardInstanceId(99),
-        def: CardDefId("scrying-glass"),
+        def: fixtures::id("scrying-glass"),
     };
     state.stack = vec![StackItem::Spell {
         caster: PlayerId::Two,

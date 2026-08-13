@@ -66,7 +66,7 @@ fn opposing_retreat_cost_delta(state: &GameState, player: PlayerId) -> i32 {
     positions
         .iter()
         .filter_map(|&position| summon_at(opponent_state, position))
-        .filter_map(|summon| find_def(summon.chain.top().def))
+        .filter_map(|summon| find_def(&state.cards, summon.chain.top().def))
         .filter_map(|top_def| match top_def.find(Query::Passive) {
             Some(QueryResult::Passive(Modifier::OpposingRetreatCostDelta(delta))) => Some(delta),
             _ => None,
@@ -106,7 +106,7 @@ pub(crate) fn play_summon(
     };
     let card_ref = player_state.hand[hand_index];
 
-    let Some(def) = find_def(card_ref.def) else {
+    let Some(def) = find_def(&state.cards, card_ref.def) else {
         return Err(ActionError::UnknownCard);
     };
     if def.kind != CardKind::Summon || current_form(&def) != Some(Form::Base) {
@@ -162,7 +162,7 @@ pub(crate) fn upgrade_summon(
     };
     let card_ref = player_state.hand[hand_index];
 
-    let Some(def) = find_def(card_ref.def) else {
+    let Some(def) = find_def(&state.cards, card_ref.def) else {
         return Err(ActionError::UnknownCard);
     };
     if def.kind != CardKind::Summon {
@@ -172,7 +172,7 @@ pub(crate) fn upgrade_summon(
         return Err(ActionError::UnknownCard);
     };
 
-    let Some(top_def) = find_def(summon.chain.top().def) else {
+    let Some(top_def) = find_def(&state.cards, summon.chain.top().def) else {
         return Err(ActionError::UnknownCard);
     };
     let Some(top_form) = current_form(&top_def) else {
@@ -233,7 +233,7 @@ pub(crate) fn retreat(
         return Err(ActionError::EmptyPosition);
     }
 
-    let Some(top_def) = find_def(main_summon.chain.top().def) else {
+    let Some(top_def) = find_def(&state.cards, main_summon.chain.top().def) else {
         return Err(ActionError::UnknownCard);
     };
     let Some(printed_cost) = retreat_cost(&top_def) else {
@@ -323,7 +323,7 @@ mod tests {
     #![allow(clippy::expect_used)]
 
     use super::*;
-    use crate::domain::cards::CardDefId;
+    use crate::domain::cards::fixtures;
     use crate::domain::ids::CardInstanceId;
     use crate::domain::state::{
         CardRef, ManaBank, PendingInput, PerPlayer, StackWindow, TurnState,
@@ -333,7 +333,7 @@ mod tests {
     fn card_ref(instance: u32, def: &'static str) -> CardRef {
         CardRef {
             instance: CardInstanceId(instance),
-            def: CardDefId(def),
+            def: fixtures::id(def),
         }
     }
 
@@ -382,6 +382,7 @@ mod tests {
             work: VecDeque::new(),
             pending: None,
             outcome: None,
+            cards: fixtures::card_set(),
         }
     }
 
@@ -648,11 +649,11 @@ mod tests {
         let player = outcome.state.players.get(PlayerId::One);
         assert_eq!(
             player.main.as_ref().map(|s| s.chain.base().def),
-            Some(CardDefId("set-path-adept"))
+            Some(fixtures::id("set-path-adept"))
         );
         assert_eq!(
             player.bench[0].as_ref().map(|s| s.chain.base().def),
-            Some(CardDefId("quarry-whelp"))
+            Some(fixtures::id("quarry-whelp"))
         );
         assert_eq!(
             player.mana,
@@ -889,7 +890,8 @@ mod tests {
             ),
             active_player: PlayerId::One,
         };
-        let state = from_scenario(&scenario).expect("this board is a legal scenario");
+        let state =
+            from_scenario(fixtures::card_set(), &scenario).expect("this board is a legal scenario");
 
         // 1. Play the Base Set-Path Adept from hand onto the empty Bench.
         let outcome = apply(
@@ -936,7 +938,7 @@ mod tests {
                 .main
                 .as_ref()
                 .map(|s| s.chain.top().def),
-            Some(CardDefId("quarry-brute"))
+            Some(fixtures::id("quarry-brute"))
         );
 
         // 3. Retreat: pay Quarry Brute's printed Retreat Cost of 2 and swap
@@ -968,12 +970,12 @@ mod tests {
         let one = outcome.state.players.get(PlayerId::One);
         assert_eq!(
             one.main.as_ref().map(|s| s.chain.base().def),
-            Some(CardDefId("set-path-adept"))
+            Some(fixtures::id("set-path-adept"))
         );
         assert!(one.main.as_ref().is_some_and(|s| s.entered_main_this_turn));
         assert_eq!(
             one.bench[0].as_ref().map(|s| s.chain.top().def),
-            Some(CardDefId("quarry-brute"))
+            Some(fixtures::id("quarry-brute"))
         );
         assert_eq!(
             one.mana,

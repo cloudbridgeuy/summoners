@@ -15,7 +15,7 @@
 //! `ComponentField`, implemented once per component so the dispatch stays
 //! total and panic-free.
 
-use super::{Cost, EffectLeaf, Form, Modifier};
+use super::{Cost, EffectLeaf, Form, Modifier, SpellTiming, TriggerEvent};
 use crate::domain::ids::ManaType;
 
 /// A core-defined, opaque card or ability identity. The core holds,
@@ -136,6 +136,14 @@ pub struct Attack;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Trigger;
 
+/// A zero-sized marker for `Component::Respondable`: this ability may be
+/// responded to while it waits on the Stack (rules §37–38). Presence, not a
+/// boolean payload, since absence already answers "not respondable" on its
+/// own — a card that never prints this component needs no separate `false`
+/// to write down (make impossible states impossible).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Respondable;
+
 /// One typed fact or ability an `Entity` carries. The enum is closed and
 /// additive: a new variant never invalidates a card or a read already
 /// written against an earlier one. A card declares facts here; it declares
@@ -160,6 +168,19 @@ pub enum Component {
     /// nothing ever references an effect, so it stays a leaf value.
     Effect(EffectLeaf),
     Passive(Modifier),
+    /// A Spell's timing family (rules §34): whether it may be cast
+    /// proactively during its controller's own resting Main Phase, or only
+    /// as a response while its caster holds Priority.
+    Timing(SpellTiming),
+    /// The event a Trigger fires on (rules §36–41). Read off the same
+    /// nested entity a `Component::Trigger` wraps, alongside that entity's
+    /// own `Component::Effect`s and, if it carries one, its
+    /// `Component::Respondable` marker.
+    Event(TriggerEvent),
+    /// Marks the entity carrying it as respondable while it waits on the
+    /// Stack (rules §37–38). See `Respondable`'s own doc comment for why
+    /// this is a presence marker rather than a boolean payload.
+    Respondable,
 }
 
 /// One printed card, or one ability nested inside a card, sharing the same
@@ -186,6 +207,9 @@ pub enum ComponentKind {
     Trigger,
     Effect,
     Passive,
+    Timing,
+    Event,
+    Respondable,
 }
 
 /// What a demanded component's absence means: this game (or, inside
@@ -245,6 +269,24 @@ component_field!(Attack, Entity, Attack, Component::Attack(entity) => entity);
 component_field!(Trigger, Entity, Trigger, Component::Trigger(entity) => entity);
 component_field!(EffectLeaf, EffectLeaf, Effect, Component::Effect(effect) => effect);
 component_field!(Modifier, Modifier, Passive, Component::Passive(modifier) => modifier);
+component_field!(SpellTiming, SpellTiming, Timing, Component::Timing(timing) => timing);
+component_field!(TriggerEvent, TriggerEvent, Event, Component::Event(event) => event);
+
+impl ComponentField for Respondable {
+    type Output = Respondable;
+
+    fn component_kind() -> ComponentKind {
+        ComponentKind::Respondable
+    }
+
+    fn extract(component: &Component) -> Option<&Self::Output> {
+        const MARKER: Respondable = Respondable;
+        match component {
+            Component::Respondable => Some(&MARKER),
+            _ => None,
+        }
+    }
+}
 
 impl Entity {
     /// The first matching component, or `None`. Absence is a legitimate
@@ -560,5 +602,45 @@ mod tests {
             passive.get::<Modifier>(),
             Some(&Modifier::OpposingRetreatCostDelta(1))
         );
+
+        let timing = Entity {
+            id: id(8),
+            components: vec![Component::Timing(SpellTiming::Attack)],
+        };
+        assert_eq!(timing.get::<SpellTiming>(), Some(&SpellTiming::Attack));
+
+        let event = Entity {
+            id: id(9),
+            components: vec![Component::Event(TriggerEvent::YourUpkeep)],
+        };
+        assert_eq!(event.get::<TriggerEvent>(), Some(&TriggerEvent::YourUpkeep));
+
+        let respondable = Entity {
+            id: id(10),
+            components: vec![Component::Respondable],
+        };
+        assert_eq!(respondable.get::<Respondable>(), Some(&Respondable));
+    }
+
+    /// A Trigger's nested entity carries its event directly, and the
+    /// `Respondable` marker's presence or absence — not a boolean payload —
+    /// is what a rule reads to decide whether the trigger may be responded
+    /// to (rules §37–38).
+    #[test]
+    fn respondable_presence_distinguishes_a_respondable_trigger_from_an_immediate_one() {
+        let immediate = Entity {
+            id: id(30),
+            components: vec![Component::Event(TriggerEvent::EntersMain)],
+        };
+        assert_eq!(immediate.get::<Respondable>(), None);
+
+        let respondable = Entity {
+            id: id(31),
+            components: vec![
+                Component::Event(TriggerEvent::AnySummonDestroyed),
+                Component::Respondable,
+            ],
+        };
+        assert_eq!(respondable.get::<Respondable>(), Some(&Respondable));
     }
 }

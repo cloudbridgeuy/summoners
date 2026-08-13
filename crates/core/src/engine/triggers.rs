@@ -49,7 +49,7 @@ fn trigger_at(
     event: TriggerEvent,
 ) -> Option<(bool, Vec<EffectLeaf>)> {
     let summon = summon_at(state, player, position)?;
-    let def = find_def(summon.chain.top().def)?;
+    let def = find_def(&state.cards, summon.chain.top().def)?;
     match def.find(Query::Trigger) {
         Some(QueryResult::Trigger {
             event: found,
@@ -227,7 +227,7 @@ pub(crate) fn fire_queued(
 #[allow(clippy::expect_used)]
 mod tests {
     use super::*;
-    use crate::domain::cards::CardDefId;
+    use crate::domain::cards::fixtures;
     use crate::domain::ids::{BenchSlot, CardInstanceId, Position};
     use crate::domain::state::{
         CardRef, ManaBank, PerPlayer, Phase, PlayerState, TurnState, UpgradeChain,
@@ -237,7 +237,7 @@ mod tests {
     fn card(def: &'static str) -> CardRef {
         CardRef {
             instance: CardInstanceId(1),
-            def: CardDefId(def),
+            def: fixtures::id(def),
         }
     }
 
@@ -286,6 +286,7 @@ mod tests {
             work: VecDeque::new(),
             pending: None,
             outcome: None,
+            cards: fixtures::card_set(),
         }
     }
 

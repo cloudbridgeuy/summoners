@@ -10,7 +10,7 @@
 //! later step for the same position never has to choose between two players
 //! still holding an over-damaged Summon there at once.
 
-use crate::domain::cards::{Query, QueryResult, TriggerEvent, find_def};
+use crate::domain::cards::{CardSet, Query, QueryResult, TriggerEvent, find_def};
 use crate::domain::errors::ActionError;
 use crate::domain::events::GameEvent;
 use crate::domain::ids::{BenchSlot, PlayerId, Position};
@@ -42,8 +42,8 @@ fn take_at(player_state: &mut PlayerState, position: Position) -> Option<SummonI
 
 /// The printed Life on `summon`'s current, topmost card, or none for a card
 /// with no `Life` node.
-fn life_of(summon: &SummonInstance) -> Option<u32> {
-    match find_def(summon.chain.top().def)?.find(Query::Life) {
+fn life_of(cards: &CardSet, summon: &SummonInstance) -> Option<u32> {
+    match find_def(cards, summon.chain.top().def)?.find(Query::Life) {
         Some(QueryResult::Life(life)) => Some(life),
         _ => None,
     }
@@ -55,7 +55,7 @@ fn is_destroyed(state: &GameState, player: PlayerId, position: Position) -> bool
     let Some(summon) = summon_at(state.players.get(player), position) else {
         return false;
     };
-    let Some(life) = life_of(summon) else {
+    let Some(life) = life_of(&state.cards, summon) else {
         return false;
     };
     summon.damage >= life
@@ -323,7 +323,7 @@ pub(crate) fn resolve_movement_consequences(
 #[allow(clippy::expect_used)]
 mod tests {
     use super::*;
-    use crate::domain::cards::CardDefId;
+    use crate::domain::cards::fixtures;
     use crate::domain::ids::CardInstanceId;
     use crate::domain::state::{
         CardRef, GameOutcome, LossReason, ManaBank, PerPlayer, Phase, TurnState, UpgradeChain,
@@ -335,7 +335,7 @@ mod tests {
             chain: UpgradeChain::new(
                 CardRef {
                     instance: CardInstanceId(1),
-                    def: CardDefId("quarry-whelp"),
+                    def: fixtures::id("quarry-whelp"),
                 },
                 vec![],
             ),
@@ -381,6 +381,7 @@ mod tests {
             work: VecDeque::new(),
             pending: None,
             outcome: None,
+            cards: fixtures::card_set(),
         }
     }
 
@@ -483,7 +484,7 @@ mod tests {
             state.players.get(PlayerId::Two).discard,
             vec![CardRef {
                 instance: CardInstanceId(1),
-                def: CardDefId("quarry-whelp"),
+                def: fixtures::id("quarry-whelp"),
             }]
         );
     }
@@ -509,7 +510,7 @@ mod tests {
             chain: UpgradeChain::new(
                 CardRef {
                     instance: CardInstanceId(9),
-                    def: CardDefId("spite-thorn"),
+                    def: fixtures::id("spite-thorn"),
                 },
                 vec![],
             ),
@@ -552,7 +553,7 @@ mod tests {
     fn prize(instance: u32) -> CardRef {
         CardRef {
             instance: CardInstanceId(instance),
-            def: CardDefId("quarry-whelp"),
+            def: fixtures::id("quarry-whelp"),
         }
     }
 
