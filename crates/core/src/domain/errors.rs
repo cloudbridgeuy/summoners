@@ -4,7 +4,7 @@
 //! companion: it names the shape violations parsing itself can detect
 //! (decision 17).
 
-use crate::domain::cards::CardDefId;
+use crate::domain::cards::EntityId;
 use crate::domain::ids::{CardInstanceId, PlayerId, Position};
 use crate::domain::state::ManaBank;
 
@@ -57,8 +57,8 @@ pub enum ActionError {
 pub enum InvalidScenario {
     /// The same `CardInstanceId` appears more than once across the board.
     DuplicateCardInstance(CardInstanceId),
-    /// A card names a `CardDefId` the registry has no fixture for.
-    UnknownCardDef(CardDefId),
+    /// A card names an `EntityId` the card set has no entity for.
+    UnknownCardDef(EntityId),
     /// A Summon description names a chain with zero cards in it.
     EmptyUpgradeChain {
         player: PlayerId,
@@ -76,6 +76,8 @@ pub enum InvalidScenario {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::expect_used)]
+
     use super::*;
 
     #[test]
@@ -106,7 +108,9 @@ mod tests {
     fn every_invalid_scenario_variant_constructs() {
         let errors = [
             InvalidScenario::DuplicateCardInstance(CardInstanceId(1)),
-            InvalidScenario::UnknownCardDef(CardDefId("missing")),
+            InvalidScenario::UnknownCardDef(
+                EntityId::parse(&"f".repeat(32)).expect("valid probe id"),
+            ),
             InvalidScenario::EmptyUpgradeChain {
                 player: PlayerId::One,
                 position: Position::Main,

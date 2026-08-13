@@ -9,7 +9,7 @@
 //! the segment base the trigger just pushed — exactly where they are until
 //! that window closes.
 
-use crate::domain::cards::{CardDefId, CardKind, EffectLeaf, Query, QueryResult, find_def};
+use crate::domain::cards::{CardKind, CardSet, EffectLeaf, EntityId, Query, QueryResult, find_def};
 use crate::domain::events::GameEvent;
 use crate::domain::ids::{PlayerId, Position};
 use crate::domain::state::{CardRef, GameState, StackItem, WorkItem};
@@ -206,8 +206,14 @@ fn resolve_spell(
     card: CardRef,
     targets: &[Position],
 ) -> (GameState, Vec<GameEvent>) {
-    let (mut state, events) = apply_leaves(state, caster, targets, &spell_effects(card.def));
-    let is_enchantment = find_def(card.def).is_some_and(|def| def.kind == CardKind::Enchantment);
+    let (mut state, events) = apply_leaves(
+        state,
+        caster,
+        targets,
+        &spell_effects(&state.cards, card.def),
+    );
+    let is_enchantment =
+        find_def(&state.cards, card.def).is_some_and(|def| def.kind == CardKind::Enchantment);
     let player_state = state.players.get_mut(caster);
     if is_enchantment {
         player_state.enchantments.push(card);
@@ -252,7 +258,7 @@ fn attacker_effects(state: &GameState, attacker: PlayerId) -> Vec<EffectLeaf> {
     let Some(main_summon) = &state.players.get(attacker).main else {
         return Vec::new();
     };
-    let Some(def) = find_def(main_summon.chain.top().def) else {
+    let Some(def) = find_def(&state.cards, main_summon.chain.top().def) else {
         return Vec::new();
     };
     match def.find(Query::Attack) {
@@ -263,8 +269,8 @@ fn attacker_effects(state: &GameState, attacker: PlayerId) -> Vec<EffectLeaf> {
 
 /// A Spell's or an Enchantment's printed effects, read off its card
 /// definition.
-fn spell_effects(def_id: CardDefId) -> Vec<EffectLeaf> {
-    let Some(def) = find_def(def_id) else {
+fn spell_effects(cards: &CardSet, def_id: EntityId) -> Vec<EffectLeaf> {
+    let Some(def) = find_def(cards, def_id) else {
         return Vec::new();
     };
     match def.kind {

@@ -162,12 +162,13 @@ pub(crate) fn convert_coin(
     }
 
     let mut state = state.clone();
+    let cards = state.cards.clone();
     let player_state = state.players.get_mut(player);
 
     if !player_state.has_coin {
         return Err(ActionError::InvalidTarget);
     }
-    if !anchor_types(player_state).contains(&mana_type) {
+    if !anchor_types(&cards, player_state).contains(&mana_type) {
         return Err(ActionError::InvalidTarget);
     }
 
@@ -200,7 +201,7 @@ pub(crate) fn choose_mana_type(
     }
 
     let mut state = state.clone();
-    let available = available_types(state.players.get(pending_player), source);
+    let available = available_types(&state.cards, state.players.get(pending_player), source);
     if !available.contains(&mana_type) {
         return Err(ActionError::InvalidTarget);
     }
@@ -222,7 +223,7 @@ pub(crate) fn choose_mana_type(
 #[allow(clippy::expect_used)]
 mod tests {
     use super::*;
-    use crate::domain::cards::CardDefId;
+    use crate::domain::cards::fixtures;
     use crate::domain::ids::{CardInstanceId, Position};
     use crate::domain::state::{
         CardRef, ManaBank, PerPlayer, PlayerState, StackWindow, SummonInstance, UpgradeChain,
@@ -234,7 +235,7 @@ mod tests {
             chain: UpgradeChain::new(
                 CardRef {
                     instance: CardInstanceId(instance),
-                    def: CardDefId(def),
+                    def: fixtures::id(def),
                 },
                 vec![],
             ),
@@ -300,6 +301,7 @@ mod tests {
             work: VecDeque::new(),
             pending: None,
             outcome: None,
+            cards: fixtures::card_set(),
         }
     }
 
@@ -385,7 +387,7 @@ mod tests {
         });
         state.players.get_mut(PlayerId::Two).deck = vec![CardRef {
             instance: CardInstanceId(20),
-            def: CardDefId("quarry-whelp"),
+            def: fixtures::id("quarry-whelp"),
         }];
 
         let outcome = full_end_turn(&state, PlayerId::One);
@@ -539,11 +541,11 @@ mod tests {
         // of stalling on an empty-Deck loss this test has no interest in.
         state.players.get_mut(PlayerId::One).deck = vec![CardRef {
             instance: CardInstanceId(30),
-            def: CardDefId("quarry-whelp"),
+            def: fixtures::id("quarry-whelp"),
         }];
         state.players.get_mut(PlayerId::Two).deck = vec![CardRef {
             instance: CardInstanceId(31),
-            def: CardDefId("quarry-whelp"),
+            def: fixtures::id("quarry-whelp"),
         }];
 
         // Turn 1 (One) ends; Two's turn runs, its Upkeep drained in full —

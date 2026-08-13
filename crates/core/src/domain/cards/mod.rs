@@ -1,53 +1,29 @@
 //! The card container (`entity`, `set`) and, alongside it, the provisional
-//! card representation (design decision 6) that the engine still reads
-//! through.
+//! card representation (design decision 6) that most of the engine still
+//! reads through, by way of `shim::find_def`.
 //!
 //! `entity` and `set` hold the settled container: `Entity`, `Component`, and
-//! `CardSet`. They are additive — no engine call site reads them yet — and
-//! their vocabulary is public API (design decision 18).
+//! `CardSet`. A `GameState` carries one `Arc<CardSet>`; every card fact a
+//! rule needs comes from reading it, directly or through the shim.
 //!
-//! Everything below is the provisional tree: a card is a tree of typed nodes
-//! and effect leaves, reached only through `CardDef::find`. When the engine
-//! migrates onto the container, `CardDef` and `find` are deleted. Everything
-//! below `CardDefId` stays `pub(crate)` because no code outside this crate
-//! should depend on today's shape. `Form`, `Cost`, and `Modifier` are the
-//! three exceptions: the container's `Component` enum names them directly,
-//! so they are `pub`.
+//! Everything below `CardDef` is the provisional tree: a card is a tree of
+//! typed nodes and effect leaves, reached only through `CardDef::find`.
+//! `shim::find_def` builds one on demand by projecting an `Entity`'s
+//! components into it, so a call site written against `CardDef` never has to
+//! know whether the fact it read came straight off an `Entity` or through
+//! this tree. `CardDef`, `CardNode`, `Query`, `QueryResult`, and `find` stay
+//! `pub(crate)` because no code outside this crate should depend on this
+//! provisional shape. `Form`, `Cost`, `Modifier`, `TriggerEvent`, and
+//! `EffectLeaf` are exceptions: the container's `Component` enum names them
+//! directly, so they are `pub`.
 //!
-//! The fixture registry in `registry.rs` is a minimal set of vanilla
-//! Summons — `Life`, `Produces`, `RetreatCost`, `Form`, and a plain `Attack`
-//! node only — sufficient for `scenario::from_scenario`'s chain-order and board
-//! tests, and for a normal attack to have a cost and a Damage amount to
-//! pay and apply. It also carries four vanilla Spells — one Attack Spell,
-//! one Support Spell that heals, one Support Spell that draws, and one
-//! Support Spell that readies an Exhausted Summon (rules §53) — enough for
-//! `engine::stack::cast_spell` and `engine::resolution` to have a real cost,
-//! timing family, and effect leaf to pay, gate, and resolve. Three of the
-//! Summon fixtures each print one Skill (`MoveSummon`, `SwapPositions`, or
-//! `ProduceMana`), enough for `engine::skills::activate_skill` to pay, gate,
-//! and resolve a Skill through the same interpreter (rules §15, §43). Two
-//! further Summons each carry one `CardNode::Trigger`: Hearth Warden fires an
-//! immediate Heal on entering Main (rules §36, §39), and Spite Thorn fires a
-//! respondable Damage trigger whenever any Summon is destroyed (rules §37,
-//! §41) — enough for `engine::triggers` to have one non-respondable and one
-//! respondable fixture to discover and resolve. A third, Dawn Tender, fires
-//! an immediate Heal at the start of its controller's own Upkeep (rules
-//! §36), exercising the same discovery path `engine::turn::handover` queues
-//! every turn. A fourth Spell carries a Ready effect (rules §53). The
-//! registry also carries the four signature cards from
-//! `designs/types_archetypes.md` (Colossus of the Quarry, Warden of Set
-//! Paths, Griefsinger, Old Sow of the Barrow), each atop its own
-//! Base/Enhanced/Elite fixture lineage, and the vanilla Enchantment (design
-//! decision 1). Stats and names are test data, not final card designs
-//! (decision 9).
+//! `fixtures` (test-only) holds the entity data every test in this crate
+//! builds a `CardSet` against: the same vanilla and signature cards this
+//! module used to hold as `CardDef` literals, now authored as `Entity`
+//! values instead.
 
 use crate::domain::actions::SkillIndex;
 use crate::domain::ids::ManaType;
-
-/// A stable key for one printed card in the fixture registry. Scenarios
-/// reference cards by this id; it is public because `Scenario` is public.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct CardDefId(pub &'static str);
 
 /// The three card families (rules §3).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -72,7 +48,7 @@ pub enum Form {
 /// response; an Attack Spell is tied to Combat and may only be cast as a
 /// response while its caster holds Priority.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum SpellTiming {
+pub enum SpellTiming {
     Support,
     Attack,
 }
@@ -275,11 +251,12 @@ pub(crate) enum QueryResult {
     },
 }
 
-/// One printed card: an id, a display name, its family, and its nodes.
+/// One printed card, projected from an `Entity` (see `shim`): its id, its
+/// display name, its family, and its nodes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct CardDef {
-    pub id: CardDefId,
-    pub name: &'static str,
+    pub id: entity::EntityId,
+    pub name: String,
     pub kind: CardKind,
     pub nodes: Vec<CardNode>,
 }
@@ -356,35 +333,36 @@ impl CardDef {
     }
 }
 
-/// The concrete fixture data: every printed `CardDef` this crate builds
-/// against, and the lookup that reaches one by id. Kept in its own module so
-/// this file stays the vocabulary and the query machinery only.
-mod registry;
-pub(crate) use registry::find_def;
-
 /// The card container: `Entity`, `Component`, and the typed reads over them.
 mod entity;
 pub use entity::{
     AccountingId, Attack, Breakage, Component, ComponentField, ComponentKind, Entity, EntityId,
-    EntityIdParseError, Life, ManaTypes, Name, RetreatCost, Skill, Tags, Trigger,
+    EntityIdParseError, Life, ManaTypes, Name, Respondable, RetreatCost, Skill, Tags, Trigger,
 };
 
 /// `CardSet`: the indexed collection of top-level entities.
 mod set;
 pub use set::CardSet;
 
+/// A temporary reader that projects one `Entity` from a `CardSet` into the
+/// `CardDef` tree above, so every call site that already reads a `CardDef`
+/// keeps working unchanged while it moves onto the container at its own
+/// pace.
+mod shim;
+pub(crate) use shim::find_def;
+
+/// The fixture entities this crate's tests build against, plus the shared
+/// `CardSet` and lookups that reach them. Test-only: nothing outside
+/// `#[cfg(test)]` may depend on this data's shape.
+#[cfg(test)]
+#[allow(clippy::expect_used)]
+pub(crate) mod fixtures;
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::expect_used)]
 
-    use super::registry::registry;
     use super::*;
-
-    #[test]
-    fn card_def_id_constructs_and_compares() {
-        assert_eq!(CardDefId("a"), CardDefId("a"));
-        assert_ne!(CardDefId("a"), CardDefId("b"));
-    }
 
     #[test]
     fn card_kind_variants_construct() {
@@ -514,288 +492,28 @@ mod tests {
     }
 
     #[test]
-    fn find_reads_the_trigger_event_respondability_and_effects() {
-        let hearth_warden = find_def(CardDefId("hearth-warden")).expect("fixture exists");
-        assert_eq!(
-            hearth_warden.find(Query::Trigger),
-            Some(QueryResult::Trigger {
-                event: TriggerEvent::EntersMain,
-                respondable: false,
-                effects: vec![EffectLeaf::Heal { amount: 15 }],
-            })
-        );
-
-        let spite_thorn = find_def(CardDefId("spite-thorn")).expect("fixture exists");
-        assert_eq!(
-            spite_thorn.find(Query::Trigger),
-            Some(QueryResult::Trigger {
-                event: TriggerEvent::AnySummonDestroyed,
-                respondable: true,
-                effects: vec![EffectLeaf::DealDamage {
-                    amount: 15,
-                    immutable: false,
-                }],
-            })
-        );
-
-        let whelp = find_def(CardDefId("quarry-whelp")).expect("fixture exists");
-        assert_eq!(whelp.find(Query::Trigger), None);
-    }
-
-    #[test]
     fn spell_timing_variants_construct() {
         assert_ne!(SpellTiming::Support, SpellTiming::Attack);
     }
 
     #[test]
     fn card_kind_covers_spell_and_enchantment_too() {
-        // The registry below is Summons only; this test is the only
-        // production-adjacent proof that `Spell` and `Enchantment` still
-        // construct and compare correctly.
         assert_ne!(CardKind::Spell, CardKind::Enchantment);
         assert_ne!(CardKind::Summon, CardKind::Spell);
     }
 
-    #[test]
-    fn find_reads_only_the_current_form() {
-        let whelp = find_def(CardDefId("quarry-whelp")).expect("fixture exists");
-        assert_eq!(
-            whelp.find(Query::CurrentForm),
-            Some(QueryResult::CurrentForm(Form::Base))
-        );
-    }
-
-    #[test]
-    fn find_reads_the_produced_mana_types() {
-        let whelp = find_def(CardDefId("quarry-whelp")).expect("fixture exists");
-        assert_eq!(
-            whelp.find(Query::ProducedManaTypes),
-            Some(QueryResult::ProducedManaTypes(vec![ManaType::Matter]))
-        );
-
-        let adept = find_def(CardDefId("set-path-adept")).expect("fixture exists");
-        assert_eq!(
-            adept.find(Query::ProducedManaTypes),
-            Some(QueryResult::ProducedManaTypes(vec![
-                ManaType::Matter,
-                ManaType::Mind
-            ]))
-        );
-    }
-
-    #[test]
-    fn find_reads_the_life() {
-        let whelp = find_def(CardDefId("quarry-whelp")).expect("fixture exists");
-        assert_eq!(whelp.find(Query::Life), Some(QueryResult::Life(40)));
-    }
-
-    #[test]
-    fn find_reads_the_retreat_cost() {
-        let brute = find_def(CardDefId("quarry-brute")).expect("fixture exists");
-        assert_eq!(
-            brute.find(Query::RetreatCost),
-            Some(QueryResult::RetreatCost(2))
-        );
-    }
-
+    /// `find` never matches a query against a node this `CardDef` does not
+    /// carry — the projection shim's own tests cover reading real fixture
+    /// data; this proves the fallback stays `None` on a bare, hand-built
+    /// def, independent of any entity.
     #[test]
     fn find_returns_none_for_an_absent_node() {
         let bare = CardDef {
-            id: CardDefId("bare"),
-            name: "Bare",
+            id: EntityId::parse(&"0".repeat(32)).expect("valid fixture id"),
+            name: "Bare".to_string(),
             kind: CardKind::Summon,
             nodes: vec![],
         };
         assert_eq!(bare.find(Query::CurrentForm), None);
-    }
-
-    #[test]
-    fn find_def_locates_a_registry_fixture_and_rejects_an_unknown_id() {
-        assert!(find_def(CardDefId("quarry-whelp")).is_some());
-        assert!(find_def(CardDefId("does-not-exist")).is_none());
-    }
-
-    #[test]
-    fn registry_holds_a_two_step_and_a_three_step_chain() {
-        let defs = registry();
-        let summons = defs.iter().filter(|def| def.kind == CardKind::Summon);
-        // Five original chain-fixture Summons, plus the three
-        // single-Skill fixtures (Quarry Scout, Quarry Warden-Guard, Quarry
-        // Well-Tender), plus the three single-Trigger fixtures (Hearth
-        // Warden, Spite Thorn, Dawn Tender), plus three new three-step
-        // signature chains (Warden of Set Paths, Griefsinger, Old Sow of
-        // the Barrow) at three Summons each.
-        assert_eq!(summons.count(), 20);
-    }
-
-    #[test]
-    fn registry_holds_the_four_vanilla_spells() {
-        let defs = registry();
-        let spells = defs.iter().filter(|def| def.kind == CardKind::Spell);
-        assert_eq!(spells.count(), 4);
-    }
-
-    #[test]
-    fn registry_holds_the_one_vanilla_enchantment() {
-        let defs = registry();
-        let enchantments = defs.iter().filter(|def| def.kind == CardKind::Enchantment);
-        assert_eq!(enchantments.count(), 1);
-    }
-
-    #[test]
-    fn find_reads_one_skill_node_by_index() {
-        let scout = find_def(CardDefId("quarry-scout")).expect("fixture exists");
-        assert_eq!(
-            scout.find(Query::Skill(SkillIndex(0))),
-            Some(QueryResult::Skill {
-                cost: Cost {
-                    generic: 1,
-                    ..Cost::default()
-                },
-                effects: vec![EffectLeaf::MoveSummon],
-            })
-        );
-        assert_eq!(scout.find(Query::Skill(SkillIndex(1))), None);
-
-        let warden_guard = find_def(CardDefId("quarry-warden-guard")).expect("fixture exists");
-        assert_eq!(
-            warden_guard.find(Query::Skill(SkillIndex(0))),
-            Some(QueryResult::Skill {
-                cost: Cost::default(),
-                effects: vec![EffectLeaf::SwapPositions],
-            })
-        );
-
-        let well_tender = find_def(CardDefId("quarry-well-tender")).expect("fixture exists");
-        assert_eq!(
-            well_tender.find(Query::Skill(SkillIndex(0))),
-            Some(QueryResult::Skill {
-                cost: Cost::default(),
-                effects: vec![EffectLeaf::ProduceMana],
-            })
-        );
-    }
-
-    #[test]
-    fn find_reads_the_ready_effect_spell() {
-        let second_wind = find_def(CardDefId("second-wind")).expect("fixture exists");
-        assert_eq!(
-            second_wind.find(Query::Spell),
-            Some(QueryResult::Spell {
-                timing: SpellTiming::Support,
-                cost: Cost {
-                    generic: 1,
-                    ..Cost::default()
-                },
-                effects: vec![EffectLeaf::ReadySummon],
-            })
-        );
-    }
-
-    #[test]
-    fn find_reads_the_spell_timing_cost_and_effects() {
-        let ember_lance = find_def(CardDefId("ember-lance")).expect("fixture exists");
-        assert_eq!(
-            ember_lance.find(Query::Spell),
-            Some(QueryResult::Spell {
-                timing: SpellTiming::Attack,
-                cost: Cost {
-                    generic: 1,
-                    ..Cost::default()
-                },
-                effects: vec![EffectLeaf::DealDamage {
-                    amount: 10,
-                    immutable: false,
-                }],
-            })
-        );
-
-        let renewing_balm = find_def(CardDefId("renewing-balm")).expect("fixture exists");
-        assert_eq!(
-            renewing_balm.find(Query::Spell),
-            Some(QueryResult::Spell {
-                timing: SpellTiming::Support,
-                cost: Cost {
-                    generic: 1,
-                    ..Cost::default()
-                },
-                effects: vec![EffectLeaf::Heal { amount: 20 }],
-            })
-        );
-
-        let scrying_glass = find_def(CardDefId("scrying-glass")).expect("fixture exists");
-        assert_eq!(
-            scrying_glass.find(Query::Spell),
-            Some(QueryResult::Spell {
-                timing: SpellTiming::Support,
-                cost: Cost {
-                    generic: 1,
-                    ..Cost::default()
-                },
-                effects: vec![EffectLeaf::DrawCards { amount: 1 }],
-            })
-        );
-    }
-
-    #[test]
-    fn every_summon_chain_climbs_base_enhanced_elite() {
-        fn form_of(id: &'static str) -> Form {
-            let def = find_def(CardDefId(id)).expect("fixture exists");
-            let Some(QueryResult::CurrentForm(form)) = def.find(Query::CurrentForm) else {
-                panic!("every registry Summon fixture carries a Form node");
-            };
-            form
-        }
-
-        let three_step = ["quarry-whelp", "quarry-brute", "colossus-of-the-quarry"];
-        let forms: Vec<Form> = three_step.iter().map(|id| form_of(id)).collect();
-        assert_eq!(forms, vec![Form::Base, Form::Enhanced, Form::Elite]);
-
-        let two_step = ["set-path-adept", "set-path-warden"];
-        let forms: Vec<Form> = two_step.iter().map(|id| form_of(id)).collect();
-        assert_eq!(forms, vec![Form::Base, Form::Enhanced]);
-
-        let warden_chain = [
-            "warden-initiate",
-            "warden-pathkeeper",
-            "warden-of-set-paths",
-        ];
-        let forms: Vec<Form> = warden_chain.iter().map(|id| form_of(id)).collect();
-        assert_eq!(forms, vec![Form::Base, Form::Enhanced, Form::Elite]);
-
-        let griefsinger_chain = ["griefsinger-wisp", "griefsinger-mourner", "griefsinger"];
-        let forms: Vec<Form> = griefsinger_chain.iter().map(|id| form_of(id)).collect();
-        assert_eq!(forms, vec![Form::Base, Form::Enhanced, Form::Elite]);
-
-        let sow_chain = ["sow-piglet", "sow-matriarch", "old-sow-of-the-barrow"];
-        let forms: Vec<Form> = sow_chain.iter().map(|id| form_of(id)).collect();
-        assert_eq!(forms, vec![Form::Base, Form::Enhanced, Form::Elite]);
-    }
-
-    #[test]
-    fn find_reads_the_passive_modifier() {
-        let warden = find_def(CardDefId("warden-of-set-paths")).expect("fixture exists");
-        assert_eq!(
-            warden.find(Query::Passive),
-            Some(QueryResult::Passive(Modifier::OpposingRetreatCostDelta(1)))
-        );
-
-        let whelp = find_def(CardDefId("quarry-whelp")).expect("fixture exists");
-        assert_eq!(whelp.find(Query::Passive), None);
-    }
-
-    #[test]
-    fn find_reads_the_enchantment_cost_and_effects() {
-        let ward = find_def(CardDefId("standing-ward")).expect("fixture exists");
-        assert_eq!(
-            ward.find(Query::Enchantment),
-            Some(QueryResult::Enchantment {
-                cost: Cost {
-                    generic: 1,
-                    ..Cost::default()
-                },
-                effects: vec![],
-            })
-        );
     }
 }

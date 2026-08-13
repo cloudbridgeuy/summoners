@@ -2,7 +2,7 @@
 //! module's items through `super::*`.
 
 use super::*;
-use crate::domain::cards::CardDefId;
+use crate::domain::cards::fixtures;
 use crate::domain::ids::{BenchSlot, CardInstanceId};
 use crate::domain::state::{
     CardRef, ManaBank, PendingInput, PerPlayer, PlayerState, SummonInstance, TurnState,
@@ -15,7 +15,7 @@ fn summon(owner: PlayerId, def: &'static str) -> SummonInstance {
         chain: UpgradeChain::new(
             CardRef {
                 instance: CardInstanceId(1),
-                def: CardDefId(def),
+                def: fixtures::id(def),
             },
             vec![],
         ),
@@ -61,6 +61,7 @@ fn base_state() -> GameState {
         work: VecDeque::new(),
         pending: None,
         outcome: None,
+        cards: fixtures::card_set(),
     }
 }
 
@@ -225,7 +226,7 @@ fn a_rejected_declaration_leaves_the_callers_state_untouched() {
 fn hand_with(def: &'static str, instance: u32) -> Vec<CardRef> {
     vec![CardRef {
         instance: CardInstanceId(instance),
-        def: CardDefId(def),
+        def: fixtures::id(def),
     }]
 }
 
@@ -255,7 +256,7 @@ fn cast_spell_a_support_spell_pays_cost_pushes_the_stack_and_opens_a_window_for_
             caster: PlayerId::One,
             card: CardRef {
                 instance: CardInstanceId(5),
-                def: CardDefId("renewing-balm"),
+                def: fixtures::id("renewing-balm"),
             },
             targets: vec![Position::Main],
         }]
@@ -403,7 +404,7 @@ fn cast_spell_allows_an_attack_spell_as_a_response_inside_a_combat_window() {
                 caster: PlayerId::Two,
                 card: CardRef {
                     instance: CardInstanceId(7),
-                    def: CardDefId("ember-lance"),
+                    def: fixtures::id("ember-lance"),
                 },
                 targets: vec![Position::Main],
             },

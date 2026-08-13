@@ -56,7 +56,7 @@ pub(crate) fn check(state: &GameState, player: PlayerId) -> (GameState, Vec<Game
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::cards::CardDefId;
+    use crate::domain::cards::fixtures;
     use crate::domain::ids::CardInstanceId;
     use crate::domain::state::{
         CardRef, ManaBank, PerPlayer, Phase, PlayerState, SummonInstance, TurnState, UpgradeChain,
@@ -68,7 +68,7 @@ mod tests {
             chain: UpgradeChain::new(
                 CardRef {
                     instance: CardInstanceId(1),
-                    def: CardDefId("quarry-whelp"),
+                    def: fixtures::id("quarry-whelp"),
                 },
                 vec![],
             ),
@@ -114,6 +114,7 @@ mod tests {
             work: VecDeque::new(),
             pending: None,
             outcome: None,
+            cards: fixtures::card_set(),
         }
     }
 

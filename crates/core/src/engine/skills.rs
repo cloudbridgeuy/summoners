@@ -231,7 +231,7 @@ pub(crate) fn activate_skill(
         return Err(ActionError::SummonExhausted);
     }
 
-    let Some(top_def) = find_def(summon.chain.top().def) else {
+    let Some(top_def) = find_def(&state.cards, summon.chain.top().def) else {
         return Err(ActionError::UnknownCard);
     };
     // No printed Skill at this index reads the same as any other illegal
@@ -292,7 +292,7 @@ pub(crate) fn activate_skill(
 mod tests {
     use super::*;
     use crate::domain::actions::GameAction;
-    use crate::domain::cards::CardDefId;
+    use crate::domain::cards::fixtures;
     use crate::domain::ids::{BenchSlot, CardInstanceId};
     use crate::domain::state::{
         CardRef, ManaBank, ManaSource, MovementStep, PerPlayer, TurnState, UpgradeChain, WorkItem,
@@ -304,7 +304,7 @@ mod tests {
             chain: UpgradeChain::new(
                 CardRef {
                     instance: CardInstanceId(1),
-                    def: CardDefId(def),
+                    def: fixtures::id(def),
                 },
                 vec![],
             ),
@@ -353,6 +353,7 @@ mod tests {
             work: VecDeque::new(),
             pending: None,
             outcome: None,
+            cards: fixtures::card_set(),
         }
     }
 
@@ -759,7 +760,7 @@ mod tests {
         let mut state = base_state("quarry-well-tender", false);
         state.players.get_mut(PlayerId::One).hand = vec![CardRef {
             instance: CardInstanceId(50),
-            def: CardDefId("second-wind"),
+            def: fixtures::id("second-wind"),
         }];
         state.players.get_mut(PlayerId::One).mana.matter = 1;
 
@@ -844,7 +845,7 @@ mod tests {
             chain: UpgradeChain::new(
                 CardRef {
                     instance: CardInstanceId(2),
-                    def: CardDefId("hearth-warden"),
+                    def: fixtures::id("hearth-warden"),
                 },
                 vec![],
             ),
