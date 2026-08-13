@@ -284,7 +284,9 @@ mod tests {
     use super::*;
     use crate::domain::cards::fixtures;
     use crate::domain::ids::{CardInstanceId, PlayerId};
-    use crate::domain::state::{CardRef, ManaBank, PerPlayer, Phase, TurnState, UpgradeChain};
+    use crate::domain::state::{
+        CardRef, GameStatus, ManaBank, PerPlayer, Phase, TurnState, UpgradeChain,
+    };
     use std::collections::VecDeque;
 
     fn chain_summon(owner: PlayerId, def: &'static str, instance: u32) -> SummonInstance {
@@ -357,7 +359,7 @@ mod tests {
             stack_segment_bases: vec![],
             work: VecDeque::new(),
             pending: None,
-            outcome: None,
+            status: GameStatus::Playing,
             cards: fixtures::card_set(),
         }
     }

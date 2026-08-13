@@ -5,8 +5,8 @@ use super::*;
 use crate::domain::cards::fixtures;
 use crate::domain::ids::{CardInstanceId, PlayerId, Position};
 use crate::domain::state::{
-    CardRef, ManaBank, ManaSource, MovementStep, PendingInput, PerPlayer, Phase, PlayerState,
-    SummonInstance, TurnState, UpgradeChain,
+    CardRef, GameStatus, ManaBank, ManaSource, MovementStep, PendingInput, PerPlayer, Phase,
+    PlayerState, SummonInstance, TurnState, UpgradeChain,
 };
 use std::collections::VecDeque;
 
@@ -63,7 +63,7 @@ fn base_state() -> GameState {
         stack_segment_bases: vec![],
         work: VecDeque::new(),
         pending: None,
-        outcome: None,
+        status: GameStatus::Playing,
         cards: fixtures::card_set(),
     }
 }
@@ -216,7 +216,7 @@ fn drain_stops_as_soon_as_produce_mana_pauses_on_a_choice() {
 }
 
 #[test]
-fn drain_stops_immediately_once_a_draw_failure_sets_outcome() {
+fn drain_stops_immediately_once_a_draw_failure_sets_status() {
     let mut state = base_state();
     state.players.get_mut(PlayerId::Two).deck = vec![];
     state.work = VecDeque::from(vec![
@@ -227,11 +227,11 @@ fn drain_stops_immediately_once_a_draw_failure_sets_outcome() {
 
     let (state, events) = drain(&state);
 
-    assert!(state.outcome.is_some());
+    assert!(!state.status.is_playing());
     assert_eq!(
         state.work,
         VecDeque::from(vec![WorkItem::ProduceMana(ManaSource::Player)]),
-        "the loop checks outcome before popping the next item, so the \
+        "the loop checks status before popping the next item, so the \
          unrun item is left queued rather than executed — harmless, since \
          a finished game rejects every later action outright"
     );
@@ -254,7 +254,7 @@ fn drain_stops_immediately_once_a_draw_failure_sets_outcome() {
 #[test]
 fn drain_leaves_a_finished_game_untouched_even_with_queued_work() {
     let mut state = base_state();
-    state.outcome = Some(crate::domain::state::GameOutcome {
+    state.status = GameStatus::Ended(crate::domain::state::GameOutcome {
         winner: PlayerId::One,
         reason: crate::domain::state::LossReason::EmptyDeckDraw,
     });
@@ -264,6 +264,28 @@ fn drain_leaves_a_finished_game_untouched_even_with_queued_work() {
 
     assert!(events.is_empty());
     assert_eq!(state.work, VecDeque::from(vec![WorkItem::ReadyAll]));
+}
+
+#[test]
+fn drain_leaves_a_broken_game_untouched_even_with_queued_work() {
+    let breakage = crate::domain::cards::Breakage {
+        rule: "destruction",
+        entity: fixtures::id("quarry-whelp"),
+        expected: crate::domain::cards::ComponentKind::Life,
+    };
+    let mut state = base_state();
+    state.status = GameStatus::Broken(breakage);
+    state.work = VecDeque::from(vec![WorkItem::ReadyAll]);
+
+    let (state, events) = drain(&state);
+
+    assert!(events.is_empty());
+    assert_eq!(state.status, GameStatus::Broken(breakage));
+    assert_eq!(
+        state.work,
+        VecDeque::from(vec![WorkItem::ReadyAll]),
+        "a broken status stops the loop before it ever pops the next item"
+    );
 }
 
 #[test]
@@ -285,7 +307,7 @@ fn drain_is_a_silent_no_op_for_a_movement_or_ability_trigger_with_no_matching_ca
 
     assert!(events.is_empty());
     assert!(state.work.is_empty());
-    assert_eq!(state.outcome, None);
+    assert_eq!(state.status, GameStatus::Playing);
 }
 
 #[test]
@@ -489,7 +511,7 @@ fn drain_runs_a_loss_check_that_finds_no_losing_condition_as_a_silent_no_op() {
 
     assert!(events.is_empty());
     assert!(state.work.is_empty());
-    assert_eq!(state.outcome, None);
+    assert_eq!(state.status, GameStatus::Playing);
 }
 
 // -- Stack resolution: step 2 of the loop ---------------------------------

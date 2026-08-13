@@ -226,7 +226,8 @@ mod tests {
     use crate::domain::cards::fixtures;
     use crate::domain::ids::{CardInstanceId, Position};
     use crate::domain::state::{
-        CardRef, ManaBank, PerPlayer, PlayerState, StackWindow, SummonInstance, UpgradeChain,
+        CardRef, GameStatus, ManaBank, PerPlayer, PlayerState, StackWindow, SummonInstance,
+        UpgradeChain,
     };
     use std::collections::VecDeque;
 
@@ -300,7 +301,7 @@ mod tests {
             stack_segment_bases: vec![],
             work: VecDeque::new(),
             pending: None,
-            outcome: None,
+            status: GameStatus::Playing,
             cards: fixtures::card_set(),
         }
     }

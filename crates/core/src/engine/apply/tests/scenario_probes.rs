@@ -234,8 +234,8 @@ fn a_single_destruction_check_can_end_both_players_mains_at_once() {
         "One's third Main loss ends the game outright"
     );
     assert_eq!(
-        resolved.state.outcome,
-        Some(GameOutcome {
+        resolved.state.status,
+        GameStatus::Ended(GameOutcome {
             winner: PlayerId::Two,
             reason: LossReason::ThirdMainLoss,
         })
@@ -586,7 +586,7 @@ fn a_destruction_trigger_opens_a_nested_window_before_its_own_chain_finishes() {
     );
     assert_eq!(two.bench, [None, None, None]);
     assert_eq!(two.main_losses, 1);
-    assert_eq!(two_passed.state.outcome, None);
+    assert_eq!(two_passed.state.status, GameStatus::Playing);
 }
 
 /// Rules §44: "Enchantments ... remain in play after resolving ... until

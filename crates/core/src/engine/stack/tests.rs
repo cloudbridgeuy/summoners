@@ -5,7 +5,7 @@ use super::*;
 use crate::domain::cards::fixtures;
 use crate::domain::ids::{BenchSlot, CardInstanceId};
 use crate::domain::state::{
-    CardRef, ManaBank, PendingInput, PerPlayer, PlayerState, SummonInstance, TurnState,
+    CardRef, GameStatus, ManaBank, PendingInput, PerPlayer, PlayerState, SummonInstance, TurnState,
     UpgradeChain, WorkItem,
 };
 use std::collections::VecDeque;
@@ -60,7 +60,7 @@ fn base_state() -> GameState {
         stack_segment_bases: vec![],
         work: VecDeque::new(),
         pending: None,
-        outcome: None,
+        status: GameStatus::Playing,
         cards: fixtures::card_set(),
     }
 }

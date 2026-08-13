@@ -148,14 +148,14 @@ mod tests {
         assert_eq!(resolved.id, id(1));
     }
 
-    /// The slice's acceptance demo, exercised end to end: build a set from
-    /// entity literals; find one by its printed accounting code; read the
-    /// first of two duplicate `Life` components; read every one of three
-    /// `Skill` components in authored order; read nothing from `get` and a
-    /// named `Breakage` from `demand` for a `RetreatCost` no entity here
-    /// prints; resolve a duplicate id first-wins.
+    /// Every `Entity`/`CardSet` read exercised together, end to end: build a
+    /// set from entity literals; find one by its printed accounting code;
+    /// read the first of two duplicate `Life` components; read every one of
+    /// three `Skill` components in authored order; read nothing from `get`
+    /// and a named `Breakage` from `demand` for a `RetreatCost` no entity
+    /// here prints; resolve a duplicate id first-wins.
     #[test]
-    fn the_demo_builds_a_set_and_proves_every_read() {
+    fn a_card_set_built_from_entity_literals_proves_every_read() {
         let move_skill = Entity {
             id: id(20),
             components: vec![Component::Name(Name("Move".to_string()))],

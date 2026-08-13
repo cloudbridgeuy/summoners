@@ -191,8 +191,7 @@ pub(crate) enum CardNode {
 /// A question `CardDef::find` can answer about one printed card. `Attack`
 /// backs the normal-attack cost and Damage lookup in `engine::stack` and
 /// `engine::resolution` (rules §29–30); `CurrentForm` backs chain-order
-/// validation in `scenario::from_scenario`; `Life` backs the rules §23
-/// destruction threshold check in `engine::destruction`; `ProducedManaTypes`
+/// validation in `scenario::from_scenario`; `ProducedManaTypes`
 /// backs the rules §18 Mana-Type-superset check in `engine::board`;
 /// `RetreatCost` backs the printed Retreat Cost lookup there too; `Skill`
 /// backs the printed cost and effects lookup for one of the topmost card's
@@ -205,7 +204,6 @@ pub(crate) enum CardNode {
 pub(crate) enum Query {
     Attack,
     CurrentForm,
-    Life,
     ProducedManaTypes,
     RetreatCost,
     Skill(SkillIndex),
@@ -227,7 +225,6 @@ pub(crate) enum QueryResult {
         effects: Vec<EffectLeaf>,
     },
     CurrentForm(Form),
-    Life(u32),
     ProducedManaTypes(Vec<ManaType>),
     RetreatCost(u32),
     Skill {
@@ -290,7 +287,6 @@ impl CardDef {
                 effects: effects.clone(),
             }),
             (Query::CurrentForm, CardNode::Form(form)) => Some(QueryResult::CurrentForm(*form)),
-            (Query::Life, CardNode::Life(life)) => Some(QueryResult::Life(*life)),
             (Query::ProducedManaTypes, CardNode::Produces(types)) => {
                 Some(QueryResult::ProducedManaTypes(types.clone()))
             }

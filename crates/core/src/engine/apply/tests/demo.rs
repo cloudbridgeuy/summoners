@@ -395,7 +395,7 @@ fn demo_a_lethal_attack_destroys_recovers_a_prize_and_promotes_through_apply() {
          all run silently: no loss condition applies with a fresh Main"
     );
     assert_eq!(promoted.state.pending, None);
-    assert_eq!(promoted.state.outcome, None);
+    assert_eq!(promoted.state.status, GameStatus::Playing);
     assert!(promoted.state.work.is_empty());
     let two = promoted.state.players.get(PlayerId::Two);
     assert!(two.main.is_some(), "Promotion filled the empty Main");
@@ -762,8 +762,8 @@ fn demo_a_draw_from_an_empty_deck_ends_the_game_immediately() {
         full_end_turn(&state, PlayerId::One).expect("legal from a resting Main, both pass");
 
     assert_eq!(
-        outcome.state.outcome,
-        Some(GameOutcome {
+        outcome.state.status,
+        GameStatus::Ended(GameOutcome {
             winner: PlayerId::One,
             reason: LossReason::EmptyDeckDraw,
         })

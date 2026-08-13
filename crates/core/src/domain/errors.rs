@@ -14,8 +14,13 @@ pub enum ActionError {
     /// The actor gate (decision 15): someone other than the current legal
     /// actor tried to act.
     NotYourDecision,
-    /// `state.outcome` is already set; nothing more can happen.
+    /// `state.status` is `Ended`; nothing more can happen.
     GameAlreadyOver,
+    /// `state.status` is `Broken`: a rule demanded a component no entity
+    /// printed. This is not `GameAlreadyOver` — nobody won or lost; the
+    /// match's card set could not be computed with. `state.status` names
+    /// the rule, the entity, and the component that was expected.
+    GameBroken,
     /// This action is not legal during the current phase or window.
     WrongPhase,
     /// The named position has no Summon on it.
@@ -85,6 +90,7 @@ mod tests {
         let errors = vec![
             ActionError::NotYourDecision,
             ActionError::GameAlreadyOver,
+            ActionError::GameBroken,
             ActionError::WrongPhase,
             ActionError::EmptyPosition,
             ActionError::UnknownCard,
@@ -101,7 +107,7 @@ mod tests {
             ActionError::PendingInputMismatch,
             ActionError::InvalidManaHint,
         ];
-        assert_eq!(errors.len(), 15);
+        assert_eq!(errors.len(), 16);
     }
 
     #[test]

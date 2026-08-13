@@ -166,14 +166,6 @@ mod tests {
     }
 
     #[test]
-    fn find_reads_the_life() {
-        assert_eq!(
-            def("quarry-whelp").find(Query::Life),
-            Some(QueryResult::Life(40))
-        );
-    }
-
-    #[test]
     fn find_reads_the_retreat_cost() {
         assert_eq!(
             def("colossus-of-the-quarry").find(Query::RetreatCost),
