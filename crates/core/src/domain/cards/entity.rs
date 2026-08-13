@@ -30,33 +30,55 @@ pub struct EntityIdParseError {
     pub input: String,
 }
 
+/// Where the canonical UUID shape (`8-4-4-4-12`) places its four hyphens.
+const CANONICAL_HYPHEN_POSITIONS: [usize; 4] = [8, 13, 18, 23];
+
 impl EntityId {
-    /// Parse sixteen bytes from a hex string. Hyphens are ignored wherever
-    /// they appear, so both a bare 32-digit hex string and a UUID-shaped
-    /// string (`8-4-4-4-12`) parse to the same id. Anything else is
-    /// rejected. This never mints an id: the same input always parses to
-    /// the same bytes.
+    /// Parse sixteen bytes from a hex string. Exactly two shapes are
+    /// accepted: a bare 32-digit hex string, and the canonical UUID shape
+    /// (`8-4-4-4-12`, e.g. `01234567-89ab-cdef-0123-456789abcdef`). Both
+    /// parse to the same id when they carry the same digits, so an id has
+    /// at most two spellings, never an open-ended family of them. Every
+    /// other input is rejected — the wrong length, a hyphen anywhere but
+    /// the canonical four positions, or any character that is not an ASCII
+    /// hex digit (this also rejects a sign character such as `+` or `-`
+    /// inside a byte pair, which `u8::from_str_radix` alone would accept).
+    /// This never mints an id: the same input always parses to the same
+    /// bytes.
     pub fn parse(input: &str) -> Result<EntityId, EntityIdParseError> {
-        let hex: String = input
-            .chars()
-            .filter(|character| *character != '-')
-            .collect();
-        if hex.len() != 32 {
-            return Err(EntityIdParseError {
-                input: input.to_string(),
-            });
+        let malformed = || EntityIdParseError {
+            input: input.to_string(),
+        };
+
+        let hex: String = match input.len() {
+            32 => input.to_string(),
+            36 => {
+                let bytes = input.as_bytes();
+                if CANONICAL_HYPHEN_POSITIONS
+                    .iter()
+                    .any(|&position| bytes[position] != b'-')
+                {
+                    return Err(malformed());
+                }
+                input
+                    .chars()
+                    .filter(|character| *character != '-')
+                    .collect()
+            }
+            _ => return Err(malformed()),
+        };
+
+        if hex.len() != 32 || !hex.chars().all(|character| character.is_ascii_hexdigit()) {
+            return Err(malformed());
         }
+
         let mut bytes = [0u8; 16];
         for (index, byte) in bytes.iter_mut().enumerate() {
             let start = index * 2;
-            let pair = hex
-                .get(start..start + 2)
-                .ok_or_else(|| EntityIdParseError {
-                    input: input.to_string(),
-                })?;
-            *byte = u8::from_str_radix(pair, 16).map_err(|_| EntityIdParseError {
-                input: input.to_string(),
-            })?;
+            // `hex` is now known to be exactly 32 ASCII hex digits, so this
+            // slice and this parse cannot fail.
+            let pair = hex.get(start..start + 2).ok_or_else(malformed)?;
+            *byte = u8::from_str_radix(pair, 16).map_err(|_| malformed())?;
         }
         Ok(EntityId(bytes))
     }
@@ -250,7 +272,7 @@ impl Entity {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used)]
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
 
     use super::*;
 
@@ -286,6 +308,34 @@ mod tests {
     #[test]
     fn entity_id_rejects_non_hex_characters() {
         assert!(EntityId::parse("zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz").is_err());
+    }
+
+    /// `u8::from_str_radix` alone accepts a leading `+` (`from_str_radix("+f",
+    /// 16) == Ok(15)`), which would let `"+f".repeat(16)` parse to the same
+    /// bytes as `"0f".repeat(16)` — one id with two spellings. `parse` must
+    /// reject the whole string before it ever reaches `from_str_radix`.
+    #[test]
+    fn entity_id_rejects_a_leading_plus_sign_in_a_byte_pair() {
+        assert!(EntityId::parse(&"+f".repeat(16)).is_err());
+    }
+
+    /// A `-` embedded where a hex digit belongs must not be filtered away:
+    /// this string is 32 characters long, so it never enters the
+    /// canonical-hyphen-position branch, and the stray `-` must fail the
+    /// hex-digit check instead of shifting the remaining digits.
+    #[test]
+    fn entity_id_rejects_a_sign_embedded_mid_string() {
+        let base = "0123456789abcdef0123456789abcdef";
+        let with_embedded_dash = format!("{}-{}", &base[..5], &base[6..]);
+        assert_eq!(with_embedded_dash.len(), 32);
+        assert!(EntityId::parse(&with_embedded_dash).is_err());
+    }
+
+    #[test]
+    fn entity_id_rejects_a_hyphen_outside_the_canonical_positions() {
+        // Same 32 hex digits and hyphen count as a valid UUID shape, but the
+        // hyphens sit one position to the left of where they must be.
+        assert!(EntityId::parse("0123456-789abcde-f0123-4567-89abcdef").is_err());
     }
 
     #[test]
@@ -348,6 +398,47 @@ mod tests {
             ],
         };
         assert_eq!(card.all::<Skill>(), vec![&first, &second, &third]);
+    }
+
+    /// One entity inside a component inside an entity, read at both levels
+    /// (design proof 3). The card's `Skill` component holds a nested entity
+    /// that itself carries a `Cost` and two `Effect` components; the test
+    /// reads the nested entity out of the card, and then reads its own
+    /// components out of that nested entity, proving the recursion is real
+    /// rather than a value the reader can only take whole.
+    #[test]
+    fn a_component_nested_inside_a_skill_entity_reads_through_both_levels() {
+        let ability = Entity {
+            id: id(30),
+            components: vec![
+                Component::Cost(Cost {
+                    generic: 1,
+                    ..Cost::default()
+                }),
+                Component::Effect(EffectLeaf::Heal { amount: 5 }),
+                Component::Effect(EffectLeaf::DrawCards { amount: 1 }),
+            ],
+        };
+        let card = Entity {
+            id: id(1),
+            components: vec![Component::Skill(ability)],
+        };
+
+        let skill = card.get::<Skill>().expect("the card prints one Skill");
+        assert_eq!(
+            skill.get::<Cost>(),
+            Some(&Cost {
+                generic: 1,
+                ..Cost::default()
+            })
+        );
+        assert_eq!(
+            skill.all::<EffectLeaf>(),
+            vec![
+                &EffectLeaf::Heal { amount: 5 },
+                &EffectLeaf::DrawCards { amount: 1 },
+            ]
+        );
     }
 
     #[test]
