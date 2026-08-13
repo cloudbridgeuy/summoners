@@ -1,0 +1,473 @@
+//! The card container: `Entity`, `Component`, and the typed reads over them.
+//!
+//! `Entity` is the one structural shape a card and an ability share: an
+//! identity and an ordered sequence of components. A top-level entity is a
+//! printed card; a `Component::Skill`, `Component::Attack`, or
+//! `Component::Trigger` holds a nested entity for one of a card's abilities.
+//! The recursion runs through `Vec<Component>`, so the type stays finite
+//! without boxing, and it stops at `Effect`: nothing ever names an effect, so
+//! it stays a leaf value.
+//!
+//! Multiplicity belongs to the read, not to the data — no arity is declared
+//! anywhere. `get` answers with the first match, `all` answers with every
+//! match in authored order, and `demand` answers with the first match or a
+//! named `Breakage`. Each read is typed by a marker type through
+//! `ComponentField`, implemented once per component so the dispatch stays
+//! total and panic-free.
+
+use super::{Cost, EffectLeaf, Form, Modifier};
+use crate::domain::ids::ManaType;
+
+/// A core-defined, opaque card or ability identity. The core holds,
+/// compares, and parses an `EntityId`; it never generates one. Minting an id
+/// is a shell concern, outside this crate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct EntityId([u8; 16]);
+
+/// Why `EntityId::parse` rejected its input.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EntityIdParseError {
+    pub input: String,
+}
+
+impl EntityId {
+    /// Parse sixteen bytes from a hex string. Hyphens are ignored wherever
+    /// they appear, so both a bare 32-digit hex string and a UUID-shaped
+    /// string (`8-4-4-4-12`) parse to the same id. Anything else is
+    /// rejected. This never mints an id: the same input always parses to
+    /// the same bytes.
+    pub fn parse(input: &str) -> Result<EntityId, EntityIdParseError> {
+        let hex: String = input
+            .chars()
+            .filter(|character| *character != '-')
+            .collect();
+        if hex.len() != 32 {
+            return Err(EntityIdParseError {
+                input: input.to_string(),
+            });
+        }
+        let mut bytes = [0u8; 16];
+        for (index, byte) in bytes.iter_mut().enumerate() {
+            let start = index * 2;
+            let pair = hex
+                .get(start..start + 2)
+                .ok_or_else(|| EntityIdParseError {
+                    input: input.to_string(),
+                })?;
+            *byte = u8::from_str_radix(pair, 16).map_err(|_| EntityIdParseError {
+                input: input.to_string(),
+            })?;
+        }
+        Ok(EntityId(bytes))
+    }
+}
+
+/// A card or ability's display name.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Name(pub String);
+
+/// The human-readable handle a test or a player uses instead of an
+/// `EntityId`: a collection prefix and a number, e.g. `QRY-014`. It is data,
+/// so a card may carry one, several, or none.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AccountingId {
+    pub prefix: String,
+    pub number: u32,
+}
+
+impl AccountingId {
+    /// The canonical printed code, e.g. `QRY-014`. `CardSet` indexes on this
+    /// string.
+    pub fn code(&self) -> String {
+        format!("{}-{:03}", self.prefix, self.number)
+    }
+}
+
+/// How much damage an entity can take before it is destroyed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Life(pub u32);
+
+/// The printed cost to retreat this entity from Main to the Bench.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RetreatCost(pub u32);
+
+/// The Mana types this entity produces.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ManaTypes(pub Vec<ManaType>);
+
+/// Open category labels a rule can key on instead of a class field, e.g.
+/// `"mount"` or `"artifact"`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Tags(pub Vec<String>);
+
+/// A zero-sized marker for `Component::Skill`'s nested entity. `Skill`,
+/// `Attack`, and `Trigger` all wrap an `Entity`, so each needs its own marker
+/// type to keep `entity.all::<Skill>()` distinct from `entity.all::<Attack>()`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Skill;
+
+/// A zero-sized marker for `Component::Attack`'s nested entity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Attack;
+
+/// A zero-sized marker for `Component::Trigger`'s nested entity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Trigger;
+
+/// One typed fact or ability an `Entity` carries. The enum is closed and
+/// additive: a new variant never invalidates a card or a read already
+/// written against an earlier one. A card declares facts here; it declares
+/// no rule.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Component {
+    Name(Name),
+    AccountingId(AccountingId),
+    Life(Life),
+    RetreatCost(RetreatCost),
+    Form(Form),
+    Produces(ManaTypes),
+    Tags(Tags),
+    Cost(Cost),
+    /// May appear many times; read with `entity.all::<Skill>()`.
+    Skill(Entity),
+    /// May appear many times; read with `entity.all::<Attack>()`.
+    Attack(Entity),
+    /// May appear many times; read with `entity.all::<Trigger>()`.
+    Trigger(Entity),
+    /// May appear many times; order carries meaning. Recursion stops here —
+    /// nothing ever references an effect, so it stays a leaf value.
+    Effect(EffectLeaf),
+    Passive(Modifier),
+}
+
+/// One printed card, or one ability nested inside a card, sharing the same
+/// structural shape: an identity and an ordered sequence of components.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Entity {
+    pub id: EntityId,
+    pub components: Vec<Component>,
+}
+
+/// Names one `Component` variant with no payload, for `Breakage::expected`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ComponentKind {
+    Name,
+    AccountingId,
+    Life,
+    RetreatCost,
+    Form,
+    Produces,
+    Tags,
+    Cost,
+    Skill,
+    Attack,
+    Trigger,
+    Effect,
+    Passive,
+}
+
+/// What a demanded component's absence means: this game (or, inside
+/// `scenario::parse`, this prospective game) can no longer be computed.
+/// Names the rule that demanded, the entity it demanded from, and the
+/// component it expected.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Breakage {
+    pub rule: &'static str,
+    pub entity: EntityId,
+    pub expected: ComponentKind,
+}
+
+/// Maps a marker type to the `Component` variant it reads, so
+/// `Entity::get`, `Entity::all`, and `Entity::demand` stay typed. Implemented
+/// once per component; every implementation is total and panic-free.
+pub trait ComponentField {
+    /// The type a successful read produces. Equal to `Self` for every
+    /// component whose payload the marker names directly; `Entity` for
+    /// `Skill`, `Attack`, and `Trigger`, whose marker is not their payload.
+    type Output;
+
+    fn component_kind() -> ComponentKind;
+
+    fn extract(component: &Component) -> Option<&Self::Output>;
+}
+
+macro_rules! component_field {
+    ($marker:ty, $output:ty, $kind:ident, $variant:pat => $binding:ident) => {
+        impl ComponentField for $marker {
+            type Output = $output;
+
+            fn component_kind() -> ComponentKind {
+                ComponentKind::$kind
+            }
+
+            fn extract(component: &Component) -> Option<&Self::Output> {
+                match component {
+                    $variant => Some($binding),
+                    _ => None,
+                }
+            }
+        }
+    };
+}
+
+component_field!(Name, Name, Name, Component::Name(name) => name);
+component_field!(AccountingId, AccountingId, AccountingId, Component::AccountingId(id) => id);
+component_field!(Life, Life, Life, Component::Life(life) => life);
+component_field!(RetreatCost, RetreatCost, RetreatCost, Component::RetreatCost(cost) => cost);
+component_field!(Form, Form, Form, Component::Form(form) => form);
+component_field!(ManaTypes, ManaTypes, Produces, Component::Produces(types) => types);
+component_field!(Tags, Tags, Tags, Component::Tags(tags) => tags);
+component_field!(Cost, Cost, Cost, Component::Cost(cost) => cost);
+component_field!(Skill, Entity, Skill, Component::Skill(entity) => entity);
+component_field!(Attack, Entity, Attack, Component::Attack(entity) => entity);
+component_field!(Trigger, Entity, Trigger, Component::Trigger(entity) => entity);
+component_field!(EffectLeaf, EffectLeaf, Effect, Component::Effect(effect) => effect);
+component_field!(Modifier, Modifier, Passive, Component::Passive(modifier) => modifier);
+
+impl Entity {
+    /// The first matching component, or `None`. Absence is a legitimate
+    /// answer for an optional read.
+    pub fn get<C: ComponentField>(&self) -> Option<&C::Output> {
+        self.components.iter().find_map(C::extract)
+    }
+
+    /// Every matching component, in authored order.
+    pub fn all<C: ComponentField>(&self) -> Vec<&C::Output> {
+        self.components.iter().filter_map(C::extract).collect()
+    }
+
+    /// The first matching component, or a `Breakage` naming `rule`, this
+    /// entity, and the component kind that was expected. Absence here means
+    /// the game this entity belongs to can no longer be computed.
+    pub fn demand<C: ComponentField>(&self, rule: &'static str) -> Result<&C::Output, Breakage> {
+        self.get::<C>().ok_or(Breakage {
+            rule,
+            entity: self.id,
+            expected: C::component_kind(),
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used)]
+
+    use super::*;
+
+    fn id(byte: u8) -> EntityId {
+        EntityId([byte; 16])
+    }
+
+    #[test]
+    fn entity_id_parses_a_bare_hex_string() {
+        let parsed = EntityId::parse("0123456789abcdef0123456789abcdef").unwrap();
+        assert_eq!(
+            parsed,
+            EntityId([
+                0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef, 0x01, 0x23, 0x45, 0x67, 0x89, 0xab,
+                0xcd, 0xef,
+            ])
+        );
+    }
+
+    #[test]
+    fn entity_id_parses_a_uuid_shaped_string_identically() {
+        let bare = EntityId::parse("0123456789abcdef0123456789abcdef").unwrap();
+        let hyphenated = EntityId::parse("01234567-89ab-cdef-0123-456789abcdef").unwrap();
+        assert_eq!(bare, hyphenated);
+    }
+
+    #[test]
+    fn entity_id_rejects_the_wrong_length() {
+        assert!(EntityId::parse("abc").is_err());
+        assert!(EntityId::parse("").is_err());
+    }
+
+    #[test]
+    fn entity_id_rejects_non_hex_characters() {
+        assert!(EntityId::parse("zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz").is_err());
+    }
+
+    #[test]
+    fn entity_id_holds_and_compares_the_same_input_identically() {
+        let too_long = "1".repeat(34);
+        assert!(EntityId::parse(&too_long).is_err());
+
+        let same = EntityId::parse(&"1".repeat(32)).unwrap();
+        let again = EntityId::parse(&"1".repeat(32)).unwrap();
+        assert_eq!(same, again);
+    }
+
+    #[test]
+    fn accounting_id_formats_the_printed_code() {
+        let accounting = AccountingId {
+            prefix: "QRY".to_string(),
+            number: 14,
+        };
+        assert_eq!(accounting.code(), "QRY-014");
+    }
+
+    #[test]
+    fn get_returns_the_first_of_several_life_components() {
+        let entity = Entity {
+            id: id(1),
+            components: vec![Component::Life(Life(40)), Component::Life(Life(999))],
+        };
+        assert_eq!(entity.get::<Life>(), Some(&Life(40)));
+    }
+
+    #[test]
+    fn get_returns_none_when_absent() {
+        let entity = Entity {
+            id: id(2),
+            components: vec![Component::Life(Life(40))],
+        };
+        assert_eq!(entity.get::<RetreatCost>(), None);
+    }
+
+    #[test]
+    fn all_returns_every_skill_in_authored_order() {
+        let first = Entity {
+            id: id(10),
+            components: vec![Component::Name(Name("First".to_string()))],
+        };
+        let second = Entity {
+            id: id(11),
+            components: vec![Component::Name(Name("Second".to_string()))],
+        };
+        let third = Entity {
+            id: id(12),
+            components: vec![Component::Name(Name("Third".to_string()))],
+        };
+        let card = Entity {
+            id: id(1),
+            components: vec![
+                Component::Skill(first.clone()),
+                Component::Skill(second.clone()),
+                Component::Skill(third.clone()),
+            ],
+        };
+        assert_eq!(card.all::<Skill>(), vec![&first, &second, &third]);
+    }
+
+    #[test]
+    fn all_returns_every_effect_in_authored_order() {
+        let entity = Entity {
+            id: id(1),
+            components: vec![
+                Component::Effect(EffectLeaf::Heal { amount: 5 }),
+                Component::Effect(EffectLeaf::DrawCards { amount: 1 }),
+            ],
+        };
+        assert_eq!(
+            entity.all::<EffectLeaf>(),
+            vec![
+                &EffectLeaf::Heal { amount: 5 },
+                &EffectLeaf::DrawCards { amount: 1 },
+            ]
+        );
+    }
+
+    #[test]
+    fn demand_returns_the_component_when_present() {
+        let entity = Entity {
+            id: id(1),
+            components: vec![Component::Life(Life(40))],
+        };
+        assert_eq!(entity.demand::<Life>("destruction"), Ok(&Life(40)));
+    }
+
+    #[test]
+    fn demand_returns_a_named_breakage_when_absent() {
+        let entity = Entity {
+            id: id(3),
+            components: vec![],
+        };
+        assert_eq!(
+            entity.demand::<RetreatCost>("retreat"),
+            Err(Breakage {
+                rule: "retreat",
+                entity: id(3),
+                expected: ComponentKind::RetreatCost,
+            })
+        );
+    }
+
+    #[test]
+    fn get_and_attack_and_trigger_dispatch_to_their_own_markers() {
+        let ability = Entity {
+            id: id(20),
+            components: vec![Component::Cost(Cost::default())],
+        };
+        let card = Entity {
+            id: id(1),
+            components: vec![
+                Component::Attack(ability.clone()),
+                Component::Trigger(ability.clone()),
+            ],
+        };
+        assert_eq!(card.get::<Attack>(), Some(&ability));
+        assert_eq!(card.get::<Trigger>(), Some(&ability));
+        assert_eq!(card.get::<Skill>(), None);
+    }
+
+    #[test]
+    fn every_component_variant_constructs_and_is_reachable_through_get() {
+        let name = Entity {
+            id: id(1),
+            components: vec![Component::Name(Name("Whelp".to_string()))],
+        };
+        assert_eq!(name.get::<Name>(), Some(&Name("Whelp".to_string())));
+
+        let accounting = Entity {
+            id: id(2),
+            components: vec![Component::AccountingId(AccountingId {
+                prefix: "QRY".to_string(),
+                number: 14,
+            })],
+        };
+        assert_eq!(
+            accounting.get::<AccountingId>(),
+            Some(&AccountingId {
+                prefix: "QRY".to_string(),
+                number: 14,
+            })
+        );
+
+        let form = Entity {
+            id: id(3),
+            components: vec![Component::Form(Form::Base)],
+        };
+        assert_eq!(form.get::<Form>(), Some(&Form::Base));
+
+        let produces = Entity {
+            id: id(4),
+            components: vec![Component::Produces(ManaTypes(vec![ManaType::Matter]))],
+        };
+        assert_eq!(
+            produces.get::<ManaTypes>(),
+            Some(&ManaTypes(vec![ManaType::Matter]))
+        );
+
+        let tags = Entity {
+            id: id(5),
+            components: vec![Component::Tags(Tags(vec!["mount".to_string()]))],
+        };
+        assert_eq!(tags.get::<Tags>(), Some(&Tags(vec!["mount".to_string()])));
+
+        let cost = Entity {
+            id: id(6),
+            components: vec![Component::Cost(Cost::default())],
+        };
+        assert_eq!(cost.get::<Cost>(), Some(&Cost::default()));
+
+        let passive = Entity {
+            id: id(7),
+            components: vec![Component::Passive(Modifier::OpposingRetreatCostDelta(1))],
+        };
+        assert_eq!(
+            passive.get::<Modifier>(),
+            Some(&Modifier::OpposingRetreatCostDelta(1))
+        );
+    }
+}
