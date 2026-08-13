@@ -5,7 +5,9 @@
 //! then clones that state and mutates the clone, so a rejected action never
 //! touches the caller's original value (the design's transition contract).
 
-use crate::domain::cards::{CardDef, CardKind, Cost, Form, Modifier, Query, QueryResult, find_def};
+use crate::domain::cards::{
+    CardKind, Cost, Entity, Form, ManaTypes, Modifier, RetreatCost, family,
+};
 use crate::domain::errors::ActionError;
 use crate::domain::events::GameEvent;
 use crate::domain::ids::{BenchSlot, CardInstanceId, ManaType, PlayerId, Position};
@@ -23,30 +25,25 @@ fn summon_at(player: &PlayerState, position: Position) -> Option<&SummonInstance
     }
 }
 
-/// The Mana Types `def`'s topmost card prints, or none for a card with no
-/// `Produces` node.
-fn produced_types(def: &CardDef) -> Vec<ManaType> {
-    match def.find(Query::ProducedManaTypes) {
-        Some(QueryResult::ProducedManaTypes(types)) => types,
-        _ => vec![],
-    }
+/// The Mana Types `entity`'s topmost card prints, or none for a card with no
+/// `Produces` component. A card may print more than one `Produces`
+/// component; only the first anchors this Summon's characteristics.
+fn produced_types(entity: &Entity) -> Vec<ManaType> {
+    entity
+        .get::<ManaTypes>()
+        .map(|types| types.0.clone())
+        .unwrap_or_default()
 }
 
-/// The Form `def` prints, or none for a card with no `Form` node.
-fn current_form(def: &CardDef) -> Option<Form> {
-    match def.find(Query::CurrentForm) {
-        Some(QueryResult::CurrentForm(form)) => Some(form),
-        _ => None,
-    }
+/// The Form `entity` prints, or none for a card with no `Form` component.
+fn current_form(entity: &Entity) -> Option<Form> {
+    entity.get::<Form>().copied()
 }
 
-/// The printed Retreat Cost on `def`, or none for a card with no
-/// `RetreatCost` node.
-fn retreat_cost(def: &CardDef) -> Option<u32> {
-    match def.find(Query::RetreatCost) {
-        Some(QueryResult::RetreatCost(cost)) => Some(cost),
-        _ => None,
-    }
+/// The printed Retreat Cost on `entity`, or none for a card with no
+/// `RetreatCost` component.
+fn retreat_cost(entity: &Entity) -> Option<u32> {
+    entity.get::<RetreatCost>().map(|cost| cost.0)
 }
 
 /// Rules §16: `player`'s opponent may print a Passive that raises the cost
@@ -54,7 +51,10 @@ fn retreat_cost(def: &CardDef) -> Option<u32> {
 /// Paths). Scans every Summon `player`'s opponent controls, reading each
 /// one's topmost card only — the same "topmost card alone defines current
 /// characteristics" reading `retreat_cost` and `produced_types` already
-/// give the chain (rules §20) — and sums every matching Passive found.
+/// give the chain (rules §20) — and sums every matching Passive found. A
+/// card may print more than one Passive; only the first of each card counts
+/// toward this sum, the same "first anchors" reading `produced_types` gives
+/// a card with more than one `Produces`.
 fn opposing_retreat_cost_delta(state: &GameState, player: PlayerId) -> i32 {
     let opponent_state = state.players.get(player.opponent());
     let positions = [
@@ -66,9 +66,9 @@ fn opposing_retreat_cost_delta(state: &GameState, player: PlayerId) -> i32 {
     positions
         .iter()
         .filter_map(|&position| summon_at(opponent_state, position))
-        .filter_map(|summon| find_def(&state.cards, summon.chain.top().def))
-        .filter_map(|top_def| match top_def.find(Query::Passive) {
-            Some(QueryResult::Passive(Modifier::OpposingRetreatCostDelta(delta))) => Some(delta),
+        .filter_map(|summon| state.cards.get(summon.chain.top().def))
+        .filter_map(|top| match top.get::<Modifier>() {
+            Some(Modifier::OpposingRetreatCostDelta(delta)) => Some(*delta),
             _ => None,
         })
         .sum()
@@ -106,10 +106,10 @@ pub(crate) fn play_summon(
     };
     let card_ref = player_state.hand[hand_index];
 
-    let Some(def) = find_def(&state.cards, card_ref.def) else {
+    let Some(entity) = state.cards.get(card_ref.def) else {
         return Err(ActionError::UnknownCard);
     };
-    if def.kind != CardKind::Summon || current_form(&def) != Some(Form::Base) {
+    if family(entity) != CardKind::Summon || current_form(entity) != Some(Form::Base) {
         return Err(ActionError::UnknownCard);
     }
 
@@ -162,25 +162,25 @@ pub(crate) fn upgrade_summon(
     };
     let card_ref = player_state.hand[hand_index];
 
-    let Some(def) = find_def(&state.cards, card_ref.def) else {
+    let Some(entity) = state.cards.get(card_ref.def) else {
         return Err(ActionError::UnknownCard);
     };
-    if def.kind != CardKind::Summon {
+    if family(entity) != CardKind::Summon {
         return Err(ActionError::UnknownCard);
     }
-    let Some(new_form) = current_form(&def) else {
+    let Some(new_form) = current_form(entity) else {
         return Err(ActionError::UnknownCard);
     };
 
-    let Some(top_def) = find_def(&state.cards, summon.chain.top().def) else {
+    let Some(top_entity) = state.cards.get(summon.chain.top().def) else {
         return Err(ActionError::UnknownCard);
     };
-    let Some(top_form) = current_form(&top_def) else {
+    let Some(top_form) = current_form(top_entity) else {
         return Err(ActionError::UnknownCard);
     };
 
-    let new_types = produced_types(&def);
-    let top_types = produced_types(&top_def);
+    let new_types = produced_types(entity);
+    let top_types = produced_types(top_entity);
     let types_carry_forward = top_types.iter().all(|t| new_types.contains(t));
 
     if new_form <= top_form || !types_carry_forward {
@@ -233,10 +233,10 @@ pub(crate) fn retreat(
         return Err(ActionError::EmptyPosition);
     }
 
-    let Some(top_def) = find_def(&state.cards, main_summon.chain.top().def) else {
+    let Some(top_entity) = state.cards.get(main_summon.chain.top().def) else {
         return Err(ActionError::UnknownCard);
     };
-    let Some(printed_cost) = retreat_cost(&top_def) else {
+    let Some(printed_cost) = retreat_cost(top_entity) else {
         return Err(ActionError::UnknownCard);
     };
 

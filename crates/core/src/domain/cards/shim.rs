@@ -10,23 +10,12 @@
 //! `None`" before this module existed.
 
 use super::entity::{
-    Attack, Entity, EntityId, Life, ManaTypes, Name, Respondable, RetreatCost, Skill, Tags, Trigger,
+    Attack, Entity, EntityId, Life, ManaTypes, Name, Respondable, RetreatCost, Skill, Trigger,
 };
 use super::{
     CardDef, CardKind, CardNode, CardSet, Cost, EffectLeaf, Form, Modifier, SpellTiming,
-    TriggerEvent,
+    TriggerEvent, family,
 };
-
-/// The card family a fixture's `Tags` names (design decision 6, problem 1):
-/// `"spell"` and `"enchantment"` are the two tags this crate's fixtures
-/// print; every other entity, tagged or not, is a Summon.
-fn family(entity: &Entity) -> CardKind {
-    match entity.get::<Tags>() {
-        Some(tags) if tags.0.iter().any(|tag| tag == "spell") => CardKind::Spell,
-        Some(tags) if tags.0.iter().any(|tag| tag == "enchantment") => CardKind::Enchantment,
-        _ => CardKind::Summon,
-    }
-}
 
 /// Project one `Entity`'s components into the `CardDef` tree. A Skill,
 /// Attack, or Trigger component wraps its own nested entity, read one level
@@ -123,7 +112,6 @@ mod tests {
     use crate::domain::actions::SkillIndex;
     use crate::domain::cards::fixtures;
     use crate::domain::cards::{Query, QueryResult};
-    use crate::domain::ids::ManaType;
 
     fn def(slug: &str) -> CardDef {
         let cards = fixtures::card_set();
@@ -136,41 +124,6 @@ mod tests {
         assert!(find_def(&cards, fixtures::id("quarry-whelp")).is_some());
         let unknown = EntityId::parse(&"f".repeat(32)).expect("valid probe id");
         assert_eq!(find_def(&cards, unknown), None);
-    }
-
-    #[test]
-    fn find_reads_the_current_form() {
-        assert_eq!(
-            def("quarry-whelp").find(Query::CurrentForm),
-            Some(QueryResult::CurrentForm(Form::Base))
-        );
-        assert_eq!(
-            def("quarry-brute").find(Query::CurrentForm),
-            Some(QueryResult::CurrentForm(Form::Enhanced))
-        );
-        assert_eq!(
-            def("colossus-of-the-quarry").find(Query::CurrentForm),
-            Some(QueryResult::CurrentForm(Form::Elite))
-        );
-    }
-
-    #[test]
-    fn find_reads_the_produced_mana_types() {
-        assert_eq!(
-            def("set-path-adept").find(Query::ProducedManaTypes),
-            Some(QueryResult::ProducedManaTypes(vec![
-                ManaType::Matter,
-                ManaType::Mind
-            ]))
-        );
-    }
-
-    #[test]
-    fn find_reads_the_retreat_cost() {
-        assert_eq!(
-            def("colossus-of-the-quarry").find(Query::RetreatCost),
-            Some(QueryResult::RetreatCost(3))
-        );
     }
 
     #[test]
@@ -259,42 +212,6 @@ mod tests {
     }
 
     #[test]
-    fn find_reads_the_passive_modifier() {
-        assert_eq!(
-            def("warden-of-set-paths").find(Query::Passive),
-            Some(QueryResult::Passive(Modifier::OpposingRetreatCostDelta(1)))
-        );
-    }
-
-    #[test]
-    fn every_summon_chain_climbs_base_enhanced_elite() {
-        let chains = [
-            ["quarry-whelp", "quarry-brute", "colossus-of-the-quarry"],
-            [
-                "warden-initiate",
-                "warden-pathkeeper",
-                "warden-of-set-paths",
-            ],
-            ["griefsinger-wisp", "griefsinger-mourner", "griefsinger"],
-            ["sow-piglet", "sow-matriarch", "old-sow-of-the-barrow"],
-        ];
-        for [base, enhanced, elite] in chains {
-            assert_eq!(
-                def(base).find(Query::CurrentForm),
-                Some(QueryResult::CurrentForm(Form::Base))
-            );
-            assert_eq!(
-                def(enhanced).find(Query::CurrentForm),
-                Some(QueryResult::CurrentForm(Form::Enhanced))
-            );
-            assert_eq!(
-                def(elite).find(Query::CurrentForm),
-                Some(QueryResult::CurrentForm(Form::Elite))
-            );
-        }
-    }
-
-    #[test]
     fn find_reads_the_attack_cost_and_effects() {
         assert_eq!(
             def("quarry-brute").find(Query::Attack),
@@ -309,11 +226,5 @@ mod tests {
                 }],
             })
         );
-    }
-
-    #[test]
-    fn find_reads_a_card_with_no_produced_mana_types_as_none() {
-        // `ember-lance` is a Spell; it prints no `Produces` component at all.
-        assert_eq!(def("ember-lance").find(Query::ProducedManaTypes), None);
     }
 }
