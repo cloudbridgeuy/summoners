@@ -1,10 +1,18 @@
-//! The provisional card representation (design decision 6).
+//! The card container (`entity`, `set`) and, alongside it, the provisional
+//! card representation (design decision 6) that the engine still reads
+//! through.
 //!
-//! A card is a tree of typed nodes and effect leaves, reached only through
-//! `CardDef::find`. The final Card container is a separate, future design;
-//! when it lands, `CardDef` and `find` change but the engine keeps this
-//! query surface. Everything below `CardDefId` stays `pub(crate)` because no
-//! code outside this crate should depend on today's shape.
+//! `entity` and `set` hold the settled container: `Entity`, `Component`, and
+//! `CardSet`. They are additive — no engine call site reads them yet — and
+//! their vocabulary is public API (design decision 18).
+//!
+//! Everything below is the provisional tree: a card is a tree of typed nodes
+//! and effect leaves, reached only through `CardDef::find`. When the engine
+//! migrates onto the container, `CardDef` and `find` are deleted. Everything
+//! below `CardDefId` stays `pub(crate)` because no code outside this crate
+//! should depend on today's shape. `Form`, `Cost`, and `Modifier` are the
+//! three exceptions: the container's `Component` enum names them directly,
+//! so they are `pub`.
 //!
 //! The fixture registry in `registry.rs` is a minimal set of vanilla
 //! Summons — `Life`, `Produces`, `RetreatCost`, `Form`, and a plain `Attack`
@@ -49,9 +57,11 @@ pub(crate) enum CardKind {
     Enchantment,
 }
 
-/// A Summon's place in its upgrade chain (rules §20).
+/// A Summon's place in its upgrade chain (rules §20). `pub`, not
+/// `pub(crate)`: the new card container's `Component::Form` variant names
+/// this type directly, and the card vocabulary is public API.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) enum Form {
+pub enum Form {
     Base,
     Enhanced,
     Elite,
@@ -98,9 +108,10 @@ pub enum ResponseBlock {
 }
 
 /// A typed plus Generic Mana cost (rules §12). Every component may be zero;
-/// a Skill's cost may be free (rules §15).
+/// a Skill's cost may be free (rules §15). `pub`, not `pub(crate)`: the new
+/// card container's `Component::Cost` variant names this type directly.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub(crate) struct Cost {
+pub struct Cost {
     pub matter: u32,
     pub mind: u32,
     pub spirit: u32,
@@ -154,9 +165,11 @@ pub enum EffectLeaf {
     SwapOpposingPositions,
 }
 
-/// The first Modifier: a Passive's continuous adjustment (rules §16).
+/// The first Modifier: a Passive's continuous adjustment (rules §16). `pub`,
+/// not `pub(crate)`: the new card container's `Component::Passive` variant
+/// names this type directly.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Modifier {
+pub enum Modifier {
     OpposingRetreatCostDelta(i32),
 }
 
@@ -348,6 +361,17 @@ impl CardDef {
 /// this file stays the vocabulary and the query machinery only.
 mod registry;
 pub(crate) use registry::find_def;
+
+/// The card container: `Entity`, `Component`, and the typed reads over them.
+mod entity;
+pub use entity::{
+    AccountingId, Attack, Breakage, Component, ComponentField, ComponentKind, Entity, EntityId,
+    EntityIdParseError, Life, ManaTypes, Name, RetreatCost, Skill, Tags, Trigger,
+};
+
+/// `CardSet`: the indexed collection of top-level entities.
+mod set;
+pub use set::CardSet;
 
 #[cfg(test)]
 mod tests {
