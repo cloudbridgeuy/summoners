@@ -16,16 +16,18 @@ use crate::domain::state::{CardRef, GameState, StackItem, WorkItem};
 use crate::engine::{destruction, effects, loss, triggers, upkeep};
 
 /// Drain `state.work`, then the Stack, until both are settled, a decision
-/// pauses the loop (`pending` becomes set), or the game ends (`outcome`
-/// becomes set — rules §2: losing is immediate, so nothing queued after
-/// that point runs). Returns the resulting state and every event produced
-/// along the way, in order.
+/// pauses the loop (`pending` becomes set), or `state.status` leaves
+/// `Playing` — the game ends (rules §2: losing is immediate, so nothing
+/// queued after that point runs) or breaks (a rule demanded a component no
+/// entity printed; whatever is still queued in `work` at that point is left
+/// exactly where it is, unread). Returns the resulting state and every
+/// event produced along the way, in order.
 pub(crate) fn drain(state: &GameState) -> (GameState, Vec<GameEvent>) {
     let mut state = state.clone();
     let mut events = Vec::new();
 
     loop {
-        if state.pending.is_some() || state.outcome.is_some() {
+        if state.pending.is_some() || !state.status.is_playing() {
             break;
         }
 

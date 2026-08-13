@@ -2,15 +2,15 @@
 //! losing conditions is met — a third Main Summon loss, a Main Summon loss
 //! with no Benched Summon left to promote, or a required draw from an empty
 //! Deck. "Immediately" means the resolution loop stops as soon as it sees
-//! `outcome` set (rules §2: "as soon as a player reaches [a losing
-//! condition], the game ends and unresolved effects do not continue"), so
-//! nothing still queued after any of these runs.
+//! `status` leave `Playing` (rules §2: "as soon as a player reaches [a
+//! losing condition], the game ends and unresolved effects do not
+//! continue"), so nothing still queued after any of these runs.
 
 use crate::domain::events::GameEvent;
 use crate::domain::ids::PlayerId;
-use crate::domain::state::{GameOutcome, GameState, LossReason};
+use crate::domain::state::{GameOutcome, GameState, GameStatus, LossReason};
 
-/// Set `outcome` to a win for `loser`'s opponent and return the shared
+/// Set `status` to a win for `loser`'s opponent and return the shared
 /// `GameEnded` fact every losing path emits.
 fn lose(state: &GameState, loser: PlayerId, reason: LossReason) -> (GameState, Vec<GameEvent>) {
     let mut state = state.clone();
@@ -18,7 +18,7 @@ fn lose(state: &GameState, loser: PlayerId, reason: LossReason) -> (GameState, V
         winner: loser.opponent(),
         reason,
     };
-    state.outcome = Some(outcome);
+    state.status = GameStatus::Ended(outcome);
 
     (
         state,
@@ -113,7 +113,7 @@ mod tests {
             stack_segment_bases: vec![],
             work: VecDeque::new(),
             pending: None,
-            outcome: None,
+            status: GameStatus::Playing,
             cards: fixtures::card_set(),
         }
     }
@@ -125,8 +125,8 @@ mod tests {
         let (state, events) = draw_failure(&state, PlayerId::Two);
 
         assert_eq!(
-            state.outcome,
-            Some(GameOutcome {
+            state.status,
+            GameStatus::Ended(GameOutcome {
                 winner: PlayerId::One,
                 reason: LossReason::EmptyDeckDraw,
             })
@@ -159,8 +159,8 @@ mod tests {
         let (state, events) = check(&state, PlayerId::One);
 
         assert_eq!(
-            state.outcome,
-            Some(GameOutcome {
+            state.status,
+            GameStatus::Ended(GameOutcome {
                 winner: PlayerId::Two,
                 reason: LossReason::ThirdMainLoss,
             })
@@ -184,8 +184,8 @@ mod tests {
         let (state, events) = check(&state, PlayerId::One);
 
         assert_eq!(
-            state.outcome,
-            Some(GameOutcome {
+            state.status,
+            GameStatus::Ended(GameOutcome {
                 winner: PlayerId::Two,
                 reason: LossReason::NoPromotionAvailable,
             })
@@ -218,7 +218,7 @@ mod tests {
 
         let (state, events) = check(&state, PlayerId::One);
 
-        assert_eq!(state.outcome, None);
+        assert_eq!(state.status, GameStatus::Playing);
         assert!(events.is_empty());
     }
 
@@ -233,8 +233,8 @@ mod tests {
         let (state, _events) = check(&state, PlayerId::One);
 
         assert_eq!(
-            state.outcome,
-            Some(GameOutcome {
+            state.status,
+            GameStatus::Ended(GameOutcome {
                 winner: PlayerId::Two,
                 reason: LossReason::ThirdMainLoss,
             })

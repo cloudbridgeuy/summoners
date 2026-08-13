@@ -4,14 +4,15 @@
 //! `GameAction` always produce the same `ActionOutcome`, and a rejected
 //! action leaves the caller's state untouched (the design's transition
 //! contract). Before any handler runs, the actor gate enforces decision 15:
-//! a finished game rejects everything, then `pending` (if set) names the
-//! only legal actor, then an open Priority window, then the active player.
+//! a finished or broken game rejects everything, then `pending` (if set)
+//! names the only legal actor, then an open Priority window, then the
+//! active player.
 
 use crate::domain::actions::GameAction;
 use crate::domain::errors::ActionError;
 use crate::domain::events::GameEvent;
 use crate::domain::ids::PlayerId;
-use crate::domain::state::{GameState, PendingInput};
+use crate::domain::state::{GameState, GameStatus, PendingInput};
 use crate::engine::{destruction, resolution, stack, turn};
 
 /// The result of one accepted action: the next state and the ordered facts
@@ -32,8 +33,10 @@ pub struct ActionOutcome {
 /// action"). A rejected action never reaches the drain, so its typed error
 /// is the only thing the caller sees.
 pub fn apply(state: &GameState, action: &GameAction) -> Result<ActionOutcome, ActionError> {
-    if state.outcome.is_some() {
-        return Err(ActionError::GameAlreadyOver);
+    match &state.status {
+        GameStatus::Playing => {}
+        GameStatus::Ended(_) => return Err(ActionError::GameAlreadyOver),
+        GameStatus::Broken(_) => return Err(ActionError::GameBroken),
     }
 
     check_actor(state, action.actor())?;

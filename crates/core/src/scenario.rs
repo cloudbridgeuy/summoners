@@ -18,8 +18,8 @@ use crate::domain::cards::{CardSet, Form};
 use crate::domain::errors::InvalidScenario;
 use crate::domain::ids::{BenchSlot, PlayerId, Position};
 use crate::domain::state::{
-    CardRef, GameState, ManaBank, PendingInput, PerPlayer, Phase, PlayerState, SummonInstance,
-    TurnState, UpgradeChain,
+    CardRef, GameState, GameStatus, ManaBank, PendingInput, PerPlayer, Phase, PlayerState,
+    SummonInstance, TurnState, UpgradeChain,
 };
 
 /// One Summon as a scenario describes it: its printed chain, bottom to top,
@@ -256,7 +256,7 @@ pub fn from_scenario(
         stack_segment_bases: vec![],
         work: VecDeque::new(),
         pending,
-        outcome: None,
+        status: GameStatus::Playing,
         cards,
     })
 }
@@ -334,7 +334,7 @@ mod tests {
             .expect("a minimal scenario should parse");
 
         assert_eq!(state.pending, None);
-        assert_eq!(state.outcome, None);
+        assert_eq!(state.status, GameStatus::Playing);
         assert_eq!(state.turn.active_player, PlayerId::One);
     }
 
@@ -483,7 +483,7 @@ mod tests {
         assert_eq!(state.turn.active_player, PlayerId::Two);
         assert_eq!(state.turn.phase, Phase::Main);
         assert_eq!(state.pending, None);
-        assert_eq!(state.outcome, None);
+        assert_eq!(state.status, GameStatus::Playing);
         assert!(state.stack.is_empty());
         assert!(state.work.is_empty());
     }

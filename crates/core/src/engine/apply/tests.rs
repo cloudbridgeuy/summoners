@@ -2,8 +2,8 @@ use super::*;
 use crate::domain::cards::fixtures;
 use crate::domain::ids::{BenchSlot, CardInstanceId, ManaType, Position};
 use crate::domain::state::{
-    CardRef, GameOutcome, LossReason, ManaBank, ManaSource, PerPlayer, Phase, PlayerState,
-    StackItem, StackWindow, SummonInstance, TurnState, UpgradeChain,
+    CardRef, GameOutcome, GameStatus, LossReason, ManaBank, ManaSource, PerPlayer, Phase,
+    PlayerState, StackItem, StackWindow, SummonInstance, TurnState, UpgradeChain,
 };
 use std::collections::VecDeque;
 
@@ -57,7 +57,7 @@ fn base_state() -> GameState {
         stack_segment_bases: vec![],
         work: VecDeque::new(),
         pending: None,
-        outcome: None,
+        status: GameStatus::Playing,
         cards: fixtures::card_set(),
     }
 }
@@ -103,7 +103,7 @@ fn full_end_turn(state: &GameState, player: PlayerId) -> Result<ActionOutcome, A
 #[test]
 fn a_finished_game_rejects_every_action_first() {
     let mut state = base_state();
-    state.outcome = Some(GameOutcome {
+    state.status = GameStatus::Ended(GameOutcome {
         winner: PlayerId::One,
         reason: LossReason::ThirdMainLoss,
     });
@@ -114,6 +114,22 @@ fn a_finished_game_rejects_every_action_first() {
     let result = apply(&state, &end_turn(PlayerId::Two));
 
     assert_eq!(result, Err(ActionError::GameAlreadyOver));
+}
+
+#[test]
+fn a_broken_game_rejects_every_action_first() {
+    let mut state = base_state();
+    state.status = GameStatus::Broken(crate::domain::cards::Breakage {
+        rule: "destruction",
+        entity: fixtures::id("quarry-whelp"),
+        expected: crate::domain::cards::ComponentKind::Life,
+    });
+
+    // Same proof as the finished-game case just above: the wrong player is
+    // used here to prove GameBroken wins even over a mismatched actor.
+    let result = apply(&state, &end_turn(PlayerId::Two));
+
+    assert_eq!(result, Err(ActionError::GameBroken));
 }
 
 #[test]
@@ -220,6 +236,7 @@ fn with_no_pending_and_no_window_only_the_active_player_may_act() {
     ));
 }
 
+mod broken_game;
 mod demo;
 mod demo_triggers;
 mod scenario_probes;

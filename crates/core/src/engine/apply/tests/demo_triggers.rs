@@ -236,7 +236,7 @@ fn demo_a_respondable_destruction_trigger_opens_a_mid_drain_window_and_resumes_t
     );
     assert_eq!(resumed.state.turn.window, None);
     assert_eq!(resumed.state.pending, None);
-    assert_eq!(resumed.state.outcome, None);
+    assert_eq!(resumed.state.status, GameStatus::Playing);
     let two = resumed.state.players.get(PlayerId::Two);
     assert!(two.main.is_some(), "Promotion filled the empty Main");
     assert_eq!(two.bench, [None, None, None]);
