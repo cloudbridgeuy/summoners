@@ -765,6 +765,32 @@ mod tests {
     }
 
     #[test]
+    fn every_signature_chain_climbs_base_enhanced_elite() {
+        let chains = [
+            ["quarry-whelp", "quarry-brute", "colossus-of-the-quarry"],
+            [
+                "warden-initiate",
+                "warden-pathkeeper",
+                "warden-of-set-paths",
+            ],
+            ["griefsinger-wisp", "griefsinger-mourner", "griefsinger"],
+            ["sow-piglet", "sow-matriarch", "old-sow-of-the-barrow"],
+        ];
+        let cards = card_set();
+        for [base, enhanced, elite] in chains {
+            let form_of = |slug: &str| {
+                cards
+                    .get(id(slug))
+                    .and_then(|entity| entity.get::<Form>())
+                    .copied()
+            };
+            assert_eq!(form_of(base), Some(Form::Base));
+            assert_eq!(form_of(enhanced), Some(Form::Enhanced));
+            assert_eq!(form_of(elite), Some(Form::Elite));
+        }
+    }
+
+    #[test]
     fn id_finds_a_card_by_its_slug() {
         let cards = card_set();
         let whelp = cards
