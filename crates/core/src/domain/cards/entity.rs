@@ -144,6 +144,15 @@ pub struct Trigger;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Respondable;
 
+/// A zero-sized marker for `Component::Persistent`: a resolved Spell or
+/// Enchantment carrying this component stays in play instead of moving to
+/// its caster's discard pile (rules §44). Presence, not a boolean payload —
+/// and not a card family — for the same reason `Respondable` is one: a card
+/// that never prints this component already answers "does not persist" on
+/// its own.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Persistent;
+
 /// One typed fact or ability an `Entity` carries. The enum is closed and
 /// additive: a new variant never invalidates a card or a read already
 /// written against an earlier one. A card declares facts here; it declares
@@ -181,6 +190,12 @@ pub enum Component {
     /// Stack (rules §37–38). See `Respondable`'s own doc comment for why
     /// this is a presence marker rather than a boolean payload.
     Respondable,
+    /// Marks a Spell or Enchantment as staying in play after it resolves,
+    /// instead of moving to its caster's discard pile (rules §44). See
+    /// `Persistent`'s own doc comment for why this is a presence marker
+    /// rather than a boolean payload, and why it replaces a card-family
+    /// check.
+    Persistent,
 }
 
 /// One printed card, or one ability nested inside a card, sharing the same
@@ -210,6 +225,7 @@ pub enum ComponentKind {
     Timing,
     Event,
     Respondable,
+    Persistent,
 }
 
 /// What a demanded component's absence means: this game (or, inside
@@ -283,6 +299,22 @@ impl ComponentField for Respondable {
         const MARKER: Respondable = Respondable;
         match component {
             Component::Respondable => Some(&MARKER),
+            _ => None,
+        }
+    }
+}
+
+impl ComponentField for Persistent {
+    type Output = Persistent;
+
+    fn component_kind() -> ComponentKind {
+        ComponentKind::Persistent
+    }
+
+    fn extract(component: &Component) -> Option<&Self::Output> {
+        const MARKER: Persistent = Persistent;
+        match component {
+            Component::Persistent => Some(&MARKER),
             _ => None,
         }
     }
@@ -620,6 +652,33 @@ mod tests {
             components: vec![Component::Respondable],
         };
         assert_eq!(respondable.get::<Respondable>(), Some(&Respondable));
+
+        let persistent = Entity {
+            id: id(11),
+            components: vec![Component::Persistent],
+        };
+        assert_eq!(persistent.get::<Persistent>(), Some(&Persistent));
+    }
+
+    /// `Persistent`'s presence, not a boolean payload, is what a resolved
+    /// Spell or Enchantment carries to stay in play (rules §44) — the same
+    /// shape `Respondable` uses for the same reason.
+    #[test]
+    fn persistent_presence_distinguishes_a_persisting_card_from_a_disposable_one() {
+        let disposable = Entity {
+            id: id(32),
+            components: vec![Component::Name(Name("Ember Lance".to_string()))],
+        };
+        assert_eq!(disposable.get::<Persistent>(), None);
+
+        let persisting = Entity {
+            id: id(33),
+            components: vec![
+                Component::Name(Name("Standing Ward".to_string())),
+                Component::Persistent,
+            ],
+        };
+        assert_eq!(persisting.get::<Persistent>(), Some(&Persistent));
     }
 
     /// A Trigger's nested entity carries its event directly, and the

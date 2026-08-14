@@ -9,7 +9,7 @@
 //! the segment base the trigger just pushed — exactly where they are until
 //! that window closes.
 
-use crate::domain::cards::{CardKind, CardSet, EffectLeaf, EntityId, Query, QueryResult, find_def};
+use crate::domain::cards::{Attack, CardSet, EffectLeaf, EntityId, Persistent};
 use crate::domain::events::GameEvent;
 use crate::domain::ids::{PlayerId, Position};
 use crate::domain::state::{CardRef, GameState, StackItem, WorkItem};
@@ -197,11 +197,13 @@ fn resolve_attack(
 }
 
 /// Apply a Spell's or an Enchantment's printed effects against `targets`,
-/// then place the resolved card in its post-resolution zone: a Spell moves
-/// to its caster's discard pile, the same way a destroyed upgrade chain
-/// does (rules §56); an Enchantment instead stays in play, added to its
-/// caster's `enchantments` (rules §44: "Enchantments ... remain in play
-/// after resolving ... until an effect removes it").
+/// then place the resolved card in its post-resolution zone: a card
+/// printing `Persistent` stays in play, added to its caster's
+/// `enchantments` (rules §44: "Enchantments ... remain in play after
+/// resolving ... until an effect removes it"); every other card moves to
+/// its caster's discard pile, the same way a destroyed upgrade chain does
+/// (rules §56). Persistence is a printed fact, not a card family — see
+/// `Persistent`'s own doc comment.
 fn resolve_spell(
     state: &GameState,
     caster: PlayerId,
@@ -214,10 +216,12 @@ fn resolve_spell(
         targets,
         &spell_effects(&state.cards, card.def),
     );
-    let is_enchantment =
-        find_def(&state.cards, card.def).is_some_and(|def| def.kind == CardKind::Enchantment);
+    let persists = state
+        .cards
+        .get(card.def)
+        .is_some_and(|entity| entity.get::<Persistent>().is_some());
     let player_state = state.players.get_mut(caster);
-    if is_enchantment {
+    if persists {
         player_state.enchantments.push(card);
     } else {
         player_state.discard.push(card);
@@ -255,36 +259,32 @@ pub(crate) fn apply_leaves(
     (state, events)
 }
 
-/// The attacker's currently printed Attack effects.
+/// The attacker's currently printed Attack effects, read off the nested
+/// entity `Component::Attack` wraps — not off the card itself. No `Attack`
+/// component at all, the same as an unresolvable card, answers with no
+/// effects.
 fn attacker_effects(state: &GameState, attacker: PlayerId) -> Vec<EffectLeaf> {
     let Some(main_summon) = &state.players.get(attacker).main else {
         return Vec::new();
     };
-    let Some(def) = find_def(&state.cards, main_summon.chain.top().def) else {
+    let Some(entity) = state.cards.get(main_summon.chain.top().def) else {
         return Vec::new();
     };
-    match def.find(Query::Attack) {
-        Some(QueryResult::Attack { effects, .. }) => effects,
-        _ => Vec::new(),
-    }
+    let Some(attack) = entity.get::<Attack>() else {
+        return Vec::new();
+    };
+    attack.all::<EffectLeaf>().into_iter().cloned().collect()
 }
 
-/// A Spell's or an Enchantment's printed effects, read off its card
-/// definition.
+/// A Spell's or an Enchantment's printed effects, read straight off the
+/// top-level entity — neither wraps a nested entity of its own the way an
+/// Attack does, so both families read the same components the same way. An
+/// unresolvable card answers with no effects.
 fn spell_effects(cards: &CardSet, def_id: EntityId) -> Vec<EffectLeaf> {
-    let Some(def) = find_def(cards, def_id) else {
+    let Some(entity) = cards.get(def_id) else {
         return Vec::new();
     };
-    match def.kind {
-        CardKind::Enchantment => match def.find(Query::Enchantment) {
-            Some(QueryResult::Enchantment { effects, .. }) => effects,
-            _ => Vec::new(),
-        },
-        _ => match def.find(Query::Spell) {
-            Some(QueryResult::Spell { effects, .. }) => effects,
-            _ => Vec::new(),
-        },
-    }
+    entity.all::<EffectLeaf>().into_iter().cloned().collect()
 }
 
 #[cfg(test)]

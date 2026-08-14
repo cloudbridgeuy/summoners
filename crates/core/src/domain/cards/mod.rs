@@ -201,48 +201,28 @@ pub(crate) enum CardNode {
     },
 }
 
-/// A question `CardDef::find` can answer about one printed card. `Attack`
-/// backs the normal-attack cost and Damage lookup in `engine::stack` and
-/// `engine::resolution` (rules §29–30); `Skill`
+/// A question `CardDef::find` can answer about one printed card. `Skill`
 /// backs the printed cost and effects lookup for one of the topmost card's
 /// Skill nodes, addressed by its `SkillIndex`, in `engine::skills` (rules
-/// §15); `Spell` backs the printed timing family, cost, and effects lookup in
-/// `engine::stack` and `engine::resolution` (rules §34). More variants
-/// arrive alongside the handler that first needs them, matching the rest of
-/// this crate's stubs.
+/// §15); `Trigger` backs the printed event, respondability, and effects
+/// lookup in `engine::triggers`. More variants arrive alongside the handler
+/// that first needs them, matching the rest of this crate's stubs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Query {
-    Attack,
     Skill(SkillIndex),
-    Spell,
     Trigger,
-    /// Rules §44: a printed Enchantment's cost and persistent effect leaves.
-    Enchantment,
 }
 
 /// One answer `CardDef::find` can return, matching the `Query` asked.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum QueryResult {
-    Attack {
-        cost: Cost,
-        effects: Vec<EffectLeaf>,
-    },
     Skill {
-        cost: Cost,
-        effects: Vec<EffectLeaf>,
-    },
-    Spell {
-        timing: SpellTiming,
         cost: Cost,
         effects: Vec<EffectLeaf>,
     },
     Trigger {
         event: TriggerEvent,
         respondable: bool,
-        effects: Vec<EffectLeaf>,
-    },
-    Enchantment {
-        cost: Cost,
         effects: Vec<EffectLeaf>,
     },
 }
@@ -281,22 +261,6 @@ impl CardDef {
                 .nth(index);
         }
         self.nodes.iter().find_map(|node| match (query, node) {
-            (Query::Attack, CardNode::Attack { cost, effects }) => Some(QueryResult::Attack {
-                cost: *cost,
-                effects: effects.clone(),
-            }),
-            (
-                Query::Spell,
-                CardNode::Spell {
-                    timing,
-                    cost,
-                    effects,
-                },
-            ) => Some(QueryResult::Spell {
-                timing: *timing,
-                cost: *cost,
-                effects: effects.clone(),
-            }),
             (
                 Query::Trigger,
                 CardNode::Trigger {
@@ -309,12 +273,6 @@ impl CardDef {
                 respondable: *respondable,
                 effects: effects.clone(),
             }),
-            (Query::Enchantment, CardNode::Enchantment { cost, effects }) => {
-                Some(QueryResult::Enchantment {
-                    cost: *cost,
-                    effects: effects.clone(),
-                })
-            }
             _ => None,
         })
     }
@@ -324,7 +282,8 @@ impl CardDef {
 mod entity;
 pub use entity::{
     AccountingId, Attack, Breakage, Component, ComponentField, ComponentKind, Entity, EntityId,
-    EntityIdParseError, Life, ManaTypes, Name, Respondable, RetreatCost, Skill, Tags, Trigger,
+    EntityIdParseError, Life, ManaTypes, Name, Persistent, Respondable, RetreatCost, Skill, Tags,
+    Trigger,
 };
 
 /// `CardSet`: the indexed collection of top-level entities.
@@ -501,6 +460,6 @@ mod tests {
             kind: CardKind::Summon,
             nodes: vec![],
         };
-        assert_eq!(bare.find(Query::Attack), None);
+        assert_eq!(bare.find(Query::Trigger), None);
     }
 }

@@ -240,6 +240,7 @@ mod board_economy;
 mod broken_game;
 mod demo;
 mod demo_triggers;
+mod effect_order_and_persistence;
 mod scenario_probes;
 
 #[test]
