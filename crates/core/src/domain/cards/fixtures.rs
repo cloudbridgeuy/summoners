@@ -136,6 +136,10 @@ fn enchantment(card: u32, name: &str, cost: Cost, effects: Vec<EffectLeaf>) -> E
         }),
         Component::Tags(Tags(vec!["enchantment".to_string()])),
         Component::Cost(cost),
+        // Rules §44: an Enchantment stays in play after resolving. This is
+        // a printed fact, not a consequence of the "enchantment" tag — see
+        // `Persistent`'s own doc comment.
+        Component::Persistent,
     ];
     components.extend(effects.into_iter().map(Component::Effect));
     Entity {

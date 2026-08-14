@@ -12,7 +12,7 @@
 //! leaving the state resting with nobody able to act.
 
 use crate::domain::cards::{
-    CardKind, Cost, EffectLeaf, Query, QueryResult, ResponseBlock, SpellTiming, find_def,
+    Attack, CardKind, Cost, EffectLeaf, ResponseBlock, SpellTiming, family,
 };
 use crate::domain::errors::ActionError;
 use crate::domain::events::GameEvent;
@@ -59,12 +59,13 @@ pub(crate) fn declare_attack(
     let Some(main_summon) = &player_state.main else {
         return Err(ActionError::EmptyPosition);
     };
-    let Some(top_def) = find_def(&state.cards, main_summon.chain.top().def) else {
+    let Some(top_entity) = state.cards.get(main_summon.chain.top().def) else {
         return Err(ActionError::UnknownCard);
     };
-    let Some(QueryResult::Attack { cost, .. }) = top_def.find(Query::Attack) else {
+    let Some(attack) = top_entity.get::<Attack>() else {
         return Err(ActionError::UnknownCard);
     };
+    let cost = attack.get::<Cost>().copied().unwrap_or_default();
 
     let payment = match payment::deduct(player_state.mana, cost, mana_hint) {
         Ok(payment) => payment,
@@ -137,18 +138,23 @@ pub(crate) fn cast_spell(
     };
     let card_ref = player_state.hand[hand_index];
 
-    let Some(def) = find_def(&state.cards, card_ref.def) else {
+    let Some(entity) = state.cards.get(card_ref.def) else {
         return Err(ActionError::UnknownCard);
     };
-    let (timing, cost): (SpellTiming, Cost) = match def.kind {
-        CardKind::Spell => match def.find(Query::Spell) {
-            Some(QueryResult::Spell { timing, cost, .. }) => (timing, cost),
-            _ => return Err(ActionError::UnknownCard),
+    // A Spell with no printed Timing is uncastable (the shim's projection
+    // never invents one), so that arm rejects on `None` instead of
+    // defaulting to `SpellTiming::Support`. An Enchantment carries no
+    // Timing at all — it always follows a Support Spell's timing rule
+    // (rules §44) — so that arm never reads one.
+    let (timing, cost): (SpellTiming, Cost) = match family(entity) {
+        CardKind::Spell => match entity.get::<SpellTiming>() {
+            Some(timing) => (*timing, entity.get::<Cost>().copied().unwrap_or_default()),
+            None => return Err(ActionError::UnknownCard),
         },
-        CardKind::Enchantment => match def.find(Query::Enchantment) {
-            Some(QueryResult::Enchantment { cost, .. }) => (SpellTiming::Support, cost),
-            _ => return Err(ActionError::UnknownCard),
-        },
+        CardKind::Enchantment => (
+            SpellTiming::Support,
+            entity.get::<Cost>().copied().unwrap_or_default(),
+        ),
         CardKind::Summon => return Err(ActionError::UnknownCard),
     };
 
@@ -223,19 +229,22 @@ fn attack_responses_blocked(state: &GameState) -> bool {
     let Some(main_summon) = &attacker_state.main else {
         return false;
     };
-    let Some(top_def) = find_def(&state.cards, main_summon.chain.top().def) else {
+    let Some(top_entity) = state.cards.get(main_summon.chain.top().def) else {
         return false;
     };
-    let Some(QueryResult::Attack { effects, .. }) = top_def.find(Query::Attack) else {
+    let Some(attack) = top_entity.get::<Attack>() else {
         return false;
     };
-    effects.iter().any(|leaf| match leaf {
-        EffectLeaf::BlockResponses {
-            condition,
-            block: ResponseBlock::AttackSpells,
-        } => condition_holds(state, *attacker, &[*target], *condition),
-        _ => false,
-    })
+    attack
+        .all::<EffectLeaf>()
+        .into_iter()
+        .any(|leaf| match leaf {
+            EffectLeaf::BlockResponses {
+                condition,
+                block: ResponseBlock::AttackSpells,
+            } => condition_holds(state, *attacker, &[*target], *condition),
+            _ => false,
+        })
 }
 
 /// The Priority window that follows `player` declaring an attack, ending

@@ -24,7 +24,7 @@
 //! than changing board state, so `engine::stack::cast_spell` reads its
 //! condition and block directly instead of this interpreter.
 
-use crate::domain::cards::{CardKind, EffectCondition, EffectLeaf, find_def};
+use crate::domain::cards::{CardKind, EffectCondition, EffectLeaf, family};
 use crate::domain::events::GameEvent;
 use crate::domain::ids::{CardInstanceId, PlayerId, Position};
 use crate::domain::state::{
@@ -184,7 +184,9 @@ fn return_spell_from_discard(
     let cards = state.cards.clone();
     let player_state = state.players.get_mut(controller);
     let Some(index) = player_state.discard.iter().position(|card_ref| {
-        find_def(&cards, card_ref.def).is_some_and(|def| def.kind == CardKind::Spell)
+        cards
+            .get(card_ref.def)
+            .is_some_and(|entity| family(entity) == CardKind::Spell)
     }) else {
         return (state, Vec::new());
     };
@@ -206,7 +208,9 @@ fn return_spell_to_deck_top(
     let cards = state.cards.clone();
     let player_state = state.players.get_mut(controller);
     let Some(index) = player_state.hand.iter().position(|card_ref| {
-        find_def(&cards, card_ref.def).is_some_and(|def| def.kind == CardKind::Spell)
+        cards
+            .get(card_ref.def)
+            .is_some_and(|entity| family(entity) == CardKind::Spell)
     }) else {
         return (state, Vec::new());
     };
