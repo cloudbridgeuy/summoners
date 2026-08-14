@@ -19,7 +19,7 @@
 use std::sync::{Arc, OnceLock};
 
 use super::entity::{
-    AccountingId, Component, Entity, EntityId, Life, ManaTypes, Name, RetreatCost, Tags,
+    AccountingId, Component, Entity, EntityId, Life, ManaTypes, Name, RetreatCost, Skill, Tags,
 };
 use super::{
     CardSet, Cost, EffectCondition, EffectLeaf, Form, Modifier, ResponseBlock, SpellTiming,
@@ -752,6 +752,18 @@ pub(crate) fn id(slug: &str) -> EntityId {
         .unwrap_or_else(|| panic!("no fixture card named {slug}"))
 }
 
+/// The id of the first Skill printed on the fixture card whose name
+/// slugifies to `slug`. Panics if that card prints no Skill: a test naming
+/// one that has none is a test-authoring mistake, not a runtime condition
+/// production code must handle.
+pub(crate) fn skill_id(slug: &str) -> EntityId {
+    card_set()
+        .get(id(slug))
+        .and_then(|entity| entity.get::<Skill>())
+        .map(|skill| skill.id)
+        .unwrap_or_else(|| panic!("fixture card {slug} prints no Skill"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -845,5 +857,21 @@ mod tests {
     #[should_panic(expected = "no fixture card named nonexistent-card")]
     fn id_panics_on_an_unknown_slug() {
         let _ = id("nonexistent-card");
+    }
+
+    #[test]
+    fn skill_id_finds_the_first_skill_printed_on_a_fixture_card() {
+        let cards = card_set();
+        let scout = cards
+            .get(id("quarry-scout"))
+            .expect("quarry-scout is a fixture");
+        let scouts_skill = scout.get::<Skill>().expect("quarry-scout prints a Skill");
+        assert_eq!(skill_id("quarry-scout"), scouts_skill.id);
+    }
+
+    #[test]
+    #[should_panic(expected = "fixture card quarry-whelp prints no Skill")]
+    fn skill_id_panics_on_a_card_with_no_skill() {
+        let _ = skill_id("quarry-whelp");
     }
 }

@@ -105,7 +105,7 @@ fn dispatch(state: &GameState, action: &GameAction) -> Result<ActionOutcome, Act
         GameAction::ActivateSkill {
             player,
             position,
-            skill,
+            ability,
             targets,
             mana_hint,
         } => crate::engine::skills::activate_skill(
@@ -113,7 +113,7 @@ fn dispatch(state: &GameState, action: &GameAction) -> Result<ActionOutcome, Act
             crate::engine::skills::SkillActivation {
                 player: *player,
                 position: *position,
-                skill: *skill,
+                ability: *ability,
                 targets: targets.clone(),
                 mana_hint: *mana_hint,
             },

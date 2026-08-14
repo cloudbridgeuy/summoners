@@ -15,7 +15,6 @@
 //! four back to back.
 
 use super::*;
-use crate::domain::actions::SkillIndex;
 use crate::domain::cards::{EffectLeaf, TriggerEvent};
 use crate::scenario::{Scenario, ScenarioPlayer, ScenarioSummon, from_scenario};
 
@@ -330,7 +329,7 @@ fn a_rooted_main_blocks_rearrange_for_the_opponents_whole_turn_then_allows_it() 
         &GameAction::ActivateSkill {
             player: PlayerId::Two,
             position: Position::Main,
-            skill: SkillIndex(0),
+            ability: fixtures::skill_id("old-sow-of-the-barrow"),
             targets: vec![Position::Main],
             mana_hint: None,
         },
@@ -358,7 +357,7 @@ fn a_rooted_main_blocks_rearrange_for_the_opponents_whole_turn_then_allows_it() 
         &GameAction::ActivateSkill {
             player: PlayerId::One,
             position: Position::Main,
-            skill: SkillIndex(0),
+            ability: fixtures::skill_id("warden-of-set-paths"),
             targets: vec![Position::Bench(BenchSlot::First)],
             mana_hint: None,
         },
@@ -383,7 +382,7 @@ fn a_rooted_main_blocks_rearrange_for_the_opponents_whole_turn_then_allows_it() 
         &GameAction::ActivateSkill {
             player: PlayerId::One,
             position: Position::Main,
-            skill: SkillIndex(0),
+            ability: fixtures::skill_id("warden-of-set-paths"),
             targets: vec![Position::Bench(BenchSlot::First)],
             mana_hint: None,
         },

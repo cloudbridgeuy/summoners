@@ -225,7 +225,7 @@ fn with_no_pending_and_no_window_only_the_active_player_may_act() {
     let activate_skill = GameAction::ActivateSkill {
         player: PlayerId::One,
         position: Position::Main,
-        skill: crate::domain::actions::SkillIndex(0),
+        ability: crate::domain::cards::fixtures::skill_id("quarry-scout"),
         targets: vec![],
         mana_hint: None,
     };

@@ -22,9 +22,11 @@ use super::{
 /// down; a Spell or Enchantment's cost and effects sit directly on the
 /// top-level entity instead, since neither wraps a nested entity of its own.
 /// Multiple `Skill` components project into multiple `CardNode::Skill`
-/// entries in the same authored order `entity.all::<Skill>()` returns them
-/// in, so `Query::Skill(SkillIndex)` keeps addressing the same ability it
-/// did before this projection existed.
+/// entries, in the same authored order `entity.all::<Skill>()` returns them
+/// in. `engine::skills` no longer reads a Skill through this projection —
+/// it scans `entity.all::<Skill>()` directly for the ability id an action
+/// names — but `CardNode::Skill` itself stays, since other readers of this
+/// tree may still want a card's full printed shape.
 fn project(entity: &Entity) -> CardDef {
     let kind = family(entity);
     let name = entity
@@ -109,7 +111,6 @@ mod tests {
     #![allow(clippy::expect_used)]
 
     use super::*;
-    use crate::domain::actions::SkillIndex;
     use crate::domain::cards::fixtures;
     use crate::domain::cards::{Query, QueryResult};
 
@@ -147,20 +148,5 @@ mod tests {
                 effects: vec![EffectLeaf::Heal { amount: 10 }],
             })
         );
-    }
-
-    #[test]
-    fn find_reads_one_skill_node_by_index() {
-        assert_eq!(
-            def("quarry-scout").find(Query::Skill(SkillIndex(0))),
-            Some(QueryResult::Skill {
-                cost: Cost {
-                    generic: 1,
-                    ..Cost::default()
-                },
-                effects: vec![EffectLeaf::MoveSummon],
-            })
-        );
-        assert_eq!(def("quarry-scout").find(Query::Skill(SkillIndex(1))), None);
     }
 }

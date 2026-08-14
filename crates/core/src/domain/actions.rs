@@ -7,12 +7,8 @@
 //! 10) — and targets are battlefield positions, never Summon identities
 //! (rules §30).
 
+use crate::domain::cards::EntityId;
 use crate::domain::ids::{BenchSlot, CardInstanceId, ManaType, PlayerId, Position};
-
-/// One index into a Summon's ordered Skill nodes, in the order
-/// `CardDef::find` discovers them on its topmost card (rules §15).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SkillIndex(pub usize);
 
 /// One move an operator may submit to `apply`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -38,11 +34,12 @@ pub enum GameAction {
         targets: Vec<Position>,
         mana_hint: Option<ManaType>,
     },
-    /// Activate one Skill of the Ready Summon at `position` (rules §15).
+    /// Activate one Skill of the Ready Summon at `position`, naming the
+    /// ability by the id printed on its topmost card (rules §15).
     ActivateSkill {
         player: PlayerId,
         position: Position,
-        skill: SkillIndex,
+        ability: EntityId,
         targets: Vec<Position>,
         mana_hint: Option<ManaType>,
     },
@@ -107,6 +104,8 @@ impl GameAction {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::expect_used)]
+
     use super::*;
 
     fn sample_actions() -> Vec<GameAction> {
@@ -130,7 +129,7 @@ mod tests {
             GameAction::ActivateSkill {
                 player: PlayerId::One,
                 position: Position::Main,
-                skill: SkillIndex(0),
+                ability: EntityId::parse(&"0".repeat(32)).expect("valid probe id"),
                 targets: vec![],
                 mana_hint: None,
             },

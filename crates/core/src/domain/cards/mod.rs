@@ -22,7 +22,6 @@
 //! module used to hold as `CardDef` literals, now authored as `Entity`
 //! values instead.
 
-use crate::domain::actions::SkillIndex;
 use crate::domain::ids::ManaType;
 
 /// The three card families (rules §3).
@@ -201,25 +200,18 @@ pub(crate) enum CardNode {
     },
 }
 
-/// A question `CardDef::find` can answer about one printed card. `Skill`
-/// backs the printed cost and effects lookup for one of the topmost card's
-/// Skill nodes, addressed by its `SkillIndex`, in `engine::skills` (rules
-/// §15); `Trigger` backs the printed event, respondability, and effects
-/// lookup in `engine::triggers`. More variants arrive alongside the handler
-/// that first needs them, matching the rest of this crate's stubs.
+/// A question `CardDef::find` can answer about one printed card. `Trigger`
+/// backs the printed event, respondability, and effects lookup in
+/// `engine::triggers`. More variants arrive alongside the handler that first
+/// needs them, matching the rest of this crate's stubs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Query {
-    Skill(SkillIndex),
     Trigger,
 }
 
 /// One answer `CardDef::find` can return, matching the `Query` asked.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum QueryResult {
-    Skill {
-        cost: Cost,
-        effects: Vec<EffectLeaf>,
-    },
     Trigger {
         event: TriggerEvent,
         respondable: bool,
@@ -242,24 +234,6 @@ impl CardDef {
     /// `nodes` directly, so the tree's shape can change later without
     /// touching call sites.
     pub(crate) fn find(&self, query: Query) -> Option<QueryResult> {
-        // `Skill` is addressed by index rather than by node shape (a card may
-        // print more than one), so it is answered separately from the
-        // one-node-per-query lookups below: the `index`-th `Skill` node
-        // found while walking `nodes` in print order (rules §15's "the order
-        // `CardDef::find` discovers them on its topmost card").
-        if let Query::Skill(SkillIndex(index)) = query {
-            return self
-                .nodes
-                .iter()
-                .filter_map(|node| match node {
-                    CardNode::Skill { cost, effects } => Some(QueryResult::Skill {
-                        cost: *cost,
-                        effects: effects.clone(),
-                    }),
-                    _ => None,
-                })
-                .nth(index);
-        }
         self.nodes.iter().find_map(|node| match (query, node) {
             (
                 Query::Trigger,
