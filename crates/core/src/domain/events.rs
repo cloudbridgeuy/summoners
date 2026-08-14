@@ -3,8 +3,7 @@
 //! returns the full ordered batch produced by one accepted action, including
 //! every step the resolution loop drained automatically.
 
-use crate::domain::actions::SkillIndex;
-use crate::domain::cards::TriggerEvent;
+use crate::domain::cards::{EntityId, TriggerEvent};
 use crate::domain::ids::{BenchSlot, CardInstanceId, ManaType, PlayerId, Position};
 use crate::domain::state::{LossReason, ManaSource, StackItem};
 
@@ -51,7 +50,7 @@ pub enum GameEvent {
     SkillActivated {
         player: PlayerId,
         position: Position,
-        skill: SkillIndex,
+        ability: EntityId,
     },
     /// Rules §29–31.
     AttackDeclared { player: PlayerId, target: Position },
@@ -117,6 +116,8 @@ pub enum GameEvent {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::expect_used)]
+
     use super::*;
 
     #[test]
@@ -156,7 +157,7 @@ mod tests {
             GameEvent::SkillActivated {
                 player: PlayerId::One,
                 position: Position::Main,
-                skill: SkillIndex(0),
+                ability: EntityId::parse(&"0".repeat(32)).expect("valid probe id"),
             },
             GameEvent::AttackDeclared {
                 player: PlayerId::One,
