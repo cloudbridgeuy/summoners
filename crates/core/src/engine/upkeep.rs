@@ -12,7 +12,7 @@
 //! decision 12 makes that union a pause point only when it holds more than
 //! one Type.
 
-use crate::domain::cards::{CardSet, Query, QueryResult, find_def};
+use crate::domain::cards::{CardSet, ManaTypes};
 use crate::domain::events::GameEvent;
 use crate::domain::ids::{BenchSlot, ManaType, Position};
 use crate::domain::state::{
@@ -52,17 +52,18 @@ fn controlled_positions(player_state: &PlayerState) -> Vec<Position> {
 }
 
 /// The Mana Types printed on one Summon's current (topmost) card, read
-/// through the card tree. An unknown definition prints no Types — parsing
-/// already guarantees every card on the board resolves, so this only
-/// happens if a caller builds a `GameState` by hand with a bad reference;
-/// treating it as "produces nothing" is the honest fallback for a pure
-/// function that cannot error.
+/// straight off its entity. A card printing no `Produces` component at all,
+/// and an unresolvable definition — parsing already guarantees every card
+/// on the board resolves, so the latter only happens if a caller builds a
+/// `GameState` by hand with a bad reference — both honestly answer "produces
+/// nothing" for a pure function that cannot error. A card printing more than
+/// one `Produces` component anchors on the first.
 fn produced_types(cards: &CardSet, summon: &SummonInstance) -> Vec<ManaType> {
-    match find_def(cards, summon.chain.top().def).and_then(|def| def.find(Query::ProducedManaTypes))
-    {
-        Some(QueryResult::ProducedManaTypes(types)) => types,
-        _ => Vec::new(),
-    }
+    cards
+        .get(summon.chain.top().def)
+        .and_then(|entity| entity.get::<ManaTypes>())
+        .map(|types| types.0.clone())
+        .unwrap_or_default()
 }
 
 fn mana_type_index(mana_type: ManaType) -> usize {

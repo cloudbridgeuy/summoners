@@ -33,6 +33,19 @@ pub(crate) enum CardKind {
     Enchantment,
 }
 
+/// The card family `entity` prints. Design decision 4 forbids a class field
+/// on `Entity`, so a card declares its family the same way it declares any
+/// other open category: as a tag inside its `Tags` component, not as a
+/// dedicated field. `"spell"` and `"enchantment"` are the two tags this
+/// crate's fixtures print; every other entity, tagged or not, is a Summon.
+pub(crate) fn family(entity: &entity::Entity) -> CardKind {
+    match entity.get::<entity::Tags>() {
+        Some(tags) if tags.0.iter().any(|tag| tag == "spell") => CardKind::Spell,
+        Some(tags) if tags.0.iter().any(|tag| tag == "enchantment") => CardKind::Enchantment,
+        _ => CardKind::Summon,
+    }
+}
+
 /// A Summon's place in its upgrade chain (rules §20). `pub`, not
 /// `pub(crate)`: the new card container's `Component::Form` variant names
 /// this type directly, and the card vocabulary is public API.
@@ -190,10 +203,7 @@ pub(crate) enum CardNode {
 
 /// A question `CardDef::find` can answer about one printed card. `Attack`
 /// backs the normal-attack cost and Damage lookup in `engine::stack` and
-/// `engine::resolution` (rules §29–30); `CurrentForm` backs chain-order
-/// validation in `scenario::from_scenario`; `ProducedManaTypes`
-/// backs the rules §18 Mana-Type-superset check in `engine::board`;
-/// `RetreatCost` backs the printed Retreat Cost lookup there too; `Skill`
+/// `engine::resolution` (rules §29–30); `Skill`
 /// backs the printed cost and effects lookup for one of the topmost card's
 /// Skill nodes, addressed by its `SkillIndex`, in `engine::skills` (rules
 /// §15); `Spell` backs the printed timing family, cost, and effects lookup in
@@ -203,16 +213,9 @@ pub(crate) enum CardNode {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Query {
     Attack,
-    CurrentForm,
-    ProducedManaTypes,
-    RetreatCost,
     Skill(SkillIndex),
     Spell,
     Trigger,
-    /// Rules §16: a printed Passive's continuous `Modifier`, read by
-    /// `engine::board::opposing_retreat_cost_delta` when it scans the
-    /// opponent's in-play card trees for `Modifier::OpposingRetreatCostDelta`.
-    Passive,
     /// Rules §44: a printed Enchantment's cost and persistent effect leaves.
     Enchantment,
 }
@@ -224,9 +227,6 @@ pub(crate) enum QueryResult {
         cost: Cost,
         effects: Vec<EffectLeaf>,
     },
-    CurrentForm(Form),
-    ProducedManaTypes(Vec<ManaType>),
-    RetreatCost(u32),
     Skill {
         cost: Cost,
         effects: Vec<EffectLeaf>,
@@ -241,7 +241,6 @@ pub(crate) enum QueryResult {
         respondable: bool,
         effects: Vec<EffectLeaf>,
     },
-    Passive(Modifier),
     Enchantment {
         cost: Cost,
         effects: Vec<EffectLeaf>,
@@ -286,13 +285,6 @@ impl CardDef {
                 cost: *cost,
                 effects: effects.clone(),
             }),
-            (Query::CurrentForm, CardNode::Form(form)) => Some(QueryResult::CurrentForm(*form)),
-            (Query::ProducedManaTypes, CardNode::Produces(types)) => {
-                Some(QueryResult::ProducedManaTypes(types.clone()))
-            }
-            (Query::RetreatCost, CardNode::RetreatCost(cost)) => {
-                Some(QueryResult::RetreatCost(*cost))
-            }
             (
                 Query::Spell,
                 CardNode::Spell {
@@ -317,7 +309,6 @@ impl CardDef {
                 respondable: *respondable,
                 effects: effects.clone(),
             }),
-            (Query::Passive, CardNode::Passive(modifier)) => Some(QueryResult::Passive(*modifier)),
             (Query::Enchantment, CardNode::Enchantment { cost, effects }) => {
                 Some(QueryResult::Enchantment {
                     cost: *cost,
@@ -510,6 +501,6 @@ mod tests {
             kind: CardKind::Summon,
             nodes: vec![],
         };
-        assert_eq!(bare.find(Query::CurrentForm), None);
+        assert_eq!(bare.find(Query::Attack), None);
     }
 }

@@ -236,6 +236,7 @@ fn with_no_pending_and_no_window_only_the_active_player_may_act() {
     ));
 }
 
+mod board_economy;
 mod broken_game;
 mod demo;
 mod demo_triggers;
