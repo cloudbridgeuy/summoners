@@ -20,6 +20,7 @@ use std::sync::{Arc, OnceLock};
 
 use super::entity::{
     AccountingId, Component, Entity, EntityId, Life, ManaTypes, Name, RetreatCost, Skill, Tags,
+    Trigger,
 };
 use super::{
     CardSet, Cost, EffectCondition, EffectLeaf, Form, Modifier, ResponseBlock, SpellTiming,
@@ -764,6 +765,18 @@ pub(crate) fn skill_id(slug: &str) -> EntityId {
         .unwrap_or_else(|| panic!("fixture card {slug} prints no Skill"))
 }
 
+/// The id of the first Trigger printed on the fixture card whose name
+/// slugifies to `slug`. Panics if that card prints no Trigger: a test
+/// naming one that has none is a test-authoring mistake, not a runtime
+/// condition production code must handle.
+pub(crate) fn trigger_id(slug: &str) -> EntityId {
+    card_set()
+        .get(id(slug))
+        .and_then(|entity| entity.get::<Trigger>())
+        .map(|trigger| trigger.id)
+        .unwrap_or_else(|| panic!("fixture card {slug} prints no Trigger"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -873,5 +886,23 @@ mod tests {
     #[should_panic(expected = "fixture card quarry-whelp prints no Skill")]
     fn skill_id_panics_on_a_card_with_no_skill() {
         let _ = skill_id("quarry-whelp");
+    }
+
+    #[test]
+    fn trigger_id_finds_the_first_trigger_printed_on_a_fixture_card() {
+        let cards = card_set();
+        let spite_thorn = cards
+            .get(id("spite-thorn"))
+            .expect("spite-thorn is a fixture");
+        let its_trigger = spite_thorn
+            .get::<Trigger>()
+            .expect("spite-thorn prints a Trigger");
+        assert_eq!(trigger_id("spite-thorn"), its_trigger.id);
+    }
+
+    #[test]
+    #[should_panic(expected = "fixture card quarry-whelp prints no Trigger")]
+    fn trigger_id_panics_on_a_card_with_no_trigger() {
+        let _ = trigger_id("quarry-whelp");
     }
 }

@@ -541,6 +541,7 @@ fn a_destruction_trigger_opens_a_nested_window_before_its_own_chain_finishes() {
             controller: PlayerId::Two,
             position: Position::Bench(BenchSlot::First),
             event: TriggerEvent::AnySummonDestroyed,
+            ability: fixtures::trigger_id("griefsinger"),
         }),
         "the nested window opening is the last thing this action produced"
     );

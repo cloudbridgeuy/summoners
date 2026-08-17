@@ -302,8 +302,11 @@ pub enum WorkItem {
     /// Summon this player controls at `Position`.
     MovementTrigger(MovementStep, PlayerId, Position),
     /// Rules §36–38: a Triggered Ability fires for the Summon this player
-    /// controls at `Position`.
-    FireTrigger(PlayerId, Position, TriggerEvent),
+    /// controls at `Position`. Names the ability by its `EntityId`, since a
+    /// card may print more than one Trigger matching the same `TriggerEvent`
+    /// — one `FireTrigger` item is queued per matching ability, so the item
+    /// must say which one it means.
+    FireTrigger(PlayerId, Position, TriggerEvent, EntityId),
     /// Rules §24 step 6, §2: check whether this player has now lost.
     LossCheck(PlayerId),
     /// Rules §10: ready every Summon the new active player controls.
@@ -649,7 +652,12 @@ mod tests {
             WorkItem::PromoteBenchSummon(PlayerId::One),
             WorkItem::ResolveMovementConsequences(PlayerId::One),
             WorkItem::MovementTrigger(MovementStep::LeavingMain, PlayerId::One, Position::Main),
-            WorkItem::FireTrigger(PlayerId::One, Position::Main, TriggerEvent::YourUpkeep),
+            WorkItem::FireTrigger(
+                PlayerId::One,
+                Position::Main,
+                TriggerEvent::YourUpkeep,
+                fixtures::trigger_id("spite-thorn"),
+            ),
             WorkItem::LossCheck(PlayerId::One),
             WorkItem::ReadyAll,
             WorkItem::DrawCard,

@@ -290,9 +290,9 @@ fn drain_leaves_a_broken_game_untouched_even_with_queued_work() {
 
 #[test]
 fn drain_is_a_silent_no_op_for_a_movement_or_ability_trigger_with_no_matching_card() {
-    // Quarry Whelp carries no `CardNode::Trigger`, so both items find
-    // nothing to fire; `LeavingMain` also does not touch
-    // `entered_main_this_turn` (only `EnteringMain` does).
+    // Quarry Whelp prints no Trigger ability, so both items find nothing
+    // to fire; `LeavingMain` also does not touch `entered_main_this_turn`
+    // (only `EnteringMain` does).
     let mut state = base_state();
     state.work = VecDeque::from(vec![
         WorkItem::MovementTrigger(MovementStep::LeavingMain, PlayerId::Two, Position::Main),
@@ -300,6 +300,7 @@ fn drain_is_a_silent_no_op_for_a_movement_or_ability_trigger_with_no_matching_ca
             PlayerId::Two,
             Position::Main,
             crate::domain::cards::TriggerEvent::YourUpkeep,
+            fixtures::trigger_id("dawn-tender"),
         ),
     ]);
 
@@ -341,6 +342,7 @@ fn drain_fires_an_entering_main_trigger_and_sets_the_entered_flag() {
                 controller: PlayerId::Two,
                 position: Position::Main,
                 event: crate::domain::cards::TriggerEvent::EntersMain,
+                ability: fixtures::trigger_id("hearth-warden"),
             },
             GameEvent::Healed {
                 position: Position::Main,
@@ -380,6 +382,7 @@ fn drain_opens_a_window_for_a_respondable_trigger_and_resumes_the_interrupted_dr
             PlayerId::One,
             Position::Main,
             crate::domain::cards::TriggerEvent::AnySummonDestroyed,
+            fixtures::trigger_id("spite-thorn"),
         ),
         WorkItem::LossCheck(PlayerId::Two),
     ]);
@@ -392,6 +395,7 @@ fn drain_opens_a_window_for_a_respondable_trigger_and_resumes_the_interrupted_dr
             controller: PlayerId::One,
             position: Position::Main,
             event: crate::domain::cards::TriggerEvent::AnySummonDestroyed,
+            ability: fixtures::trigger_id("spite-thorn"),
         }]
     );
     assert_eq!(state.stack.len(), 1);
@@ -432,6 +436,7 @@ fn drain_resumes_the_interrupted_work_once_two_passes_close_the_triggers_window(
             PlayerId::One,
             Position::Main,
             crate::domain::cards::TriggerEvent::AnySummonDestroyed,
+            fixtures::trigger_id("spite-thorn"),
         ),
         WorkItem::LossCheck(PlayerId::Two),
     ]);

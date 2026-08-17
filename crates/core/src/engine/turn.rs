@@ -405,6 +405,7 @@ mod tests {
                     controller: PlayerId::Two,
                     position: Position::Main,
                     event: TriggerEvent::YourUpkeep,
+                    ability: fixtures::trigger_id("dawn-tender"),
                 },
                 GameEvent::Healed {
                     position: Position::Main,

@@ -648,6 +648,7 @@ fn apply_activates_a_swap_positions_skill_and_fires_the_four_movement_triggers_e
                 controller: PlayerId::One,
                 position: Position::Main,
                 event: crate::domain::cards::TriggerEvent::EntersMain,
+                ability: fixtures::trigger_id("hearth-warden"),
             },
             GameEvent::Healed {
                 position: Position::Main,
