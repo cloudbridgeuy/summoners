@@ -290,9 +290,9 @@ fn drain_leaves_a_broken_game_untouched_even_with_queued_work() {
 
 #[test]
 fn drain_is_a_silent_no_op_for_a_movement_or_ability_trigger_with_no_matching_card() {
-    // Quarry Whelp carries no `CardNode::Trigger`, so both items find
-    // nothing to fire; `LeavingMain` also does not touch
-    // `entered_main_this_turn` (only `EnteringMain` does).
+    // Quarry Whelp prints no Trigger ability, so both items find nothing
+    // to fire; `LeavingMain` also does not touch `entered_main_this_turn`
+    // (only `EnteringMain` does).
     let mut state = base_state();
     state.work = VecDeque::from(vec![
         WorkItem::MovementTrigger(MovementStep::LeavingMain, PlayerId::Two, Position::Main),

@@ -144,10 +144,10 @@ fn movement_event_maps_every_step_to_its_fixed_event() {
 
 #[test]
 fn movement_trigger_queues_an_immediate_heal_ability_that_drain_then_fires_on_entering_main() {
-    // `movement_trigger` itself never fires an ability directly (Trap 3):
-    // it only marks the arrival and queues one `FireTrigger` per matching
-    // ability. The events this Summon's Heal produces only show up once
-    // the queue is drained.
+    // `movement_trigger` itself never fires an ability directly: it only
+    // marks the arrival and queues one `FireTrigger` per matching ability.
+    // The events this Summon's Heal produces only show up once the queue
+    // is drained.
     let mut state = base_state();
     state.players.get_mut(PlayerId::One).main = Some(SummonInstance {
         damage: 20,
@@ -211,7 +211,7 @@ fn movement_trigger_queues_an_immediate_heal_ability_that_drain_then_fires_on_en
 }
 
 #[test]
-fn movement_trigger_is_a_no_op_with_no_matching_trigger_node() {
+fn movement_trigger_is_a_no_op_with_no_matching_trigger_ability() {
     let state = base_state();
 
     let (next_state, events) = movement_trigger(
@@ -226,7 +226,7 @@ fn movement_trigger_is_a_no_op_with_no_matching_trigger_node() {
 }
 
 #[test]
-fn movement_trigger_still_sets_entered_main_with_no_matching_trigger_node() {
+fn movement_trigger_still_sets_entered_main_with_no_matching_trigger_ability() {
     let state = base_state();
 
     let (state, events) = movement_trigger(
@@ -245,6 +245,108 @@ fn movement_trigger_still_sets_entered_main_with_no_matching_trigger_node() {
             .as_ref()
             .expect("main")
             .entered_main_this_turn
+    );
+}
+
+#[test]
+fn movement_trigger_queues_several_matching_abilities_in_authored_order() {
+    // Pins the `.rev()` in `movement_trigger`'s push-to-front loop: every
+    // other test of this function uses a card printing exactly one
+    // matching Trigger, where `.rev()` is a no-op. A card printing two
+    // Trigger abilities on the same movement event proves the queue — and
+    // the order the Heal effects fire in — stays authored, not reversed.
+    let probe = probe_id(0x60);
+    let first = trigger_entity(
+        probe_id(0x61),
+        TriggerEvent::EntersMain,
+        false,
+        vec![EffectLeaf::Heal { amount: 1 }],
+    );
+    let second = trigger_entity(
+        probe_id(0x62),
+        TriggerEvent::EntersMain,
+        false,
+        vec![EffectLeaf::Heal { amount: 2 }],
+    );
+    let card = Entity {
+        id: probe,
+        components: vec![
+            Component::Trigger(first.clone()),
+            Component::Trigger(second.clone()),
+        ],
+    };
+
+    let mut state = base_state();
+    state.cards = cards_with(vec![card]);
+    state.players.get_mut(PlayerId::One).main = Some(SummonInstance {
+        damage: 10,
+        ..summon_with_def(probe, PlayerId::One)
+    });
+
+    let (queued_state, immediate_events) = movement_trigger(
+        &state,
+        MovementStep::EnteringMain,
+        PlayerId::One,
+        Position::Main,
+    );
+
+    assert!(immediate_events.is_empty());
+    assert_eq!(
+        queued_state.work,
+        VecDeque::from(vec![
+            WorkItem::FireTrigger(
+                PlayerId::One,
+                Position::Main,
+                TriggerEvent::EntersMain,
+                first.id,
+            ),
+            WorkItem::FireTrigger(
+                PlayerId::One,
+                Position::Main,
+                TriggerEvent::EntersMain,
+                second.id,
+            ),
+        ]),
+        "several Trigger abilities matching one event queue in authored order"
+    );
+
+    let (state, events) = resolution::drain(&queued_state);
+
+    assert_eq!(
+        events,
+        vec![
+            GameEvent::TriggerFired {
+                controller: PlayerId::One,
+                position: Position::Main,
+                event: TriggerEvent::EntersMain,
+                ability: first.id,
+            },
+            GameEvent::Healed {
+                position: Position::Main,
+                amount: 1,
+            },
+            GameEvent::TriggerFired {
+                controller: PlayerId::One,
+                position: Position::Main,
+                event: TriggerEvent::EntersMain,
+                ability: second.id,
+            },
+            GameEvent::Healed {
+                position: Position::Main,
+                amount: 2,
+            },
+        ],
+        "authored order carries through to firing, not reversed"
+    );
+    let main = state
+        .players
+        .get(PlayerId::One)
+        .main
+        .as_ref()
+        .expect("main");
+    assert_eq!(
+        main.damage, 7,
+        "10 damage, healed 1 then 2, in authored order"
     );
 }
 
@@ -356,8 +458,12 @@ fn discover_back_orders_opponent_of_active_first_then_main_then_bench() {
 
 #[test]
 fn discover_front_pushes_ahead_of_work_already_queued() {
+    // Two candidates (Main and Bench) pin the `.rev()` in this function's
+    // push-to-front loop: with a single candidate, `.rev()` is a no-op, so
+    // deleting it would still leave this test green.
     let mut state = base_state();
     state.players.get_mut(PlayerId::One).main = Some(summon_of("spite-thorn", PlayerId::One));
+    state.players.get_mut(PlayerId::One).bench[0] = Some(summon_of("spite-thorn", PlayerId::One));
     state.work = VecDeque::from(vec![WorkItem::LossCheck(PlayerId::Two)]);
 
     let state = discover_front(&state, &[PlayerId::One], TriggerEvent::AnySummonDestroyed);
@@ -370,6 +476,12 @@ fn discover_front_pushes_ahead_of_work_already_queued() {
             WorkItem::FireTrigger(
                 PlayerId::One,
                 Position::Main,
+                TriggerEvent::AnySummonDestroyed,
+                ability,
+            ),
+            WorkItem::FireTrigger(
+                PlayerId::One,
+                Position::Bench(BenchSlot::First),
                 TriggerEvent::AnySummonDestroyed,
                 ability,
             ),
@@ -638,10 +750,10 @@ fn a_card_printing_three_triggers_on_one_event_fires_all_three_in_authored_order
 #[test]
 fn when_the_second_of_three_matching_triggers_is_respondable_the_third_still_fires_once_the_window_closes()
  {
-    // Trap 2's heart: three identical `FireTrigger` items would be
-    // indistinguishable without an ability id, and the respondable one in
-    // the middle must pause the queue — not lose or skip what is queued
-    // behind it (rules §38, and this module's own doc comment).
+    // Three identical `FireTrigger` items would be indistinguishable
+    // without an ability id, and the respondable one in the middle must
+    // pause the queue — not lose or skip what is queued behind it (rules
+    // §38, and this module's own doc comment).
     let probe = probe_id(0x50);
     let first = trigger_entity(
         probe_id(0x51),

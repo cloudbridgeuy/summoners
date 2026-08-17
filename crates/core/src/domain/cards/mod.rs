@@ -57,10 +57,11 @@ pub enum SpellTiming {
     Attack,
 }
 
-/// The event a `CardNode::Trigger` fires on. This is a starter vocabulary;
-/// later work adds events as fixture cards need them. Unlike the rest of
-/// this module it is `pub`, not `pub(crate)`: `GameEvent::TriggerFired` and
-/// `WorkItem::FireTrigger` are public and both name it.
+/// The event a Trigger ability entity (`Component::Trigger`) fires on. This
+/// is a starter vocabulary; later work adds events as fixture cards need
+/// them. Unlike the rest of this module it is `pub`, not `pub(crate)`:
+/// `GameEvent::TriggerFired` and `WorkItem::FireTrigger` are public and both
+/// name it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TriggerEvent {
     YourUpkeep,
