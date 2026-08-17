@@ -56,6 +56,7 @@ fn demo_retreat_fires_the_four_movement_triggers_and_heals_the_entering_main_sum
                 controller: PlayerId::One,
                 position: Position::Main,
                 event: crate::domain::cards::TriggerEvent::EntersMain,
+                ability: fixtures::trigger_id("hearth-warden"),
             },
             GameEvent::Healed {
                 position: Position::Main,
@@ -149,6 +150,7 @@ fn demo_a_respondable_destruction_trigger_opens_a_mid_drain_window_and_resumes_t
                 controller: PlayerId::One,
                 position: Position::Bench(BenchSlot::First),
                 event: crate::domain::cards::TriggerEvent::AnySummonDestroyed,
+                ability: fixtures::trigger_id("spite-thorn"),
             },
         ],
         "discovering Spite Thorn's respondable trigger interrupts the rest \

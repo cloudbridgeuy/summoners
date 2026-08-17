@@ -89,11 +89,15 @@ pub enum GameEvent {
     SummonPromoted { player: PlayerId, from: BenchSlot },
     /// Rules §26: a normal Retreat exchanged Main and one Bench slot.
     SummonsSwapped { player: PlayerId, main: BenchSlot },
-    /// Rules §28, §36–39.
+    /// Rules §28, §36–39. Names the ability that fired by its `EntityId`,
+    /// the same way `SkillActivated` names the Skill it activated — a card
+    /// may print more than one Trigger matching the same `TriggerEvent`, so
+    /// the event must say which one this is.
     TriggerFired {
         controller: PlayerId,
         position: Position,
         event: TriggerEvent,
+        ability: EntityId,
     },
     /// Rules §7.
     CoinConverted {
@@ -205,6 +209,7 @@ mod tests {
                 controller: PlayerId::One,
                 position: Position::Main,
                 event: TriggerEvent::YourUpkeep,
+                ability: EntityId::parse(&"0".repeat(32)).expect("valid probe id"),
             },
             GameEvent::CoinConverted {
                 player: PlayerId::Two,

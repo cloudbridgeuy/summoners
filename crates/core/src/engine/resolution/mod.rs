@@ -107,8 +107,8 @@ fn execute(state: &GameState, item: &WorkItem) -> (GameState, Vec<GameEvent>) {
         WorkItem::MovementTrigger(step, player, position) => {
             triggers::movement_trigger(state, *step, *player, *position)
         }
-        WorkItem::FireTrigger(player, position, event) => {
-            triggers::fire_queued(state, *player, *position, *event)
+        WorkItem::FireTrigger(player, position, event, ability) => {
+            triggers::fire_queued(state, *player, *position, *event, *ability)
         }
 
         WorkItem::LossCheck(player) => loss::check(state, *player),

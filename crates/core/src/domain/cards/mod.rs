@@ -1,28 +1,20 @@
-//! The card container (`entity`, `set`) and, alongside it, the provisional
-//! card representation (design decision 6) that most of the engine still
-//! reads through, by way of `shim::find_def`.
+//! The card container (`entity`, `set`) and the card vocabulary its
+//! `Component` variants name.
 //!
-//! `entity` and `set` hold the settled container: `Entity`, `Component`, and
+//! `entity` and `set` hold the container itself: `Entity`, `Component`, and
 //! `CardSet`. A `GameState` carries one `Arc<CardSet>`; every card fact a
-//! rule needs comes from reading it, directly or through the shim.
+//! rule needs comes from reading it directly — `get`, `all`, or `demand` on
+//! an `Entity` or one of its nested ability entities.
 //!
-//! Everything below `CardDef` is the provisional tree: a card is a tree of
-//! typed nodes and effect leaves, reached only through `CardDef::find`.
-//! `shim::find_def` builds one on demand by projecting an `Entity`'s
-//! components into it, so a call site written against `CardDef` never has to
-//! know whether the fact it read came straight off an `Entity` or through
-//! this tree. `CardDef`, `CardNode`, `Query`, `QueryResult`, and `find` stay
-//! `pub(crate)` because no code outside this crate should depend on this
-//! provisional shape. `Form`, `Cost`, `Modifier`, `TriggerEvent`, and
-//! `EffectLeaf` are exceptions: the container's `Component` enum names them
-//! directly, so they are `pub`.
+//! Everything above `entity` is vocabulary a `Component` variant names:
+//! `Form`, `SpellTiming`, `TriggerEvent`, `EffectCondition`, `ResponseBlock`,
+//! `Cost`, `EffectLeaf`, and `Modifier`. Most of it is `pub`, not
+//! `pub(crate)`, because the container's public `Component` enum names it
+//! directly.
 //!
 //! `fixtures` (test-only) holds the entity data every test in this crate
-//! builds a `CardSet` against: the same vanilla and signature cards this
-//! module used to hold as `CardDef` literals, now authored as `Entity`
-//! values instead.
-
-use crate::domain::ids::ManaType;
+//! builds a `CardSet` against: the vanilla and signature cards, authored as
+//! `Entity` values.
 
 /// The three card families (rules §3).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -161,97 +153,6 @@ pub enum Modifier {
     OpposingRetreatCostDelta(i32),
 }
 
-/// One typed fact or ability printed on a card. The vanilla registry only
-/// ever builds `Life`, `Produces`, `RetreatCost`, and `Form`; the ability
-/// node shapes (`Attack`, `Skill`, `Trigger`, `Passive`) are settled now so
-/// later fixtures share this tree instead of growing a second one.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum CardNode {
-    Life(u32),
-    Produces(Vec<ManaType>),
-    RetreatCost(u32),
-    Form(Form),
-    Attack {
-        cost: Cost,
-        effects: Vec<EffectLeaf>,
-    },
-    Skill {
-        cost: Cost,
-        effects: Vec<EffectLeaf>,
-    },
-    Trigger {
-        event: TriggerEvent,
-        respondable: bool,
-        effects: Vec<EffectLeaf>,
-    },
-    Passive(Modifier),
-    Spell {
-        timing: SpellTiming,
-        cost: Cost,
-        effects: Vec<EffectLeaf>,
-    },
-    /// A vanilla Enchantment's persistent effect leaves (rules §44). No
-    /// Attack, Skill, or condition text yet — the vanilla fixture below
-    /// carries an empty `effects` list and stays in play doing nothing but
-    /// existing, which is enough to prove casting and persistence.
-    Enchantment {
-        cost: Cost,
-        effects: Vec<EffectLeaf>,
-    },
-}
-
-/// A question `CardDef::find` can answer about one printed card. `Trigger`
-/// backs the printed event, respondability, and effects lookup in
-/// `engine::triggers`. More variants arrive alongside the handler that first
-/// needs them, matching the rest of this crate's stubs.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Query {
-    Trigger,
-}
-
-/// One answer `CardDef::find` can return, matching the `Query` asked.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum QueryResult {
-    Trigger {
-        event: TriggerEvent,
-        respondable: bool,
-        effects: Vec<EffectLeaf>,
-    },
-}
-
-/// One printed card, projected from an `Entity` (see `shim`): its id, its
-/// display name, its family, and its nodes.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct CardDef {
-    pub id: entity::EntityId,
-    pub name: String,
-    pub kind: CardKind,
-    pub nodes: Vec<CardNode>,
-}
-
-impl CardDef {
-    /// The only way to read a card's characteristics. Callers never match on
-    /// `nodes` directly, so the tree's shape can change later without
-    /// touching call sites.
-    pub(crate) fn find(&self, query: Query) -> Option<QueryResult> {
-        self.nodes.iter().find_map(|node| match (query, node) {
-            (
-                Query::Trigger,
-                CardNode::Trigger {
-                    event,
-                    respondable,
-                    effects,
-                },
-            ) => Some(QueryResult::Trigger {
-                event: *event,
-                respondable: *respondable,
-                effects: effects.clone(),
-            }),
-            _ => None,
-        })
-    }
-}
-
 /// The card container: `Entity`, `Component`, and the typed reads over them.
 mod entity;
 pub use entity::{
@@ -263,13 +164,6 @@ pub use entity::{
 /// `CardSet`: the indexed collection of top-level entities.
 mod set;
 pub use set::CardSet;
-
-/// A temporary reader that projects one `Entity` from a `CardSet` into the
-/// `CardDef` tree above, so every call site that already reads a `CardDef`
-/// keeps working unchanged while it moves onto the container at its own
-/// pace.
-mod shim;
-pub(crate) use shim::find_def;
 
 /// The fixture entities this crate's tests build against, plus the shared
 /// `CardSet` and lookups that reach them. Test-only: nothing outside
@@ -375,43 +269,6 @@ mod tests {
     }
 
     #[test]
-    fn every_card_node_variant_constructs() {
-        let nodes = [
-            CardNode::Life(10),
-            CardNode::Produces(vec![ManaType::Matter]),
-            CardNode::RetreatCost(1),
-            CardNode::Form(Form::Base),
-            CardNode::Attack {
-                cost: Cost::default(),
-                effects: vec![EffectLeaf::DealDamage {
-                    amount: 10,
-                    immutable: false,
-                }],
-            },
-            CardNode::Skill {
-                cost: Cost::default(),
-                effects: vec![EffectLeaf::Heal { amount: 10 }],
-            },
-            CardNode::Trigger {
-                event: TriggerEvent::YourUpkeep,
-                respondable: false,
-                effects: vec![EffectLeaf::Heal { amount: 10 }],
-            },
-            CardNode::Passive(Modifier::OpposingRetreatCostDelta(1)),
-            CardNode::Spell {
-                timing: SpellTiming::Support,
-                cost: Cost::default(),
-                effects: vec![EffectLeaf::Heal { amount: 10 }],
-            },
-            CardNode::Enchantment {
-                cost: Cost::default(),
-                effects: vec![],
-            },
-        ];
-        assert_eq!(nodes.len(), 10);
-    }
-
-    #[test]
     fn spell_timing_variants_construct() {
         assert_ne!(SpellTiming::Support, SpellTiming::Attack);
     }
@@ -420,20 +277,5 @@ mod tests {
     fn card_kind_covers_spell_and_enchantment_too() {
         assert_ne!(CardKind::Spell, CardKind::Enchantment);
         assert_ne!(CardKind::Summon, CardKind::Spell);
-    }
-
-    /// `find` never matches a query against a node this `CardDef` does not
-    /// carry — the projection shim's own tests cover reading real fixture
-    /// data; this proves the fallback stays `None` on a bare, hand-built
-    /// def, independent of any entity.
-    #[test]
-    fn find_returns_none_for_an_absent_node() {
-        let bare = CardDef {
-            id: EntityId::parse(&"0".repeat(32)).expect("valid fixture id"),
-            name: "Bare".to_string(),
-            kind: CardKind::Summon,
-            nodes: vec![],
-        };
-        assert_eq!(bare.find(Query::Trigger), None);
     }
 }

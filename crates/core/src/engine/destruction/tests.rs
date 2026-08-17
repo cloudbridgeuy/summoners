@@ -333,6 +333,7 @@ fn discard_destroyed_chain_queues_a_matching_any_summon_destroyed_trigger() {
             PlayerId::One,
             Position::Bench(BenchSlot::First),
             TriggerEvent::AnySummonDestroyed,
+            fixtures::trigger_id("spite-thorn"),
         )])
     );
 }
