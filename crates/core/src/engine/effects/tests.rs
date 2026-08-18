@@ -23,9 +23,7 @@ fn whelp(owner: PlayerId) -> SummonInstance {
         owner,
         controller: owner,
         duration_markers: vec![],
-        played_this_turn: false,
-        upgraded_this_turn: false,
-        entered_main_this_turn: false,
+        turn: crate::domain::state::SummonTurnRecord::fresh(),
     }
 }
 
@@ -372,10 +370,9 @@ fn conditional_bonus_is_a_silent_miss_when_the_condition_does_not_hold() {
 #[test]
 fn conditional_bonus_reads_defender_entered_main_this_turn_off_the_opponents_board() {
     let mut state = base_state();
-    state.players.get_mut(PlayerId::Two).main = Some(SummonInstance {
-        entered_main_this_turn: true,
-        ..whelp(PlayerId::Two)
-    });
+    let mut defender = whelp(PlayerId::Two);
+    defender.turn.main_entry = Some(crate::domain::state::EnteredMain);
+    state.players.get_mut(PlayerId::Two).main = Some(defender);
     let leaf = EffectLeaf::ConditionalBonus {
         condition: crate::domain::cards::EffectCondition::DefenderEnteredMainThisTurn,
         amount: 30,
@@ -543,16 +540,18 @@ fn swap_opposing_positions_exchanges_the_opponents_main_and_named_bench_slot() {
         }]
     );
     // `apply_leaf` never drains `state.work`, so the queued `EnteringMain`
-    // step below has not run yet — `entered_main_this_turn` is set only when
+    // step below has not run yet — the Main-entry record is set only when
     // `engine::triggers::movement_trigger` processes that step, not here.
     assert!(
-        !state
+        state
             .players
             .get(PlayerId::Two)
             .main
             .as_ref()
             .expect("main")
-            .entered_main_this_turn
+            .turn
+            .main_entry
+            .is_none()
     );
     assert!(state.players.get(PlayerId::Two).bench[0].is_some());
 }
@@ -685,16 +684,18 @@ fn swap_positions_exchanges_main_and_the_named_bench_slot_and_enqueues_the_four_
         }]
     );
     // Same as `swap_opposing_positions`: the leaf only queues the
-    // `EnteringMain` step below, it does not drain it, so the flag is still
-    // false right after the leaf runs.
+    // `EnteringMain` step below, it does not drain it, so the record is still
+    // empty right after the leaf runs.
     assert!(
-        !state
+        state
             .players
             .get(PlayerId::One)
             .main
             .as_ref()
             .expect("main")
-            .entered_main_this_turn
+            .turn
+            .main_entry
+            .is_none()
     );
     assert!(state.players.get(PlayerId::One).bench[0].is_some());
     assert_eq!(

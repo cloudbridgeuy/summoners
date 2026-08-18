@@ -19,7 +19,7 @@ use crate::domain::errors::InvalidScenario;
 use crate::domain::ids::{BenchSlot, PlayerId, Position};
 use crate::domain::state::{
     CardRef, Coin, GameState, GameStatus, ManaBank, PendingInput, PerPlayer, Phase, PlayerState,
-    SummonInstance, TurnState, UpgradeChain,
+    SummonInstance, SummonTurnRecord, TurnState, UpgradeChain,
 };
 
 /// One Summon as a scenario describes it: its printed chain, bottom to top,
@@ -166,9 +166,7 @@ fn build_summon_instance(
         owner: player,
         controller: player,
         duration_markers: vec![],
-        played_this_turn: false,
-        upgraded_this_turn: false,
-        entered_main_this_turn: false,
+        turn: SummonTurnRecord::fresh(),
     })
 }
 
@@ -336,6 +334,22 @@ mod tests {
         assert_eq!(state.pending, None);
         assert_eq!(state.status, GameStatus::Playing);
         assert_eq!(state.turn.active_player, PlayerId::One);
+    }
+
+    #[test]
+    fn parsed_summons_start_with_fresh_turn_records() {
+        let state = from_scenario(fixtures::card_set(), &base_scenario())
+            .expect("a minimal scenario should parse");
+
+        for player in [PlayerId::One, PlayerId::Two] {
+            let summon = state
+                .players
+                .get(player)
+                .main
+                .as_ref()
+                .expect("the fixture has a Main Summon");
+            assert_eq!(summon.turn, SummonTurnRecord::fresh());
+        }
     }
 
     #[test]

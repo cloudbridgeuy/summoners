@@ -119,7 +119,7 @@ pub(crate) fn condition_holds(
         EffectCondition::SpellPlayedThisTurn => state.turn.spell_played_this_turn,
         EffectCondition::DefenderEnteredMainThisTurn => targets.first().is_some_and(|&position| {
             summon_at(state.players.get(controller.opponent()), position)
-                .is_some_and(|summon| summon.entered_main_this_turn)
+                .is_some_and(|summon| summon.turn.main_entry.is_some())
         }),
     }
 }
@@ -255,8 +255,8 @@ fn look_at_prizes(state: &GameState, controller: PlayerId) -> (GameState, Vec<Ga
 /// already rejects this before the leaf ever runs; this check is
 /// defense-in-depth so the leaf is safe on its own). Enqueues the same four
 /// movement triggers `swap_positions` does, but for the opponent's board;
-/// `entered_main_this_turn` is likewise left for the queued `EnteringMain`
-/// step to set, not set here.
+/// The Main-entry record is likewise left for the queued `EnteringMain`
+/// step to set.
 fn swap_opposing_positions(
     state: &GameState,
     controller: PlayerId,
@@ -468,7 +468,7 @@ fn move_summon(
 /// reached here through a Skill instead of the normal Retreat action (rules
 /// §43). Callers validate both sides are occupied before this runs, so this
 /// stays a defensive no-op otherwise. `ready` travels with each Summon
-/// unchanged; `entered_main_this_turn` is left alone here and set instead
+/// unchanged; the Main-entry record is left alone here and set instead
 /// when the queued `EnteringMain` trigger below drains through
 /// `engine::triggers::movement_trigger` — the one place in this crate that
 /// sets it, since every path onto Main enqueues that same step. Enqueues the

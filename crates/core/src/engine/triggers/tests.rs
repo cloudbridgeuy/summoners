@@ -27,9 +27,7 @@ fn summon_of(def: &'static str, owner: PlayerId) -> SummonInstance {
         owner,
         controller: owner,
         duration_markers: vec![],
-        played_this_turn: false,
-        upgraded_this_turn: false,
-        entered_main_this_turn: false,
+        turn: crate::domain::state::SummonTurnRecord::fresh(),
     }
 }
 
@@ -49,9 +47,7 @@ fn summon_with_def(def: EntityId, owner: PlayerId) -> SummonInstance {
         owner,
         controller: owner,
         duration_markers: vec![],
-        played_this_turn: false,
-        upgraded_this_turn: false,
-        entered_main_this_turn: false,
+        turn: crate::domain::state::SummonTurnRecord::fresh(),
     }
 }
 
@@ -181,7 +177,9 @@ fn movement_trigger_queues_an_immediate_heal_ability_that_drain_then_fires_on_en
             .main
             .as_ref()
             .expect("main")
-            .entered_main_this_turn
+            .turn
+            .main_entry
+            .is_some()
     );
 
     let (state, drained_events) = resolution::drain(&queued_state);
@@ -244,7 +242,9 @@ fn movement_trigger_still_sets_entered_main_with_no_matching_trigger_ability() {
             .main
             .as_ref()
             .expect("main")
-            .entered_main_this_turn
+            .turn
+            .main_entry
+            .is_some()
     );
 }
 

@@ -6,7 +6,7 @@ use super::*;
 use crate::domain::cards::fixtures;
 use crate::domain::ids::CardInstanceId;
 use crate::domain::state::{
-    CardRef, GameStatus, ManaBank, PendingInput, PerPlayer, StackWindow, TurnState,
+    CardRef, GameStatus, ManaBank, PendingInput, PerPlayer, StackWindow, TurnState, UpgradeActivity,
 };
 use std::collections::VecDeque;
 
@@ -25,9 +25,7 @@ fn base_summon(owner: PlayerId, def: &'static str) -> SummonInstance {
         owner,
         controller: owner,
         duration_markers: vec![],
-        played_this_turn: false,
-        upgraded_this_turn: false,
-        entered_main_this_turn: false,
+        turn: crate::domain::state::SummonTurnRecord::fresh(),
     }
 }
 
@@ -81,7 +79,7 @@ fn play_summon_puts_a_base_into_an_empty_bench_slot_exhausted_and_played_this_tu
         .as_ref()
         .expect("the Bench slot now holds the played Summon");
     assert!(!bench.ready);
-    assert!(bench.played_this_turn);
+    assert_eq!(bench.turn.upgrade, UpgradeActivity::PlayedThisTurn);
     assert_eq!(bench.chain.base(), card);
     assert!(outcome.state.players.get(PlayerId::One).hand.is_empty());
 }
@@ -193,7 +191,7 @@ fn upgrade_summon_stacks_the_new_top_ready_false_and_upgraded_flag_set() {
     assert_eq!(main.chain.top(), upgrade);
     assert_eq!(main.chain.base(), card_ref(1, "quarry-whelp"));
     assert!(!main.ready);
-    assert!(main.upgraded_this_turn);
+    assert_eq!(main.turn.upgrade, UpgradeActivity::UpgradedThisTurn);
     assert!(outcome.state.players.get(PlayerId::One).hand.is_empty());
     assert_eq!(
         outcome.events,
@@ -249,7 +247,7 @@ fn upgrade_summon_rejects_a_summon_played_this_turn() {
     let Some(main) = &mut state.players.one.main else {
         unreachable!("fixture always sets up a Main Summon")
     };
-    main.played_this_turn = true;
+    main.turn.upgrade = UpgradeActivity::PlayedThisTurn;
 
     let result = upgrade_summon(&state, PlayerId::One, upgrade.instance, Position::Main);
 
@@ -264,7 +262,7 @@ fn upgrade_summon_rejects_a_summon_already_upgraded_this_turn() {
     let Some(main) = &mut state.players.one.main else {
         unreachable!("fixture always sets up a Main Summon")
     };
-    main.upgraded_this_turn = true;
+    main.turn.upgrade = UpgradeActivity::UpgradedThisTurn;
 
     let result = upgrade_summon(&state, PlayerId::One, upgrade.instance, Position::Main);
 
@@ -346,7 +344,7 @@ fn retreat_pays_the_printed_cost_and_swaps_main_with_the_chosen_bench_slot() {
     assert!(outcome.state.turn.normal_retreat_used);
 
     // `retreat` itself only queues the four movement triggers (rules
-    // §28); it never sets `entered_main_this_turn` directly. Draining
+    // §28); it never sets the Main-entry record directly. Draining
     // the queue runs the `EnteringMain` step through
     // `engine::triggers::movement_trigger`, the one place that does.
     let (drained, _) = crate::engine::resolution::drain(&outcome.state);
@@ -355,7 +353,7 @@ fn retreat_pays_the_printed_cost_and_swaps_main_with_the_chosen_bench_slot() {
         drained_player
             .main
             .as_ref()
-            .is_some_and(|s| s.entered_main_this_turn)
+            .is_some_and(|s| s.turn.main_entry.is_some())
     );
 }
 
@@ -568,7 +566,11 @@ fn play_upgrade_then_retreat_chain_through_scenario_and_apply() {
         players: crate::domain::state::PerPlayer::new(
             ScenarioPlayer {
                 deck: vec![],
-                hand: vec![card_ref(2, "set-path-adept"), card_ref(3, "quarry-brute")],
+                hand: vec![
+                    card_ref(2, "set-path-adept"),
+                    card_ref(3, "quarry-brute"),
+                    card_ref(4, "colossus-of-the-quarry"),
+                ],
                 prizes: vec![],
                 discard: vec![],
                 mana: ManaBank {
@@ -585,7 +587,7 @@ fn play_upgrade_then_retreat_chain_through_scenario_and_apply() {
                 bench: [None, None, None],
             },
             ScenarioPlayer {
-                deck: vec![],
+                deck: vec![card_ref(102, "set-path-adept")],
                 hand: vec![],
                 prizes: vec![],
                 discard: vec![],
@@ -604,6 +606,16 @@ fn play_upgrade_then_retreat_chain_through_scenario_and_apply() {
     };
     let state =
         from_scenario(fixtures::card_set(), &scenario).expect("this board is a legal scenario");
+    assert_eq!(
+        state
+            .players
+            .get(PlayerId::One)
+            .main
+            .as_ref()
+            .expect("the scenario has a Main Summon")
+            .turn,
+        crate::domain::state::SummonTurnRecord::fresh()
+    );
 
     // 1. Play the Base Set-Path Adept from hand onto the empty Bench.
     let outcome = apply(
@@ -623,6 +635,24 @@ fn play_upgrade_then_retreat_chain_through_scenario_and_apply() {
             slot: BenchSlot::First,
         }]
     );
+    assert_eq!(
+        outcome.state.players.get(PlayerId::One).bench[0]
+            .as_ref()
+            .expect("the played Summon is on the Bench")
+            .turn
+            .upgrade,
+        UpgradeActivity::PlayedThisTurn
+    );
+
+    let rejected_played_upgrade = apply(
+        &outcome.state,
+        &GameAction::UpgradeSummon {
+            player: PlayerId::One,
+            card: CardInstanceId(3),
+            position: Position::Bench(BenchSlot::First),
+        },
+    );
+    assert_eq!(rejected_played_upgrade, Err(ActionError::PlayedThisTurn));
 
     // 2. Upgrade the Main Quarry Whelp with the Quarry Brute in hand.
     let outcome = apply(
@@ -651,6 +681,31 @@ fn play_upgrade_then_retreat_chain_through_scenario_and_apply() {
             .as_ref()
             .map(|s| s.chain.top().def),
         Some(fixtures::id("quarry-brute"))
+    );
+    assert_eq!(
+        outcome
+            .state
+            .players
+            .get(PlayerId::One)
+            .main
+            .as_ref()
+            .expect("the upgraded Summon remains in Main")
+            .turn
+            .upgrade,
+        UpgradeActivity::UpgradedThisTurn
+    );
+
+    let rejected_second_upgrade = apply(
+        &outcome.state,
+        &GameAction::UpgradeSummon {
+            player: PlayerId::One,
+            card: CardInstanceId(4),
+            position: Position::Main,
+        },
+    );
+    assert_eq!(
+        rejected_second_upgrade,
+        Err(ActionError::AlreadyUpgradedThisTurn)
     );
 
     // 3. Retreat: pay Quarry Brute's printed Retreat Cost of 2 and swap
@@ -684,7 +739,11 @@ fn play_upgrade_then_retreat_chain_through_scenario_and_apply() {
         one.main.as_ref().map(|s| s.chain.base().def),
         Some(fixtures::id("set-path-adept"))
     );
-    assert!(one.main.as_ref().is_some_and(|s| s.entered_main_this_turn));
+    assert!(
+        one.main
+            .as_ref()
+            .is_some_and(|s| s.turn.main_entry.is_some())
+    );
     assert_eq!(
         one.bench[0].as_ref().map(|s| s.chain.top().def),
         Some(fixtures::id("quarry-brute"))
@@ -698,4 +757,43 @@ fn play_upgrade_then_retreat_chain_through_scenario_and_apply() {
         }
     );
     assert!(outcome.state.turn.normal_retreat_used);
+
+    // 4. End the turn through the public response window. Both passes hand
+    // play to Player Two and reset every Summon's full turn record.
+    let outcome = apply(
+        &outcome.state,
+        &GameAction::EndTurn {
+            player: PlayerId::One,
+        },
+    )
+    .expect("the active player can end a resting Main Phase");
+    let outcome = apply(
+        &outcome.state,
+        &GameAction::PassPriority {
+            player: PlayerId::Two,
+        },
+    )
+    .expect("the defender holds the final response window first");
+    let outcome = apply(
+        &outcome.state,
+        &GameAction::PassPriority {
+            player: PlayerId::One,
+        },
+    )
+    .expect("the second consecutive pass hands the turn over");
+
+    for player in [PlayerId::One, PlayerId::Two] {
+        let player_state = outcome.state.players.get(player);
+        for summon in player_state
+            .main
+            .iter()
+            .chain(player_state.bench.iter().flatten())
+        {
+            assert_eq!(
+                summon.turn,
+                crate::domain::state::SummonTurnRecord::fresh(),
+                "{player:?}"
+            );
+        }
+    }
 }

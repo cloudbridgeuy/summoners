@@ -441,7 +441,9 @@ fn demo_a_lethal_attack_destroys_recovers_a_prize_and_promotes_through_apply() {
         two.main
             .as_ref()
             .expect("checked above")
-            .entered_main_this_turn
+            .turn
+            .main_entry
+            .is_some()
     );
     assert_eq!(two.bench, [None, Some(summon(PlayerId::Two)), None]);
 }

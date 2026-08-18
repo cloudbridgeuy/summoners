@@ -26,9 +26,7 @@ fn summon(owner: PlayerId) -> SummonInstance {
         owner,
         controller: owner,
         duration_markers: vec![],
-        played_this_turn: false,
-        upgraded_this_turn: false,
-        entered_main_this_turn: false,
+        turn: crate::domain::state::SummonTurnRecord::fresh(),
     }
 }
 
@@ -548,7 +546,7 @@ fn answer_promotion_moves_the_chosen_slot_to_main_and_preserves_ready() {
     );
 
     // `answer_promotion` itself only moves the Summon (rules §24 step
-    // 4); `entered_main_this_turn` is set later, when the queued
+    // 4); the Main-entry record is set later, when the queued
     // `ResolveMovementConsequences` step (already sitting in `work`
     // above, exactly as it would be mid-destruction-chain) enqueues an
     // `EnteringMain` trigger and draining runs it through
@@ -560,7 +558,7 @@ fn answer_promotion_moves_the_chosen_slot_to_main_and_preserves_ready() {
         .main
         .as_ref()
         .expect("promotion still filled Main after drain");
-    assert!(drained_promoted.entered_main_this_turn);
+    assert!(drained_promoted.turn.main_entry.is_some());
 }
 
 #[test]

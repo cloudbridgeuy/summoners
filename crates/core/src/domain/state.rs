@@ -59,9 +59,41 @@ pub enum DurationMarker {
     CannotBeMovedByOpponent,
 }
 
+/// A Summon's mutually exclusive upgrade activity during the current turn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UpgradeActivity {
+    /// The Summon can be upgraded this turn.
+    Available,
+    /// The Summon entered play this turn and cannot be upgraded yet.
+    PlayedThisTurn,
+    /// The Summon already received its one upgrade for this turn.
+    UpgradedThisTurn,
+}
+
+/// Proof that a Summon entered Main during the current turn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EnteredMain;
+
+/// The independent per-turn facts held by one Summon.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SummonTurnRecord {
+    pub upgrade: UpgradeActivity,
+    pub main_entry: Option<EnteredMain>,
+}
+
+impl SummonTurnRecord {
+    /// Start a turn with upgrade activity available and no Main entry.
+    pub const fn fresh() -> Self {
+        Self {
+            upgrade: UpgradeActivity::Available,
+            main_entry: None,
+        }
+    }
+}
+
 /// One Summon in play: its upgrade chain, accumulated Damage, Ready state,
 /// who owns and who controls it, any duration markers, and the per-turn
-/// flags that gate upgrading, attacking, and Retreating.
+/// record that gates upgrading and records Main entry.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SummonInstance {
     pub chain: UpgradeChain,
@@ -70,13 +102,7 @@ pub struct SummonInstance {
     pub owner: PlayerId,
     pub controller: PlayerId,
     pub duration_markers: Vec<DurationMarker>,
-    /// Rules §17: a Base Summon cannot be upgraded the turn it was played.
-    pub played_this_turn: bool,
-    /// Rules §18: a Summon may be upgraded only once per turn.
-    pub upgraded_this_turn: bool,
-    /// Rules §30: whether this Summon entered Main this turn (feeds
-    /// `ConditionalBonus { condition: DefenderEnteredMainThisTurn, .. }`).
-    pub entered_main_this_turn: bool,
+    pub turn: SummonTurnRecord,
 }
 
 /// The three typed Mana pools a player has banked (rules §11).
@@ -503,6 +529,39 @@ mod tests {
         let mut pair = PerPlayer::new(1, 2);
         *pair.get_mut(PlayerId::Two) = 9;
         assert_eq!(pair, PerPlayer::new(1, 9));
+    }
+
+    #[test]
+    fn summon_turn_record_fresh_is_available_with_no_main_entry() {
+        assert_eq!(
+            SummonTurnRecord::fresh(),
+            SummonTurnRecord {
+                upgrade: UpgradeActivity::Available,
+                main_entry: None,
+            }
+        );
+    }
+
+    #[test]
+    fn every_upgrade_activity_variant_constructs() {
+        let activities = [
+            UpgradeActivity::Available,
+            UpgradeActivity::PlayedThisTurn,
+            UpgradeActivity::UpgradedThisTurn,
+        ];
+
+        assert_eq!(activities.len(), 3);
+    }
+
+    #[test]
+    fn entered_main_is_independent_from_upgrade_activity() {
+        let record = SummonTurnRecord {
+            upgrade: UpgradeActivity::UpgradedThisTurn,
+            main_entry: Some(EnteredMain),
+        };
+
+        assert_eq!(record.upgrade, UpgradeActivity::UpgradedThisTurn);
+        assert_eq!(record.main_entry, Some(EnteredMain));
     }
 
     #[test]
