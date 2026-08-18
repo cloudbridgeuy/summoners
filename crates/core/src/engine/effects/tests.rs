@@ -543,7 +543,7 @@ fn swap_opposing_positions_exchanges_the_opponents_main_and_named_bench_slot() {
     // step below has not run yet — the Main-entry record is set only when
     // `engine::triggers::movement_trigger` processes that step, not here.
     assert!(
-        !state
+        state
             .players
             .get(PlayerId::Two)
             .main
@@ -551,7 +551,7 @@ fn swap_opposing_positions_exchanges_the_opponents_main_and_named_bench_slot() {
             .expect("main")
             .turn
             .main_entry
-            .is_some()
+            .is_none()
     );
     assert!(state.players.get(PlayerId::Two).bench[0].is_some());
 }
@@ -687,7 +687,7 @@ fn swap_positions_exchanges_main_and_the_named_bench_slot_and_enqueues_the_four_
     // `EnteringMain` step below, it does not drain it, so the record is still
     // empty right after the leaf runs.
     assert!(
-        !state
+        state
             .players
             .get(PlayerId::One)
             .main
@@ -695,7 +695,7 @@ fn swap_positions_exchanges_main_and_the_named_bench_slot_and_enqueues_the_four_
             .expect("main")
             .turn
             .main_entry
-            .is_some()
+            .is_none()
     );
     assert!(state.players.get(PlayerId::One).bench[0].is_some());
     assert_eq!(
