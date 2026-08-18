@@ -285,7 +285,7 @@ pub(crate) fn answer_promotion(
 /// Move the Bench Summon at `slot` to the empty Main (rules §24 step 4).
 /// Ready carries over unchanged — unlike a played or upgraded Summon (rules
 /// §17, §19), Promotion is a movement, not a new arrival, so nothing here
-/// forces it to Exhausted. `entered_main_this_turn` is left alone: the
+/// forces it to Exhausted. The Main-entry record is left alone: the
 /// caller's `resolve_movement_consequences` (step 5, right after this one)
 /// always queues an `EnteringMain` step for the same Summon, and draining
 /// that through `engine::triggers::movement_trigger` sets the flag — the one

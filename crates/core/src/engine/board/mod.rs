@@ -12,7 +12,8 @@ use crate::domain::errors::ActionError;
 use crate::domain::events::GameEvent;
 use crate::domain::ids::{BenchSlot, CardInstanceId, ManaType, PlayerId, Position};
 use crate::domain::state::{
-    GameState, MovementStep, Phase, PlayerState, SummonInstance, UpgradeChain, WorkItem,
+    GameState, MovementStep, Phase, PlayerState, SummonInstance, SummonTurnRecord, UpgradeActivity,
+    UpgradeChain, WorkItem,
 };
 use crate::engine::apply::ActionOutcome;
 use crate::engine::payment::{self, PaymentError};
@@ -87,7 +88,7 @@ fn require_free_main_phase(state: &GameState) -> Result<(), ActionError> {
 }
 
 /// Play a Base Summon from hand into an empty Bench slot (rules §17). It
-/// enters Exhausted, `played_this_turn` set.
+/// enters Exhausted with its upgrade activity recorded as played this turn.
 pub(crate) fn play_summon(
     state: &GameState,
     player: PlayerId,
@@ -123,9 +124,10 @@ pub(crate) fn play_summon(
         owner: player,
         controller: player,
         duration_markers: vec![],
-        played_this_turn: true,
-        upgraded_this_turn: false,
-        entered_main_this_turn: false,
+        turn: SummonTurnRecord {
+            upgrade: UpgradeActivity::PlayedThisTurn,
+            main_entry: None,
+        },
     });
 
     Ok(ActionOutcome {
@@ -150,11 +152,12 @@ pub(crate) fn upgrade_summon(
     let Some(summon) = summon_at(player_state, position) else {
         return Err(ActionError::EmptyPosition);
     };
-    if summon.played_this_turn {
-        return Err(ActionError::PlayedThisTurn);
-    }
-    if summon.upgraded_this_turn {
-        return Err(ActionError::AlreadyUpgradedThisTurn);
+    match summon.turn.upgrade {
+        UpgradeActivity::Available => {}
+        UpgradeActivity::PlayedThisTurn => return Err(ActionError::PlayedThisTurn),
+        UpgradeActivity::UpgradedThisTurn => {
+            return Err(ActionError::AlreadyUpgradedThisTurn);
+        }
     }
 
     let Some(hand_index) = player_state.hand.iter().position(|c| c.instance == card) else {
@@ -192,7 +195,7 @@ pub(crate) fn upgrade_summon(
     let mut next_summon = summon.clone();
     next_summon.chain = UpgradeChain::new(summon.chain.base(), new_layers);
     next_summon.ready = false;
-    next_summon.upgraded_this_turn = true;
+    next_summon.turn.upgrade = UpgradeActivity::UpgradedThisTurn;
 
     let mut next = state.clone();
     let next_player = next.players.get_mut(player);
@@ -276,7 +279,7 @@ pub(crate) fn retreat(
     // step names the position its Summon occupies now: the one that left
     // Main is at `Bench(slot)` for both `LeavingMain` and `EnteringBench`;
     // the one that left the Bench is at `Main` for both `LeavingBench` and
-    // `EnteringMain`. `entered_main_this_turn` is not set here: draining the
+    // `EnteringMain`. The Main-entry record is not set here: draining the
     // queued `EnteringMain` step through `engine::triggers::movement_trigger`
     // sets it — the one place in this crate that does, since every path onto
     // Main enqueues that same step.

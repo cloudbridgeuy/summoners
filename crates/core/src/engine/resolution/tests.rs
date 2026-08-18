@@ -24,9 +24,7 @@ fn whelp(owner: PlayerId) -> SummonInstance {
         owner,
         controller: owner,
         duration_markers: vec![],
-        played_this_turn: false,
-        upgraded_this_turn: false,
-        entered_main_this_turn: false,
+        turn: crate::domain::state::SummonTurnRecord::fresh(),
     }
 }
 
@@ -291,7 +289,7 @@ fn drain_leaves_a_broken_game_untouched_even_with_queued_work() {
 #[test]
 fn drain_is_a_silent_no_op_for_a_movement_or_ability_trigger_with_no_matching_card() {
     // Quarry Whelp prints no Trigger ability, so both items find nothing
-    // to fire; `LeavingMain` also does not touch `entered_main_this_turn`
+    // to fire; `LeavingMain` also does not touch the Main-entry record
     // (only `EnteringMain` does).
     let mut state = base_state();
     state.work = VecDeque::from(vec![
@@ -357,7 +355,7 @@ fn drain_fires_an_entering_main_trigger_and_sets_the_entered_flag() {
         .as_ref()
         .expect("main");
     assert_eq!(healed.damage, 5);
-    assert!(healed.entered_main_this_turn);
+    assert!(healed.turn.main_entry.is_some());
 }
 
 #[test]

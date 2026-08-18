@@ -28,9 +28,7 @@ fn summon_with_def(owner: PlayerId, def: EntityId, ready: bool) -> SummonInstanc
         owner,
         controller: owner,
         duration_markers: vec![],
-        played_this_turn: false,
-        upgraded_this_turn: false,
-        entered_main_this_turn: false,
+        turn: crate::domain::state::SummonTurnRecord::fresh(),
     }
 }
 
@@ -665,7 +663,7 @@ fn apply_activates_a_swap_positions_skill_and_fires_the_four_movement_triggers_e
         .as_ref()
         .expect("Hearth Warden landed on Main");
     assert_eq!(healed.damage, 5);
-    assert!(healed.entered_main_this_turn);
+    assert!(healed.turn.main_entry.is_some());
     assert!(
         !outcome.state.players.get(PlayerId::One).bench[0]
             .as_ref()

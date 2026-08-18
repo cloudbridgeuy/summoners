@@ -77,9 +77,7 @@ mod tests {
             owner,
             controller: owner,
             duration_markers: vec![],
-            played_this_turn: false,
-            upgraded_this_turn: false,
-            entered_main_this_turn: false,
+            turn: crate::domain::state::SummonTurnRecord::fresh(),
         }
     }
 
