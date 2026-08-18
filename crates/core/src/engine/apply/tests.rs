@@ -3,7 +3,7 @@ use crate::domain::cards::fixtures;
 use crate::domain::ids::{BenchSlot, CardInstanceId, ManaType, Position};
 use crate::domain::state::{
     CardRef, GameOutcome, GameStatus, LossReason, ManaBank, ManaSource, PerPlayer, Phase,
-    PlayerState, StackItem, StackWindow, SummonInstance, TurnState, UpgradeChain,
+    PlayerState, Readiness, StackItem, StackWindow, SummonInstance, TurnState, UpgradeChain,
 };
 use std::collections::VecDeque;
 
@@ -17,7 +17,7 @@ fn summon(owner: PlayerId) -> SummonInstance {
             vec![],
         ),
         damage: 0,
-        ready: true,
+        readiness: Readiness::Ready,
         owner,
         controller: owner,
         duration_markers: vec![],

@@ -16,7 +16,8 @@ use crate::domain::cards::{CardSet, ManaTypes};
 use crate::domain::events::GameEvent;
 use crate::domain::ids::{BenchSlot, ManaType, Position};
 use crate::domain::state::{
-    GameState, ManaSource, PendingInput, Phase, PlayerState, SummonInstance, SummonTurnRecord,
+    GameState, ManaSource, PendingInput, Phase, PlayerState, Readiness, SummonInstance,
+    SummonTurnRecord,
 };
 
 // ---------------------------------------------------------------------------
@@ -183,10 +184,10 @@ pub(crate) fn ready_all(state: &GameState) -> (GameState, Vec<GameEvent>) {
     let positions = controlled_positions(player_state);
 
     if let Some(summon) = player_state.main.as_mut() {
-        summon.ready = true;
+        summon.readiness = Readiness::Ready;
     }
     for summon in player_state.bench.iter_mut().flatten() {
-        summon.ready = true;
+        summon.readiness = Readiness::Ready;
     }
 
     (state, vec![GameEvent::SummonsReadied { player, positions }])
@@ -294,7 +295,7 @@ mod tests {
                 vec![],
             ),
             damage: 0,
-            ready: false,
+            readiness: Readiness::Exhausted,
             owner,
             controller: owner,
             duration_markers: vec![],
@@ -422,8 +423,14 @@ mod tests {
         let (state, events) = ready_all(&state);
 
         let player_state = state.players.get(PlayerId::One);
-        assert!(player_state.main.as_ref().expect("main set").ready);
-        assert!(player_state.bench[1].as_ref().expect("bench set").ready);
+        assert_eq!(
+            player_state.main.as_ref().expect("main set").readiness,
+            Readiness::Ready
+        );
+        assert_eq!(
+            player_state.bench[1].as_ref().expect("bench set").readiness,
+            Readiness::Ready
+        );
         assert_eq!(
             events,
             vec![GameEvent::SummonsReadied {

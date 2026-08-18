@@ -19,7 +19,7 @@ use crate::domain::errors::InvalidScenario;
 use crate::domain::ids::{BenchSlot, PlayerId, Position};
 use crate::domain::state::{
     CardRef, Coin, GameState, GameStatus, ManaBank, PendingInput, PerPlayer, Phase, PlayerState,
-    SummonInstance, SummonTurnRecord, TurnState, UpgradeChain,
+    Readiness, SummonInstance, SummonTurnRecord, TurnState, UpgradeChain,
 };
 
 /// One Summon as a scenario describes it: its printed chain, bottom to top,
@@ -28,7 +28,7 @@ use crate::domain::state::{
 pub struct ScenarioSummon {
     pub chain: Vec<CardRef>,
     pub damage: u32,
-    pub ready: bool,
+    pub readiness: Readiness,
 }
 
 /// One player's board as a scenario describes it.
@@ -162,7 +162,7 @@ fn build_summon_instance(
     Ok(SummonInstance {
         chain,
         damage: summon.damage,
-        ready: summon.ready,
+        readiness: summon.readiness,
         owner: player,
         controller: player,
         duration_markers: vec![],
@@ -292,7 +292,7 @@ mod tests {
                 .map(|(instance, def)| card(instance, def))
                 .collect(),
             damage: 0,
-            ready: true,
+            readiness: Readiness::Ready,
         }
     }
 
@@ -353,6 +353,25 @@ mod tests {
     }
 
     #[test]
+    fn parsed_summons_preserve_both_readiness_variants() {
+        let mut scenario = base_scenario();
+        scenario.players.one.main.as_mut().expect("main").readiness = Readiness::Ready;
+        scenario.players.two.main.as_mut().expect("main").readiness = Readiness::Exhausted;
+
+        let state = from_scenario(fixtures::card_set(), &scenario)
+            .expect("a minimal scenario should parse");
+
+        assert_eq!(
+            state.players.one.main.as_ref().expect("main").readiness,
+            Readiness::Ready
+        );
+        assert_eq!(
+            state.players.two.main.as_ref().expect("main").readiness,
+            Readiness::Exhausted
+        );
+    }
+
+    #[test]
     fn a_duplicate_card_instance_across_players_is_rejected() {
         let mut scenario = base_scenario();
         // Player Two's hand reuses the instance id already on Player One's
@@ -383,7 +402,7 @@ mod tests {
         scenario.players.one.main = Some(ScenarioSummon {
             chain: vec![],
             damage: 0,
-            ready: true,
+            readiness: Readiness::Ready,
         });
 
         assert_eq!(

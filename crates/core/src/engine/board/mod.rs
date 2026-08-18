@@ -12,8 +12,8 @@ use crate::domain::errors::ActionError;
 use crate::domain::events::GameEvent;
 use crate::domain::ids::{BenchSlot, CardInstanceId, ManaType, PlayerId, Position};
 use crate::domain::state::{
-    GameState, MovementStep, Phase, PlayerState, SummonInstance, SummonTurnRecord, UpgradeActivity,
-    UpgradeChain, WorkItem,
+    GameState, MovementStep, Phase, PlayerState, Readiness, SummonInstance, SummonTurnRecord,
+    UpgradeActivity, UpgradeChain, WorkItem,
 };
 use crate::engine::apply::ActionOutcome;
 use crate::engine::payment::{self, PaymentError};
@@ -120,7 +120,7 @@ pub(crate) fn play_summon(
     next_player.bench[slot.index()] = Some(SummonInstance {
         chain: UpgradeChain::new(card_ref, vec![]),
         damage: 0,
-        ready: false,
+        readiness: Readiness::Exhausted,
         owner: player,
         controller: player,
         duration_markers: vec![],
@@ -194,7 +194,7 @@ pub(crate) fn upgrade_summon(
     new_layers.push(card_ref);
     let mut next_summon = summon.clone();
     next_summon.chain = UpgradeChain::new(summon.chain.base(), new_layers);
-    next_summon.ready = false;
+    next_summon.readiness = Readiness::Exhausted;
     next_summon.turn.upgrade = UpgradeActivity::UpgradedThisTurn;
 
     let mut next = state.clone();

@@ -6,7 +6,7 @@ use crate::domain::cards::fixtures;
 use crate::domain::cards::{Entity, EntityId};
 use crate::domain::ids::CardInstanceId;
 use crate::domain::state::{
-    CardRef, GameOutcome, GameStatus, LossReason, ManaBank, PerPlayer, Phase, TurnState,
+    CardRef, GameOutcome, GameStatus, LossReason, ManaBank, PerPlayer, Phase, Readiness, TurnState,
     UpgradeChain,
 };
 use std::collections::VecDeque;
@@ -22,7 +22,7 @@ fn summon(owner: PlayerId) -> SummonInstance {
             vec![],
         ),
         damage: 0,
-        ready: true,
+        readiness: Readiness::Ready,
         owner,
         controller: owner,
         duration_markers: vec![],
@@ -509,7 +509,7 @@ fn answer_promotion_moves_the_chosen_slot_to_main_and_preserves_ready() {
     let mut state = base_state();
     state.players.get_mut(PlayerId::Two).main = None;
     let mut resting = summon(PlayerId::Two);
-    resting.ready = false;
+    resting.readiness = Readiness::Exhausted;
     state.players.get_mut(PlayerId::Two).bench = [None, Some(resting), None];
     state.pending = Some(PendingInput::Promotion {
         player: PlayerId::Two,
@@ -532,8 +532,9 @@ fn answer_promotion_moves_the_chosen_slot_to_main_and_preserves_ready() {
         .main
         .as_ref()
         .expect("promotion filled Main");
-    assert!(
-        !promoted.ready,
+    assert_eq!(
+        promoted.readiness,
+        Readiness::Exhausted,
         "Promotion is a movement, not a new arrival"
     );
     assert_eq!(outcome.state.players.get(PlayerId::Two).bench[1], None);

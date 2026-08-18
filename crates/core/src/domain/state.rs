@@ -91,6 +91,15 @@ impl SummonTurnRecord {
     }
 }
 
+/// A Summon's ability to activate a Skill.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Readiness {
+    /// The Summon can activate a Skill.
+    Ready,
+    /// The Summon cannot activate a Skill until it becomes Ready.
+    Exhausted,
+}
+
 /// One Summon in play: its upgrade chain, accumulated Damage, Ready state,
 /// who owns and who controls it, any duration markers, and the per-turn
 /// record that gates upgrading and records Main entry.
@@ -98,7 +107,7 @@ impl SummonTurnRecord {
 pub struct SummonInstance {
     pub chain: UpgradeChain,
     pub damage: u32,
-    pub ready: bool,
+    pub readiness: Readiness,
     pub owner: PlayerId,
     pub controller: PlayerId,
     pub duration_markers: Vec<DurationMarker>,

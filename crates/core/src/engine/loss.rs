@@ -73,7 +73,7 @@ mod tests {
                 vec![],
             ),
             damage: 0,
-            ready: true,
+            readiness: crate::domain::state::Readiness::Ready,
             owner,
             controller: owner,
             duration_markers: vec![],

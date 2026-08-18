@@ -21,7 +21,9 @@ use crate::domain::cards::{Cost, EffectLeaf, EntityId, Skill};
 use crate::domain::errors::ActionError;
 use crate::domain::events::GameEvent;
 use crate::domain::ids::{ManaType, PlayerId, Position};
-use crate::domain::state::{DurationMarker, GameState, Phase, PlayerState, SummonInstance};
+use crate::domain::state::{
+    DurationMarker, GameState, Phase, PlayerState, Readiness, SummonInstance,
+};
 use crate::engine::apply::ActionOutcome;
 use crate::engine::effects;
 use crate::engine::payment::{self, PaymentError};
@@ -225,8 +227,9 @@ pub(crate) fn activate_skill(
     let Some(summon) = summon_at(player_state, position) else {
         return Err(ActionError::EmptyPosition);
     };
-    if !summon.ready {
-        return Err(ActionError::SummonExhausted);
+    match summon.readiness {
+        Readiness::Ready => {}
+        Readiness::Exhausted => return Err(ActionError::SummonExhausted),
     }
 
     let Some(top_entity) = state.cards.get(summon.chain.top().def) else {
@@ -264,7 +267,7 @@ pub(crate) fn activate_skill(
     // Rules §15: the Summon turns sideways and becomes Exhausted before its
     // Skill resolves — never after.
     if let Some(summon_mut) = summon_at_mut(next_player, position) {
-        summon_mut.ready = false;
+        summon_mut.readiness = Readiness::Exhausted;
     }
 
     let mut events: Vec<GameEvent> = payment

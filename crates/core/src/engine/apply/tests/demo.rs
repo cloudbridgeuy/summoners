@@ -5,7 +5,7 @@
 //! fixtures through `super::*`.
 
 use super::*;
-use crate::domain::state::Coin;
+use crate::domain::state::{Coin, Readiness};
 use crate::scenario::{Scenario, ScenarioPlayer, ScenarioSummon, from_scenario};
 
 // -- Demo: EndTurn hands off, runs the opponent's Upkeep, and Mana
@@ -135,7 +135,7 @@ fn demo_convert_coin_banks_one_anchored_mana_and_removes_the_coin() {
             main: Some(ScenarioSummon {
                 chain: vec![card_ref(instance, "quarry-whelp")],
                 damage: 0,
-                ready: true,
+                readiness: Readiness::Ready,
             }),
             bench: [None, None, None],
         }

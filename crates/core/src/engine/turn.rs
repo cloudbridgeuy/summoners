@@ -238,7 +238,7 @@ mod tests {
                 vec![],
             ),
             damage: 0,
-            ready: false,
+            readiness: crate::domain::state::Readiness::Exhausted,
             owner,
             controller: owner,
             duration_markers: vec![],
