@@ -227,8 +227,9 @@ pub(crate) fn activate_skill(
     let Some(summon) = summon_at(player_state, position) else {
         return Err(ActionError::EmptyPosition);
     };
-    if summon.readiness == Readiness::Exhausted {
-        return Err(ActionError::SummonExhausted);
+    match summon.readiness {
+        Readiness::Ready => {}
+        Readiness::Exhausted => return Err(ActionError::SummonExhausted),
     }
 
     let Some(top_entity) = state.cards.get(summon.chain.top().def) else {
