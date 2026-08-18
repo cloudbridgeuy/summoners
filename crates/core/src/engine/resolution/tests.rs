@@ -2,11 +2,11 @@
 //! module's items through `super::*`.
 
 use super::*;
-use crate::domain::cards::CardDefId;
+use crate::domain::cards::fixtures;
 use crate::domain::ids::{CardInstanceId, PlayerId, Position};
 use crate::domain::state::{
-    CardRef, ManaBank, ManaSource, MovementStep, PendingInput, PerPlayer, Phase, PlayerState,
-    SummonInstance, TurnState, UpgradeChain,
+    CardRef, GameStatus, ManaBank, ManaSource, MovementStep, PendingInput, PerPlayer, Phase,
+    PlayerState, SummonInstance, TurnState, UpgradeChain,
 };
 use std::collections::VecDeque;
 
@@ -15,7 +15,7 @@ fn whelp(owner: PlayerId) -> SummonInstance {
         chain: UpgradeChain::new(
             CardRef {
                 instance: CardInstanceId(1),
-                def: CardDefId("quarry-whelp"),
+                def: fixtures::id("quarry-whelp"),
             },
             vec![],
         ),
@@ -36,7 +36,7 @@ fn player_state(owner: PlayerId) -> PlayerState {
         bench: [None, None, None],
         deck: vec![CardRef {
             instance: CardInstanceId(10),
-            def: CardDefId("quarry-whelp"),
+            def: fixtures::id("quarry-whelp"),
         }],
         hand: vec![],
         prizes: vec![],
@@ -63,7 +63,8 @@ fn base_state() -> GameState {
         stack_segment_bases: vec![],
         work: VecDeque::new(),
         pending: None,
-        outcome: None,
+        status: GameStatus::Playing,
+        cards: fixtures::card_set(),
     }
 }
 
@@ -185,7 +186,7 @@ fn drain_stops_as_soon_as_produce_mana_pauses_on_a_choice() {
         chain: UpgradeChain::new(
             CardRef {
                 instance: CardInstanceId(2),
-                def: CardDefId("set-path-adept"),
+                def: fixtures::id("set-path-adept"),
             },
             vec![],
         ),
@@ -215,7 +216,7 @@ fn drain_stops_as_soon_as_produce_mana_pauses_on_a_choice() {
 }
 
 #[test]
-fn drain_stops_immediately_once_a_draw_failure_sets_outcome() {
+fn drain_stops_immediately_once_a_draw_failure_sets_status() {
     let mut state = base_state();
     state.players.get_mut(PlayerId::Two).deck = vec![];
     state.work = VecDeque::from(vec![
@@ -226,11 +227,11 @@ fn drain_stops_immediately_once_a_draw_failure_sets_outcome() {
 
     let (state, events) = drain(&state);
 
-    assert!(state.outcome.is_some());
+    assert!(!state.status.is_playing());
     assert_eq!(
         state.work,
         VecDeque::from(vec![WorkItem::ProduceMana(ManaSource::Player)]),
-        "the loop checks outcome before popping the next item, so the \
+        "the loop checks status before popping the next item, so the \
          unrun item is left queued rather than executed — harmless, since \
          a finished game rejects every later action outright"
     );
@@ -253,7 +254,7 @@ fn drain_stops_immediately_once_a_draw_failure_sets_outcome() {
 #[test]
 fn drain_leaves_a_finished_game_untouched_even_with_queued_work() {
     let mut state = base_state();
-    state.outcome = Some(crate::domain::state::GameOutcome {
+    state.status = GameStatus::Ended(crate::domain::state::GameOutcome {
         winner: PlayerId::One,
         reason: crate::domain::state::LossReason::EmptyDeckDraw,
     });
@@ -266,10 +267,32 @@ fn drain_leaves_a_finished_game_untouched_even_with_queued_work() {
 }
 
 #[test]
+fn drain_leaves_a_broken_game_untouched_even_with_queued_work() {
+    let breakage = crate::domain::cards::Breakage {
+        rule: "destruction",
+        entity: fixtures::id("quarry-whelp"),
+        expected: crate::domain::cards::ComponentKind::Life,
+    };
+    let mut state = base_state();
+    state.status = GameStatus::Broken(breakage);
+    state.work = VecDeque::from(vec![WorkItem::ReadyAll]);
+
+    let (state, events) = drain(&state);
+
+    assert!(events.is_empty());
+    assert_eq!(state.status, GameStatus::Broken(breakage));
+    assert_eq!(
+        state.work,
+        VecDeque::from(vec![WorkItem::ReadyAll]),
+        "a broken status stops the loop before it ever pops the next item"
+    );
+}
+
+#[test]
 fn drain_is_a_silent_no_op_for_a_movement_or_ability_trigger_with_no_matching_card() {
-    // Quarry Whelp carries no `CardNode::Trigger`, so both items find
-    // nothing to fire; `LeavingMain` also does not touch
-    // `entered_main_this_turn` (only `EnteringMain` does).
+    // Quarry Whelp prints no Trigger ability, so both items find nothing
+    // to fire; `LeavingMain` also does not touch `entered_main_this_turn`
+    // (only `EnteringMain` does).
     let mut state = base_state();
     state.work = VecDeque::from(vec![
         WorkItem::MovementTrigger(MovementStep::LeavingMain, PlayerId::Two, Position::Main),
@@ -277,6 +300,7 @@ fn drain_is_a_silent_no_op_for_a_movement_or_ability_trigger_with_no_matching_ca
             PlayerId::Two,
             Position::Main,
             crate::domain::cards::TriggerEvent::YourUpkeep,
+            fixtures::trigger_id("dawn-tender"),
         ),
     ]);
 
@@ -284,7 +308,7 @@ fn drain_is_a_silent_no_op_for_a_movement_or_ability_trigger_with_no_matching_ca
 
     assert!(events.is_empty());
     assert!(state.work.is_empty());
-    assert_eq!(state.outcome, None);
+    assert_eq!(state.status, GameStatus::Playing);
 }
 
 #[test]
@@ -296,7 +320,7 @@ fn drain_fires_an_entering_main_trigger_and_sets_the_entered_flag() {
         chain: UpgradeChain::new(
             CardRef {
                 instance: CardInstanceId(2),
-                def: CardDefId("hearth-warden"),
+                def: fixtures::id("hearth-warden"),
             },
             vec![],
         ),
@@ -318,6 +342,7 @@ fn drain_fires_an_entering_main_trigger_and_sets_the_entered_flag() {
                 controller: PlayerId::Two,
                 position: Position::Main,
                 event: crate::domain::cards::TriggerEvent::EntersMain,
+                ability: fixtures::trigger_id("hearth-warden"),
             },
             GameEvent::Healed {
                 position: Position::Main,
@@ -346,7 +371,7 @@ fn drain_opens_a_window_for_a_respondable_trigger_and_resumes_the_interrupted_dr
         chain: UpgradeChain::new(
             CardRef {
                 instance: CardInstanceId(3),
-                def: CardDefId("spite-thorn"),
+                def: fixtures::id("spite-thorn"),
             },
             vec![],
         ),
@@ -357,6 +382,7 @@ fn drain_opens_a_window_for_a_respondable_trigger_and_resumes_the_interrupted_dr
             PlayerId::One,
             Position::Main,
             crate::domain::cards::TriggerEvent::AnySummonDestroyed,
+            fixtures::trigger_id("spite-thorn"),
         ),
         WorkItem::LossCheck(PlayerId::Two),
     ]);
@@ -369,6 +395,7 @@ fn drain_opens_a_window_for_a_respondable_trigger_and_resumes_the_interrupted_dr
             controller: PlayerId::One,
             position: Position::Main,
             event: crate::domain::cards::TriggerEvent::AnySummonDestroyed,
+            ability: fixtures::trigger_id("spite-thorn"),
         }]
     );
     assert_eq!(state.stack.len(), 1);
@@ -398,7 +425,7 @@ fn drain_resumes_the_interrupted_work_once_two_passes_close_the_triggers_window(
         chain: UpgradeChain::new(
             CardRef {
                 instance: CardInstanceId(3),
-                def: CardDefId("spite-thorn"),
+                def: fixtures::id("spite-thorn"),
             },
             vec![],
         ),
@@ -409,6 +436,7 @@ fn drain_resumes_the_interrupted_work_once_two_passes_close_the_triggers_window(
             PlayerId::One,
             Position::Main,
             crate::domain::cards::TriggerEvent::AnySummonDestroyed,
+            fixtures::trigger_id("spite-thorn"),
         ),
         WorkItem::LossCheck(PlayerId::Two),
     ]);
@@ -488,7 +516,7 @@ fn drain_runs_a_loss_check_that_finds_no_losing_condition_as_a_silent_no_op() {
 
     assert!(events.is_empty());
     assert!(state.work.is_empty());
-    assert_eq!(state.outcome, None);
+    assert_eq!(state.status, GameStatus::Playing);
 }
 
 // -- Stack resolution: step 2 of the loop ---------------------------------
@@ -606,7 +634,7 @@ fn drain_resolves_a_support_spell_and_discards_it_to_its_casters_pile() {
     });
     let card = CardRef {
         instance: CardInstanceId(99),
-        def: CardDefId("renewing-balm"),
+        def: fixtures::id("renewing-balm"),
     };
     state.stack = vec![StackItem::Spell {
         caster: PlayerId::One,
@@ -652,7 +680,7 @@ fn drain_resolves_an_attack_spell_against_the_opponents_main() {
     state.turn.window = None;
     let card = CardRef {
         instance: CardInstanceId(99),
-        def: CardDefId("ember-lance"),
+        def: fixtures::id("ember-lance"),
     };
     state.stack = vec![StackItem::Spell {
         caster: PlayerId::One,
@@ -698,7 +726,7 @@ fn drain_resolves_a_draw_spell_and_settles_the_loss_check_it_enqueues() {
     state.turn.window = None;
     let card = CardRef {
         instance: CardInstanceId(99),
-        def: CardDefId("scrying-glass"),
+        def: fixtures::id("scrying-glass"),
     };
     state.stack = vec![StackItem::Spell {
         caster: PlayerId::Two,

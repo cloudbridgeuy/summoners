@@ -56,6 +56,7 @@ fn demo_retreat_fires_the_four_movement_triggers_and_heals_the_entering_main_sum
                 controller: PlayerId::One,
                 position: Position::Main,
                 event: crate::domain::cards::TriggerEvent::EntersMain,
+                ability: fixtures::trigger_id("hearth-warden"),
             },
             GameEvent::Healed {
                 position: Position::Main,
@@ -149,6 +150,7 @@ fn demo_a_respondable_destruction_trigger_opens_a_mid_drain_window_and_resumes_t
                 controller: PlayerId::One,
                 position: Position::Bench(BenchSlot::First),
                 event: crate::domain::cards::TriggerEvent::AnySummonDestroyed,
+                ability: fixtures::trigger_id("spite-thorn"),
             },
         ],
         "discovering Spite Thorn's respondable trigger interrupts the rest \
@@ -236,7 +238,7 @@ fn demo_a_respondable_destruction_trigger_opens_a_mid_drain_window_and_resumes_t
     );
     assert_eq!(resumed.state.turn.window, None);
     assert_eq!(resumed.state.pending, None);
-    assert_eq!(resumed.state.outcome, None);
+    assert_eq!(resumed.state.status, GameStatus::Playing);
     let two = resumed.state.players.get(PlayerId::Two);
     assert!(two.main.is_some(), "Promotion filled the empty Main");
     assert_eq!(two.bench, [None, None, None]);

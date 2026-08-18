@@ -4,8 +4,9 @@
 //! `GameEvent`s (decision 3).
 
 use std::collections::VecDeque;
+use std::sync::Arc;
 
-use crate::domain::cards::{CardDefId, EffectLeaf, TriggerEvent};
+use crate::domain::cards::{Breakage, CardSet, EffectLeaf, EntityId, TriggerEvent};
 use crate::domain::ids::{CardInstanceId, PlayerId, Position};
 
 /// A card reference in a non-battlefield zone: the specific instance and the
@@ -13,7 +14,7 @@ use crate::domain::ids::{CardInstanceId, PlayerId, Position};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CardRef {
     pub instance: CardInstanceId,
-    pub def: CardDefId,
+    pub def: EntityId,
 }
 
 /// A Summon's upgrade chain, guaranteed non-empty by construction: the
@@ -220,6 +221,32 @@ pub struct GameOutcome {
     pub reason: LossReason,
 }
 
+/// Where the match currently stands. `Playing` is the only status under
+/// which an action can be accepted; `Ended` and `Broken` are both terminal,
+/// through the same one field — a match cannot be both won and broken at
+/// once, and a single field makes that impossible to represent rather than
+/// merely undesirable. `Ended` carries the same `GameOutcome` the field it
+/// replaced used to hold, so the winner and the reason are never lost.
+/// `Broken` carries the `Breakage` a failed `Entity::demand` produced:
+/// which rule demanded, which entity it asked, and which component it
+/// expected and did not find.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GameStatus {
+    Playing,
+    Ended(GameOutcome),
+    Broken(Breakage),
+}
+
+impl GameStatus {
+    /// Whether the match can still accept and resolve an action. `false`
+    /// once the match has ended in a win or broken on a demanded fact no
+    /// entity printed — both stop the resolution loop and the actor gate
+    /// the same way.
+    pub fn is_playing(&self) -> bool {
+        matches!(self, GameStatus::Playing)
+    }
+}
+
 /// One entry on the last-in-first-out Stack: an attack or a Spell effect
 /// (rules §31, §34).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -275,8 +302,11 @@ pub enum WorkItem {
     /// Summon this player controls at `Position`.
     MovementTrigger(MovementStep, PlayerId, Position),
     /// Rules §36–38: a Triggered Ability fires for the Summon this player
-    /// controls at `Position`.
-    FireTrigger(PlayerId, Position, TriggerEvent),
+    /// controls at `Position`. Names the ability by its `EntityId`, since a
+    /// card may print more than one Trigger matching the same `TriggerEvent`
+    /// — one `FireTrigger` item is queued per matching ability, so the item
+    /// must say which one it means.
+    FireTrigger(PlayerId, Position, TriggerEvent, EntityId),
     /// Rules §24 step 6, §2: check whether this player has now lost.
     LossCheck(PlayerId),
     /// Rules §10: ready every Summon the new active player controls.
@@ -299,7 +329,16 @@ pub enum WorkItem {
 /// One plain, cloneable value: the whole match. The same state and the same
 /// action always produce the same outcome (the design's transition
 /// contract).
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// `PartialEq`/`Eq` are hand-written, not derived: every field but
+/// `cards` compares by value, as `#[derive]` would; `cards` compares by
+/// handle (`Arc::ptr_eq`) instead. A `CardSet` has no meaningful notion of
+/// content equality here — two states sharing one authored card pool are the
+/// same game shape, and comparing millions of bytes of card data on every
+/// state comparison would be wasteful even if it were defined. Test
+/// fixtures that want two independently built `GameState`s to compare equal
+/// must share one `Arc<CardSet>` handle (see `cards::fixtures::card_set`).
+#[derive(Debug, Clone)]
 pub struct GameState {
     pub players: PerPlayer<PlayerState>,
     pub turn: TurnState,
@@ -315,19 +354,98 @@ pub struct GameState {
     pub stack_segment_bases: Vec<usize>,
     pub work: VecDeque<WorkItem>,
     pub pending: Option<PendingInput>,
-    pub outcome: Option<GameOutcome>,
+    pub status: GameStatus,
+    /// The authored card pool this match reads facts from. Never
+    /// mutated after `scenario::from_scenario` builds the state; every
+    /// holder of the same `Arc` sees the same cards.
+    pub cards: Arc<CardSet>,
+}
+
+impl PartialEq for GameState {
+    fn eq(&self, other: &Self) -> bool {
+        self.players == other.players
+            && self.turn == other.turn
+            && self.stack == other.stack
+            && self.stack_segment_bases == other.stack_segment_bases
+            && self.work == other.work
+            && self.pending == other.pending
+            && self.status == other.status
+            && Arc::ptr_eq(&self.cards, &other.cards)
+    }
+}
+
+impl Eq for GameState {}
+
+impl GameState {
+    /// Write a terminal broken status, carrying `breakage`'s rule, entity,
+    /// and expected component. Nothing else about `self` changes and
+    /// nothing rolls back — any work already computed and queued when the
+    /// failing read happened stays exactly where it was, still readable in
+    /// the returned state.
+    pub(crate) fn break_game(&self, breakage: Breakage) -> GameState {
+        let mut next = self.clone();
+        next.status = GameStatus::Broken(breakage);
+        next
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::cards::CardDefId;
+    use crate::domain::cards::{ComponentKind, fixtures};
 
     fn card_ref(id: u32) -> CardRef {
         CardRef {
             instance: CardInstanceId(id),
-            def: CardDefId("quarry-whelp"),
+            def: fixtures::id("quarry-whelp"),
         }
+    }
+
+    fn minimal_player_state() -> PlayerState {
+        PlayerState {
+            main: None,
+            bench: [None, None, None],
+            deck: vec![],
+            hand: vec![],
+            prizes: vec![],
+            discard: vec![],
+            mana: ManaBank::default(),
+            main_losses: 0,
+            has_coin: false,
+            enchantments: vec![],
+        }
+    }
+
+    fn minimal_state() -> GameState {
+        GameState {
+            players: PerPlayer::new(minimal_player_state(), minimal_player_state()),
+            turn: TurnState {
+                active_player: PlayerId::One,
+                phase: Phase::Main,
+                window: None,
+                normal_attack_used: false,
+                normal_retreat_used: false,
+                spell_played_this_turn: false,
+            },
+            stack: vec![],
+            stack_segment_bases: vec![],
+            work: VecDeque::from(vec![WorkItem::LossCheck(PlayerId::One)]),
+            pending: None,
+            status: GameStatus::Playing,
+            cards: fixtures::card_set(),
+        }
+    }
+
+    #[test]
+    fn break_game_sets_broken_status_and_leaves_the_rest_untouched() {
+        let state = minimal_state();
+
+        let broken = state.break_game(breakage());
+
+        assert_eq!(broken.status, GameStatus::Broken(breakage()));
+        assert_eq!(broken.work, state.work);
+        assert_eq!(broken.players, state.players);
+        assert_eq!(broken.pending, state.pending);
     }
 
     #[test]
@@ -453,6 +571,40 @@ mod tests {
         assert_eq!(outcome.winner, PlayerId::One);
     }
 
+    fn breakage() -> Breakage {
+        Breakage {
+            rule: "destruction",
+            entity: fixtures::id("quarry-whelp"),
+            expected: ComponentKind::Life,
+        }
+    }
+
+    #[test]
+    fn every_game_status_variant_constructs() {
+        let statuses = [
+            GameStatus::Playing,
+            GameStatus::Ended(GameOutcome {
+                winner: PlayerId::One,
+                reason: LossReason::ThirdMainLoss,
+            }),
+            GameStatus::Broken(breakage()),
+        ];
+        assert_eq!(statuses.len(), 3);
+    }
+
+    #[test]
+    fn is_playing_is_true_only_for_playing() {
+        assert!(GameStatus::Playing.is_playing());
+        assert!(
+            !GameStatus::Ended(GameOutcome {
+                winner: PlayerId::One,
+                reason: LossReason::ThirdMainLoss,
+            })
+            .is_playing()
+        );
+        assert!(!GameStatus::Broken(breakage()).is_playing());
+    }
+
     #[test]
     fn stack_item_variants_construct() {
         let items = [
@@ -464,7 +616,7 @@ mod tests {
                 caster: PlayerId::One,
                 card: CardRef {
                     instance: CardInstanceId(1),
-                    def: CardDefId("ember-lance"),
+                    def: fixtures::id("ember-lance"),
                 },
                 targets: vec![Position::Main],
             },
@@ -500,7 +652,12 @@ mod tests {
             WorkItem::PromoteBenchSummon(PlayerId::One),
             WorkItem::ResolveMovementConsequences(PlayerId::One),
             WorkItem::MovementTrigger(MovementStep::LeavingMain, PlayerId::One, Position::Main),
-            WorkItem::FireTrigger(PlayerId::One, Position::Main, TriggerEvent::YourUpkeep),
+            WorkItem::FireTrigger(
+                PlayerId::One,
+                Position::Main,
+                TriggerEvent::YourUpkeep,
+                fixtures::trigger_id("spite-thorn"),
+            ),
             WorkItem::LossCheck(PlayerId::One),
             WorkItem::ReadyAll,
             WorkItem::DrawCard,

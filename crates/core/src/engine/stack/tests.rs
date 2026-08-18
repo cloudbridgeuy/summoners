@@ -2,10 +2,10 @@
 //! module's items through `super::*`.
 
 use super::*;
-use crate::domain::cards::CardDefId;
+use crate::domain::cards::fixtures;
 use crate::domain::ids::{BenchSlot, CardInstanceId};
 use crate::domain::state::{
-    CardRef, ManaBank, PendingInput, PerPlayer, PlayerState, SummonInstance, TurnState,
+    CardRef, GameStatus, ManaBank, PendingInput, PerPlayer, PlayerState, SummonInstance, TurnState,
     UpgradeChain, WorkItem,
 };
 use std::collections::VecDeque;
@@ -15,7 +15,7 @@ fn summon(owner: PlayerId, def: &'static str) -> SummonInstance {
         chain: UpgradeChain::new(
             CardRef {
                 instance: CardInstanceId(1),
-                def: CardDefId(def),
+                def: fixtures::id(def),
             },
             vec![],
         ),
@@ -60,7 +60,8 @@ fn base_state() -> GameState {
         stack_segment_bases: vec![],
         work: VecDeque::new(),
         pending: None,
-        outcome: None,
+        status: GameStatus::Playing,
+        cards: fixtures::card_set(),
     }
 }
 
@@ -225,7 +226,7 @@ fn a_rejected_declaration_leaves_the_callers_state_untouched() {
 fn hand_with(def: &'static str, instance: u32) -> Vec<CardRef> {
     vec![CardRef {
         instance: CardInstanceId(instance),
-        def: CardDefId(def),
+        def: fixtures::id(def),
     }]
 }
 
@@ -255,7 +256,7 @@ fn cast_spell_a_support_spell_pays_cost_pushes_the_stack_and_opens_a_window_for_
             caster: PlayerId::One,
             card: CardRef {
                 instance: CardInstanceId(5),
-                def: CardDefId("renewing-balm"),
+                def: fixtures::id("renewing-balm"),
             },
             targets: vec![Position::Main],
         }]
@@ -403,7 +404,7 @@ fn cast_spell_allows_an_attack_spell_as_a_response_inside_a_combat_window() {
                 caster: PlayerId::Two,
                 card: CardRef {
                     instance: CardInstanceId(7),
-                    def: CardDefId("ember-lance"),
+                    def: fixtures::id("ember-lance"),
                 },
                 targets: vec![Position::Main],
             },
@@ -713,4 +714,74 @@ fn pass_rejects_a_pending_decision() {
     let result = pass(&state, PlayerId::One);
 
     assert_eq!(result, Err(ActionError::PendingInputMismatch));
+}
+
+// --- printed facts read straight off the container -----------------
+
+/// Quarry Brute's printed Attack — its cost and its Damage effect — is a
+/// fact this module reads directly off the nested `Attack` entity. Pinned
+/// here so this module's own reliance on that read stays covered by a test
+/// in this module.
+#[test]
+fn quarry_brutes_printed_attack_carries_its_cost_and_effects() {
+    let cards = fixtures::card_set();
+    let entity = cards
+        .get(fixtures::id("quarry-brute"))
+        .expect("quarry-brute is a fixture card");
+    let attack = entity
+        .get::<Attack>()
+        .expect("quarry-brute prints an Attack");
+
+    assert_eq!(
+        attack.get::<Cost>().copied().unwrap_or_default(),
+        Cost {
+            generic: 1,
+            ..Cost::default()
+        }
+    );
+    assert_eq!(
+        attack.all::<EffectLeaf>(),
+        vec![&EffectLeaf::DealDamage {
+            amount: 20,
+            immutable: false,
+        }]
+    );
+}
+
+/// Ember Lance's printed cost, read straight off the top-level entity.
+/// Pinned here so this module's own reliance on that read stays covered by
+/// a test in this module.
+#[test]
+fn ember_lances_spell_prints_the_expected_cost() {
+    let cards = fixtures::card_set();
+    let entity = cards
+        .get(fixtures::id("ember-lance"))
+        .expect("ember-lance is a fixture card");
+
+    assert_eq!(
+        entity.get::<Cost>().copied().unwrap_or_default(),
+        Cost {
+            generic: 1,
+            ..Cost::default()
+        }
+    );
+}
+
+/// Standing Ward's printed cost, read straight off the top-level entity.
+/// Pinned here so this module's own reliance on that read stays covered by
+/// a test in this module.
+#[test]
+fn standing_wards_printed_cost_is_one_generic() {
+    let cards = fixtures::card_set();
+    let entity = cards
+        .get(fixtures::id("standing-ward"))
+        .expect("standing-ward is a fixture card");
+
+    assert_eq!(
+        entity.get::<Cost>().copied().unwrap_or_default(),
+        Cost {
+            generic: 1,
+            ..Cost::default()
+        }
+    );
 }

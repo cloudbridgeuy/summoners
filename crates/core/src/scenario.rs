@@ -12,13 +12,14 @@
 //! pending decision besides the promotion an empty Main derives on its own.
 
 use std::collections::{HashSet, VecDeque};
+use std::sync::Arc;
 
-use crate::domain::cards::{Form, Query, QueryResult, find_def};
+use crate::domain::cards::{CardSet, Form};
 use crate::domain::errors::InvalidScenario;
 use crate::domain::ids::{BenchSlot, PlayerId, Position};
 use crate::domain::state::{
-    CardRef, GameState, ManaBank, PendingInput, PerPlayer, Phase, PlayerState, SummonInstance,
-    TurnState, UpgradeChain,
+    CardRef, GameState, GameStatus, ManaBank, PendingInput, PerPlayer, Phase, PlayerState,
+    SummonInstance, TurnState, UpgradeChain,
 };
 
 /// One Summon as a scenario describes it: its printed chain, bottom to top,
@@ -82,10 +83,10 @@ fn check_no_duplicate_instances(scenario: &Scenario) -> Result<(), InvalidScenar
     Ok(())
 }
 
-/// Reject the first card whose `CardDefId` the registry cannot resolve.
-fn check_every_def_known(scenario: &Scenario) -> Result<(), InvalidScenario> {
+/// Reject the first card whose `EntityId` `cards` has no entity for.
+fn check_every_def_known(cards: &CardSet, scenario: &Scenario) -> Result<(), InvalidScenario> {
     for card in all_card_refs(scenario) {
-        if find_def(card.def).is_none() {
+        if cards.get(card.def).is_none() {
             return Err(InvalidScenario::UnknownCardDef(card.def));
         }
     }
@@ -106,20 +107,28 @@ fn positioned_summons(player: &ScenarioPlayer) -> Vec<(Position, &ScenarioSummon
     items
 }
 
-/// The Form printed on one card, or the chain-order error this card causes
-/// if it prints no Form at all.
-fn form_of(card: CardRef, player: PlayerId, position: Position) -> Result<Form, InvalidScenario> {
-    let def = find_def(card.def).ok_or(InvalidScenario::UnknownCardDef(card.def))?;
-    match def.find(Query::CurrentForm) {
-        Some(QueryResult::CurrentForm(form)) => Ok(form),
-        _ => Err(InvalidScenario::IllegalChainOrder { player, position }),
-    }
+/// The Form printed on one card, read straight off its entity, or the
+/// chain-order error this card causes if it prints no Form at all.
+fn form_of(
+    cards: &CardSet,
+    card: CardRef,
+    player: PlayerId,
+    position: Position,
+) -> Result<Form, InvalidScenario> {
+    let entity = cards
+        .get(card.def)
+        .ok_or(InvalidScenario::UnknownCardDef(card.def))?;
+    entity
+        .get::<Form>()
+        .copied()
+        .ok_or(InvalidScenario::IllegalChainOrder { player, position })
 }
 
 /// Validate and build one Summon's upgrade chain in the same pass: an empty
 /// chain and an out-of-order chain can never become an `UpgradeChain` value
 /// (make impossible states impossible).
 fn build_chain(
+    cards: &CardSet,
     player: PlayerId,
     position: Position,
     refs: &[CardRef],
@@ -128,9 +137,9 @@ fn build_chain(
         return Err(InvalidScenario::EmptyUpgradeChain { player, position });
     };
 
-    let mut previous = form_of(*base, player, position)?;
+    let mut previous = form_of(cards, *base, player, position)?;
     for card in rest {
-        let form = form_of(*card, player, position)?;
+        let form = form_of(cards, *card, player, position)?;
         if form <= previous {
             return Err(InvalidScenario::IllegalChainOrder { player, position });
         }
@@ -142,11 +151,12 @@ fn build_chain(
 
 /// Build one Summon at `position`, or fail with the chain error it caused.
 fn build_summon_instance(
+    cards: &CardSet,
     player: PlayerId,
     position: Position,
     summon: &ScenarioSummon,
 ) -> Result<SummonInstance, InvalidScenario> {
-    let chain = build_chain(player, position, &summon.chain)?;
+    let chain = build_chain(cards, player, position, &summon.chain)?;
     Ok(SummonInstance {
         chain,
         damage: summon.damage,
@@ -163,20 +173,21 @@ fn build_summon_instance(
 /// Build one player's zones, or fail with the first violation found on
 /// their board: an empty or misordered chain, or no Summon anywhere.
 fn build_player_state(
+    cards: &CardSet,
     player: PlayerId,
     scenario_player: &ScenarioPlayer,
 ) -> Result<PlayerState, InvalidScenario> {
     let main = scenario_player
         .main
         .as_ref()
-        .map(|summon| build_summon_instance(player, Position::Main, summon))
+        .map(|summon| build_summon_instance(cards, player, Position::Main, summon))
         .transpose()?;
 
     let mut bench: [Option<SummonInstance>; 3] = [None, None, None];
     for slot in BenchSlot::ALL {
         if let Some(summon) = &scenario_player.bench[slot.index()] {
             let position = Position::Bench(slot);
-            bench[slot.index()] = Some(build_summon_instance(player, position, summon)?);
+            bench[slot.index()] = Some(build_summon_instance(cards, player, position, summon)?);
         }
     }
 
@@ -214,13 +225,18 @@ fn derive_pending(players: &PerPlayer<PlayerState>) -> Option<PendingInput> {
 }
 
 /// Parse a `Scenario` into a `GameState`, or report the first shape it
-/// cannot interpret.
-pub fn from_scenario(scenario: &Scenario) -> Result<GameState, InvalidScenario> {
+/// cannot interpret. `cards` is the authored card pool this match will read
+/// facts from for the rest of its life; the returned state holds the same
+/// `Arc` handle.
+pub fn from_scenario(
+    cards: Arc<CardSet>,
+    scenario: &Scenario,
+) -> Result<GameState, InvalidScenario> {
     check_no_duplicate_instances(scenario)?;
-    check_every_def_known(scenario)?;
+    check_every_def_known(&cards, scenario)?;
 
-    let one = build_player_state(PlayerId::One, &scenario.players.one)?;
-    let two = build_player_state(PlayerId::Two, &scenario.players.two)?;
+    let one = build_player_state(&cards, PlayerId::One, &scenario.players.one)?;
+    let two = build_player_state(&cards, PlayerId::Two, &scenario.players.two)?;
     let players = PerPlayer::new(one, two);
     let pending = derive_pending(&players);
 
@@ -238,7 +254,8 @@ pub fn from_scenario(scenario: &Scenario) -> Result<GameState, InvalidScenario> 
         stack_segment_bases: vec![],
         work: VecDeque::new(),
         pending,
-        outcome: None,
+        status: GameStatus::Playing,
+        cards,
     })
 }
 
@@ -247,13 +264,24 @@ mod tests {
     #![allow(clippy::expect_used)]
 
     use super::*;
-    use crate::domain::cards::CardDefId;
+    use crate::domain::cards::fixtures;
     use crate::domain::ids::CardInstanceId;
 
     fn card(instance: u32, def: &'static str) -> CardRef {
         CardRef {
             instance: CardInstanceId(instance),
-            def: CardDefId(def),
+            def: fixtures::id(def),
+        }
+    }
+
+    /// A card reference naming an id no fixture in `fixtures::card_set`
+    /// carries — every fixture id is built from a small card number
+    /// (`fixtures::fid`'s `card * 1000 + ability` shape stays under
+    /// 25000), so an id built from digits alone is guaranteed absent.
+    fn unknown_card(instance: u32) -> CardRef {
+        CardRef {
+            instance: CardInstanceId(instance),
+            def: crate::domain::cards::EntityId::parse(&"9".repeat(32)).expect("valid probe id"),
         }
     }
 
@@ -300,10 +328,11 @@ mod tests {
     fn a_minimal_scenario_parses_with_no_pending_decision() {
         let scenario = base_scenario();
 
-        let state = from_scenario(&scenario).expect("a minimal scenario should parse");
+        let state = from_scenario(fixtures::card_set(), &scenario)
+            .expect("a minimal scenario should parse");
 
         assert_eq!(state.pending, None);
-        assert_eq!(state.outcome, None);
+        assert_eq!(state.status, GameStatus::Playing);
         assert_eq!(state.turn.active_player, PlayerId::One);
     }
 
@@ -315,7 +344,7 @@ mod tests {
         scenario.players.two.hand.push(card(1, "set-path-adept"));
 
         assert_eq!(
-            from_scenario(&scenario),
+            from_scenario(fixtures::card_set(), &scenario),
             Err(InvalidScenario::DuplicateCardInstance(CardInstanceId(1)))
         );
     }
@@ -323,11 +352,12 @@ mod tests {
     #[test]
     fn a_card_naming_no_known_fixture_is_rejected() {
         let mut scenario = base_scenario();
-        scenario.players.one.hand.push(card(999, "does-not-exist"));
+        let absent = unknown_card(999);
+        scenario.players.one.hand.push(absent);
 
         assert_eq!(
-            from_scenario(&scenario),
-            Err(InvalidScenario::UnknownCardDef(CardDefId("does-not-exist")))
+            from_scenario(fixtures::card_set(), &scenario),
+            Err(InvalidScenario::UnknownCardDef(absent.def))
         );
     }
 
@@ -341,7 +371,7 @@ mod tests {
         });
 
         assert_eq!(
-            from_scenario(&scenario),
+            from_scenario(fixtures::card_set(), &scenario),
             Err(InvalidScenario::EmptyUpgradeChain {
                 player: PlayerId::One,
                 position: Position::Main,
@@ -356,7 +386,7 @@ mod tests {
             Some(chain_summon(vec![(1, "quarry-brute"), (2, "quarry-whelp")]));
 
         assert_eq!(
-            from_scenario(&scenario),
+            from_scenario(fixtures::card_set(), &scenario),
             Err(InvalidScenario::IllegalChainOrder {
                 player: PlayerId::One,
                 position: Position::Main,
@@ -371,7 +401,7 @@ mod tests {
             Some(chain_summon(vec![(1, "quarry-whelp"), (2, "quarry-whelp")]));
 
         assert_eq!(
-            from_scenario(&scenario),
+            from_scenario(fixtures::card_set(), &scenario),
             Err(InvalidScenario::IllegalChainOrder {
                 player: PlayerId::One,
                 position: Position::Main,
@@ -385,7 +415,7 @@ mod tests {
         scenario.players.one.main = None;
 
         assert_eq!(
-            from_scenario(&scenario),
+            from_scenario(fixtures::card_set(), &scenario),
             Err(InvalidScenario::NoSummonInPlay {
                 player: PlayerId::One
             })
@@ -398,7 +428,8 @@ mod tests {
         scenario.players.one.main = None;
         scenario.players.one.bench[0] = Some(chain_summon(vec![(1, "quarry-whelp")]));
 
-        let state = from_scenario(&scenario).expect("an empty Main with a Bench should parse");
+        let state = from_scenario(fixtures::card_set(), &scenario)
+            .expect("an empty Main with a Bench should parse");
 
         assert_eq!(
             state.pending,
@@ -427,8 +458,8 @@ mod tests {
         scenario.players.two.has_coin = true;
         scenario.active_player = PlayerId::Two;
 
-        let state =
-            from_scenario(&scenario).expect("a fully populated scenario should still parse");
+        let state = from_scenario(fixtures::card_set(), &scenario)
+            .expect("a fully populated scenario should still parse");
 
         let one = state.players.get(PlayerId::One);
         assert_eq!(one.hand, scenario.players.one.hand);
@@ -441,7 +472,7 @@ mod tests {
         assert!(one.bench[0].is_some());
         assert_eq!(
             one.main.as_ref().map(|summon| summon.chain.top().def),
-            Some(CardDefId("quarry-whelp"))
+            Some(fixtures::id("quarry-whelp"))
         );
 
         let two = state.players.get(PlayerId::Two);
@@ -450,7 +481,7 @@ mod tests {
         assert_eq!(state.turn.active_player, PlayerId::Two);
         assert_eq!(state.turn.phase, Phase::Main);
         assert_eq!(state.pending, None);
-        assert_eq!(state.outcome, None);
+        assert_eq!(state.status, GameStatus::Playing);
         assert!(state.stack.is_empty());
         assert!(state.work.is_empty());
     }

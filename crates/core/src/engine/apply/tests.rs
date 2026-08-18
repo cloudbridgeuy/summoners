@@ -1,9 +1,9 @@
 use super::*;
-use crate::domain::cards::CardDefId;
+use crate::domain::cards::fixtures;
 use crate::domain::ids::{BenchSlot, CardInstanceId, ManaType, Position};
 use crate::domain::state::{
-    CardRef, GameOutcome, LossReason, ManaBank, ManaSource, PerPlayer, Phase, PlayerState,
-    StackItem, StackWindow, SummonInstance, TurnState, UpgradeChain,
+    CardRef, GameOutcome, GameStatus, LossReason, ManaBank, ManaSource, PerPlayer, Phase,
+    PlayerState, StackItem, StackWindow, SummonInstance, TurnState, UpgradeChain,
 };
 use std::collections::VecDeque;
 
@@ -12,7 +12,7 @@ fn summon(owner: PlayerId) -> SummonInstance {
         chain: UpgradeChain::new(
             CardRef {
                 instance: CardInstanceId(1),
-                def: CardDefId("quarry-whelp"),
+                def: fixtures::id("quarry-whelp"),
             },
             vec![],
         ),
@@ -57,7 +57,8 @@ fn base_state() -> GameState {
         stack_segment_bases: vec![],
         work: VecDeque::new(),
         pending: None,
-        outcome: None,
+        status: GameStatus::Playing,
+        cards: fixtures::card_set(),
     }
 }
 
@@ -68,7 +69,7 @@ fn end_turn(player: PlayerId) -> GameAction {
 fn card_ref(instance: u32, def: &'static str) -> CardRef {
     CardRef {
         instance: CardInstanceId(instance),
-        def: CardDefId(def),
+        def: fixtures::id(def),
     }
 }
 
@@ -102,7 +103,7 @@ fn full_end_turn(state: &GameState, player: PlayerId) -> Result<ActionOutcome, A
 #[test]
 fn a_finished_game_rejects_every_action_first() {
     let mut state = base_state();
-    state.outcome = Some(GameOutcome {
+    state.status = GameStatus::Ended(GameOutcome {
         winner: PlayerId::One,
         reason: LossReason::ThirdMainLoss,
     });
@@ -113,6 +114,22 @@ fn a_finished_game_rejects_every_action_first() {
     let result = apply(&state, &end_turn(PlayerId::Two));
 
     assert_eq!(result, Err(ActionError::GameAlreadyOver));
+}
+
+#[test]
+fn a_broken_game_rejects_every_action_first() {
+    let mut state = base_state();
+    state.status = GameStatus::Broken(crate::domain::cards::Breakage {
+        rule: "destruction",
+        entity: fixtures::id("quarry-whelp"),
+        expected: crate::domain::cards::ComponentKind::Life,
+    });
+
+    // Same proof as the finished-game case just above: the wrong player is
+    // used here to prove GameBroken wins even over a mismatched actor.
+    let result = apply(&state, &end_turn(PlayerId::Two));
+
+    assert_eq!(result, Err(ActionError::GameBroken));
 }
 
 #[test]
@@ -208,7 +225,7 @@ fn with_no_pending_and_no_window_only_the_active_player_may_act() {
     let activate_skill = GameAction::ActivateSkill {
         player: PlayerId::One,
         position: Position::Main,
-        skill: crate::domain::actions::SkillIndex(0),
+        ability: crate::domain::cards::fixtures::skill_id("quarry-scout"),
         targets: vec![],
         mana_hint: None,
     };
@@ -219,8 +236,11 @@ fn with_no_pending_and_no_window_only_the_active_player_may_act() {
     ));
 }
 
+mod board_economy;
+mod broken_game;
 mod demo;
 mod demo_triggers;
+mod effect_order_and_persistence;
 mod scenario_probes;
 
 #[test]

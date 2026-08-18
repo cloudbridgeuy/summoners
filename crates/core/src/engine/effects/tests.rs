@@ -2,10 +2,10 @@
 //! module's items through `super::*`.
 
 use super::*;
-use crate::domain::cards::CardDefId;
+use crate::domain::cards::fixtures;
 use crate::domain::ids::{BenchSlot, CardInstanceId};
 use crate::domain::state::{
-    CardRef, ManaBank, PerPlayer, Phase, PlayerState, TurnState, UpgradeChain,
+    CardRef, GameStatus, ManaBank, PerPlayer, Phase, PlayerState, TurnState, UpgradeChain,
 };
 use std::collections::VecDeque;
 
@@ -14,7 +14,7 @@ fn whelp(owner: PlayerId) -> SummonInstance {
         chain: UpgradeChain::new(
             CardRef {
                 instance: CardInstanceId(1),
-                def: CardDefId("quarry-whelp"),
+                def: fixtures::id("quarry-whelp"),
             },
             vec![],
         ),
@@ -36,11 +36,11 @@ fn player_state(owner: PlayerId) -> PlayerState {
         deck: vec![
             CardRef {
                 instance: CardInstanceId(10),
-                def: CardDefId("quarry-whelp"),
+                def: fixtures::id("quarry-whelp"),
             },
             CardRef {
                 instance: CardInstanceId(11),
-                def: CardDefId("quarry-whelp"),
+                def: fixtures::id("quarry-whelp"),
             },
         ],
         hand: vec![],
@@ -68,7 +68,8 @@ fn base_state() -> GameState {
         stack_segment_bases: vec![],
         work: VecDeque::new(),
         pending: None,
-        outcome: None,
+        status: GameStatus::Playing,
+        cards: fixtures::card_set(),
     }
 }
 
@@ -254,7 +255,7 @@ fn draw_cards_stops_early_once_the_deck_empties() {
     let mut state = base_state();
     state.players.get_mut(PlayerId::One).deck = vec![CardRef {
         instance: CardInstanceId(20),
-        def: CardDefId("quarry-whelp"),
+        def: fixtures::id("quarry-whelp"),
     }];
     let leaf = EffectLeaf::DrawCards { amount: 5 };
 
@@ -309,11 +310,11 @@ fn look_at_prizes_names_every_prize_still_face_down() {
     state.players.get_mut(PlayerId::One).prizes = vec![
         CardRef {
             instance: CardInstanceId(20),
-            def: CardDefId("quarry-whelp"),
+            def: fixtures::id("quarry-whelp"),
         },
         CardRef {
             instance: CardInstanceId(21),
-            def: CardDefId("quarry-whelp"),
+            def: fixtures::id("quarry-whelp"),
         },
     ];
     let leaf = EffectLeaf::LookAtPrizes;
@@ -462,11 +463,11 @@ fn return_spell_from_discard_moves_the_first_spell_to_hand() {
     state.players.get_mut(PlayerId::One).discard = vec![
         CardRef {
             instance: CardInstanceId(30),
-            def: CardDefId("quarry-whelp"),
+            def: fixtures::id("quarry-whelp"),
         },
         CardRef {
             instance: CardInstanceId(31),
-            def: CardDefId("ember-lance"),
+            def: fixtures::id("ember-lance"),
         },
     ];
     let leaf = EffectLeaf::ReturnSpellFromDiscard;
@@ -479,7 +480,7 @@ fn return_spell_from_discard_moves_the_first_spell_to_hand() {
         state.players.get(PlayerId::One).hand,
         vec![CardRef {
             instance: CardInstanceId(31),
-            def: CardDefId("ember-lance"),
+            def: fixtures::id("ember-lance"),
         }]
     );
 }
@@ -489,7 +490,7 @@ fn return_spell_from_discard_with_no_spell_present_is_a_silent_miss() {
     let mut state = base_state();
     state.players.get_mut(PlayerId::One).discard = vec![CardRef {
         instance: CardInstanceId(30),
-        def: CardDefId("quarry-whelp"),
+        def: fixtures::id("quarry-whelp"),
     }];
     let leaf = EffectLeaf::ReturnSpellFromDiscard;
 
@@ -504,7 +505,7 @@ fn return_spell_to_deck_top_moves_the_first_spell_in_hand_to_the_deck_front() {
     let mut state = base_state();
     state.players.get_mut(PlayerId::One).hand = vec![CardRef {
         instance: CardInstanceId(40),
-        def: CardDefId("ember-lance"),
+        def: fixtures::id("ember-lance"),
     }];
     let leaf = EffectLeaf::ReturnSpellToDeckTop;
 
@@ -516,7 +517,7 @@ fn return_spell_to_deck_top_moves_the_first_spell_in_hand_to_the_deck_front() {
         state.players.get(PlayerId::One).deck.first(),
         Some(&CardRef {
             instance: CardInstanceId(40),
-            def: CardDefId("ember-lance"),
+            def: fixtures::id("ember-lance"),
         })
     );
 }
