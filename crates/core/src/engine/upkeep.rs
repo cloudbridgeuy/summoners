@@ -543,7 +543,7 @@ mod tests {
     // -- reset_per_turn_summon_records ---------------------------------------
 
     #[test]
-    fn reset_per_turn_summon_records_clears_every_controlled_summon_main_and_bench() {
+    fn reset_per_turn_summon_flags_clears_every_controlled_summon_main_and_bench() {
         let played = SummonInstance {
             turn: crate::domain::state::SummonTurnRecord {
                 upgrade: crate::domain::state::UpgradeActivity::PlayedThisTurn,
