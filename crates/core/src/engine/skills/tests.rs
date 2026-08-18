@@ -100,10 +100,9 @@ fn cards_with(extra: Vec<Entity>) -> Arc<CardSet> {
 
 // --- a fixture fact, read straight off the container -----------------
 
-/// The fact this used to prove through `shim::find_def`'s `Query::Skill`
-/// projection: Quarry Scout prints one Skill, a Generic-1 `MoveSummon`.
-/// `Query::Skill` is retired; the fact itself is not, so it is re-expressed
-/// here as a direct read off the container.
+/// Quarry Scout prints one Skill, a Generic-1 `MoveSummon`. Pinned here,
+/// as a direct read off the container, so this printed fact stays covered
+/// by a test independent of whichever engine rule happens to consume it.
 #[test]
 fn quarry_scouts_skill_prints_a_generic_cost_and_a_move_summon_effect() {
     let cards = fixtures::card_set();

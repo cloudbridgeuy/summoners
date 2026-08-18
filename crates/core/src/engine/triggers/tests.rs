@@ -608,10 +608,12 @@ fn discover_back_queues_nothing_for_a_card_with_no_matching_trigger() {
     assert_eq!(final_state, state);
 }
 
-// --- the fixture fact this used to prove through `shim::find_def`'s
-// `Query::Trigger` projection, re-expressed as a direct container read
-// (`Query::Trigger` is retired; the fact is not) ------------------------
+// --- a fixture fact, read straight off the container ------------------
 
+/// Spite Thorn's and Dawn Tender's Triggers print the event, respondability,
+/// and effects this module's rules depend on. Pinned here, as a direct read
+/// off the container, so these printed facts stay covered by a test
+/// independent of whichever engine rule happens to consume them.
 #[test]
 fn spite_thorn_and_dawn_tenders_triggers_read_their_printed_event_respondability_and_effects() {
     let cards = fixtures::card_set();

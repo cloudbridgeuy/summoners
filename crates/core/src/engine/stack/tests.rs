@@ -719,9 +719,9 @@ fn pass_rejects_a_pending_decision() {
 // --- printed facts read straight off the container -----------------
 
 /// Quarry Brute's printed Attack — its cost and its Damage effect — is a
-/// fact this module reads directly off the nested `Attack` entity now that
-/// nothing routes through the projection shim. Pinned here so deleting the
-/// shim's own coverage of the same fact does not let it go untested.
+/// fact this module reads directly off the nested `Attack` entity. Pinned
+/// here so this module's own reliance on that read stays covered by a test
+/// in this module.
 #[test]
 fn quarry_brutes_printed_attack_carries_its_cost_and_effects() {
     let cards = fixtures::card_set();
@@ -748,9 +748,9 @@ fn quarry_brutes_printed_attack_carries_its_cost_and_effects() {
     );
 }
 
-/// Ember Lance's printed cost, read straight off the top-level entity — the
-/// same fact the shim's deleted `find_reads_the_spell_timing_cost_and_effects`
-/// test used to pin.
+/// Ember Lance's printed cost, read straight off the top-level entity.
+/// Pinned here so this module's own reliance on that read stays covered by
+/// a test in this module.
 #[test]
 fn ember_lances_spell_prints_the_expected_cost() {
     let cards = fixtures::card_set();
@@ -767,9 +767,9 @@ fn ember_lances_spell_prints_the_expected_cost() {
     );
 }
 
-/// Standing Ward's printed cost, read straight off the top-level entity —
-/// the same fact the shim's deleted `find_reads_the_enchantment_cost_and_effects`
-/// test used to pin.
+/// Standing Ward's printed cost, read straight off the top-level entity.
+/// Pinned here so this module's own reliance on that read stays covered by
+/// a test in this module.
 #[test]
 fn standing_wards_printed_cost_is_one_generic() {
     let cards = fixtures::card_set();
