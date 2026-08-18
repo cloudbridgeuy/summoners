@@ -5,6 +5,8 @@
 //! fixtures through `super::*`.
 
 use super::*;
+use crate::domain::state::Coin;
+use crate::scenario::{Scenario, ScenarioPlayer, ScenarioSummon, from_scenario};
 
 // -- Demo: EndTurn hands off, runs the opponent's Upkeep, and Mana
 // production either auto-produces or pauses for ChooseManaType;
@@ -122,13 +124,49 @@ fn demo_end_turn_pauses_on_a_dual_type_board_and_choose_mana_type_answers_it() {
 
 #[test]
 fn demo_convert_coin_banks_one_anchored_mana_and_removes_the_coin() {
-    let mut state = base_state();
-    state.players.get_mut(PlayerId::One).has_coin = true;
+    fn player(instance: u32) -> ScenarioPlayer {
+        ScenarioPlayer {
+            deck: vec![],
+            hand: vec![],
+            prizes: vec![],
+            discard: vec![],
+            mana: ManaBank::default(),
+            main_losses: 0,
+            main: Some(ScenarioSummon {
+                chain: vec![card_ref(instance, "quarry-whelp")],
+                damage: 0,
+                ready: true,
+            }),
+            bench: [None, None, None],
+        }
+    }
+
+    let mut scenario = Scenario {
+        players: PerPlayer::new(player(301), player(302)),
+        active_player: PlayerId::One,
+        coin: Some(Coin),
+    };
+    let state = from_scenario(fixtures::card_set(), &scenario).expect("the Coin scenario parses");
+
+    assert_eq!(state.coin, Some(Coin));
+    assert_eq!(
+        apply(
+            &state,
+            &GameAction::ConvertCoin {
+                player: PlayerId::One,
+                mana_type: ManaType::Matter,
+            },
+        ),
+        Err(ActionError::InvalidTarget)
+    );
+
+    scenario.active_player = PlayerId::Two;
+    let state = from_scenario(fixtures::card_set(), &scenario).expect("the Coin scenario parses");
 
     let outcome = apply(
         &state,
         &GameAction::ConvertCoin {
-            player: PlayerId::One,
+            player: PlayerId::Two,
             mana_type: ManaType::Matter,
         },
     )
@@ -137,13 +175,13 @@ fn demo_convert_coin_banks_one_anchored_mana_and_removes_the_coin() {
     assert_eq!(
         outcome.events,
         vec![GameEvent::CoinConverted {
-            player: PlayerId::One,
+            player: PlayerId::Two,
             mana_type: ManaType::Matter,
         }]
     );
-    let player_state = outcome.state.players.get(PlayerId::One);
+    let player_state = outcome.state.players.get(PlayerId::Two);
     assert_eq!(player_state.mana.matter, 1);
-    assert!(!player_state.has_coin);
+    assert_eq!(outcome.state.coin, None);
 
     // The Coin is one-use: converting again with no Coin left to spend
     // is rejected.
@@ -151,7 +189,7 @@ fn demo_convert_coin_banks_one_anchored_mana_and_removes_the_coin() {
         apply(
             &outcome.state,
             &GameAction::ConvertCoin {
-                player: PlayerId::One,
+                player: PlayerId::Two,
                 mana_type: ManaType::Matter,
             },
         ),

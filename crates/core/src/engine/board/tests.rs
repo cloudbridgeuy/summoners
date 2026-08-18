@@ -41,7 +41,6 @@ fn empty_player(owner: PlayerId) -> PlayerState {
         discard: vec![],
         mana: ManaBank::default(),
         main_losses: 0,
-        has_coin: false,
         enchantments: vec![],
     }
 }
@@ -49,6 +48,7 @@ fn empty_player(owner: PlayerId) -> PlayerState {
 fn base_state() -> GameState {
     GameState {
         players: PerPlayer::new(empty_player(PlayerId::One), empty_player(PlayerId::Two)),
+        coin: None,
         turn: TurnState {
             active_player: PlayerId::One,
             phase: Phase::Main,
@@ -577,7 +577,6 @@ fn play_upgrade_then_retreat_chain_through_scenario_and_apply() {
                     spirit: 0,
                 },
                 main_losses: 0,
-                has_coin: false,
                 main: Some(ScenarioSummon {
                     chain: vec![card_ref(1, "quarry-whelp")],
                     damage: 0,
@@ -592,7 +591,6 @@ fn play_upgrade_then_retreat_chain_through_scenario_and_apply() {
                 discard: vec![],
                 mana: ManaBank::default(),
                 main_losses: 0,
-                has_coin: false,
                 main: Some(ScenarioSummon {
                     chain: vec![card_ref(101, "set-path-adept")],
                     damage: 0,
@@ -602,6 +600,7 @@ fn play_upgrade_then_retreat_chain_through_scenario_and_apply() {
             },
         ),
         active_player: PlayerId::One,
+        coin: None,
     };
     let state =
         from_scenario(fixtures::card_set(), &scenario).expect("this board is a legal scenario");

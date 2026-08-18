@@ -18,7 +18,7 @@ use crate::domain::cards::{CardSet, Form};
 use crate::domain::errors::InvalidScenario;
 use crate::domain::ids::{BenchSlot, PlayerId, Position};
 use crate::domain::state::{
-    CardRef, GameState, GameStatus, ManaBank, PendingInput, PerPlayer, Phase, PlayerState,
+    CardRef, Coin, GameState, GameStatus, ManaBank, PendingInput, PerPlayer, Phase, PlayerState,
     SummonInstance, TurnState, UpgradeChain,
 };
 
@@ -40,7 +40,6 @@ pub struct ScenarioPlayer {
     pub discard: Vec<CardRef>,
     pub mana: ManaBank,
     pub main_losses: u8,
-    pub has_coin: bool,
     pub main: Option<ScenarioSummon>,
     pub bench: [Option<ScenarioSummon>; 3],
 }
@@ -50,6 +49,9 @@ pub struct ScenarioPlayer {
 pub struct Scenario {
     pub players: PerPlayer<ScenarioPlayer>,
     pub active_player: PlayerId,
+    /// `Some(Coin)` means Player Two holds the Coin. `None` means it has
+    /// left the game.
+    pub coin: Option<Coin>,
 }
 
 /// Every card reference in one player's zones and chains.
@@ -204,7 +206,6 @@ fn build_player_state(
         discard: scenario_player.discard.clone(),
         mana: scenario_player.mana,
         main_losses: scenario_player.main_losses,
-        has_coin: scenario_player.has_coin,
         // `Scenario` carries no field for a starting Enchantment yet, so
         // parsing can never seed one; every parsed board starts with none.
         enchantments: vec![],
@@ -242,6 +243,7 @@ pub fn from_scenario(
 
     Ok(GameState {
         players,
+        coin: scenario.coin,
         turn: TurnState {
             active_player: scenario.active_player,
             phase: Phase::Main,
@@ -304,7 +306,6 @@ mod tests {
             discard: vec![],
             mana: ManaBank::default(),
             main_losses: 0,
-            has_coin: false,
             main: Some(chain_summon(vec![(1, "quarry-whelp")])),
             bench: [None, None, None],
         }
@@ -321,6 +322,7 @@ mod tests {
         Scenario {
             players: PerPlayer::new(minimal_player_one(), minimal_player_two()),
             active_player: PlayerId::One,
+            coin: None,
         }
     }
 
@@ -455,7 +457,7 @@ mod tests {
         };
         scenario.players.one.main_losses = 1;
         scenario.players.one.bench[0] = Some(chain_summon(vec![(15, "set-path-adept")]));
-        scenario.players.two.has_coin = true;
+        scenario.coin = Some(Coin);
         scenario.active_player = PlayerId::Two;
 
         let state = from_scenario(fixtures::card_set(), &scenario)
@@ -468,15 +470,13 @@ mod tests {
         assert_eq!(one.discard, scenario.players.one.discard);
         assert_eq!(one.mana, scenario.players.one.mana);
         assert_eq!(one.main_losses, 1);
-        assert!(!one.has_coin);
         assert!(one.bench[0].is_some());
         assert_eq!(
             one.main.as_ref().map(|summon| summon.chain.top().def),
             Some(fixtures::id("quarry-whelp"))
         );
 
-        let two = state.players.get(PlayerId::Two);
-        assert!(two.has_coin);
+        assert_eq!(state.coin, Some(Coin));
 
         assert_eq!(state.turn.active_player, PlayerId::Two);
         assert_eq!(state.turn.phase, Phase::Main);

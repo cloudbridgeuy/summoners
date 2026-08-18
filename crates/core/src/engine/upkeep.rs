@@ -332,7 +332,6 @@ mod tests {
             discard: vec![],
             mana: ManaBank::default(),
             main_losses: 0,
-            has_coin: false,
             enchantments: vec![],
         }
     }
@@ -348,6 +347,7 @@ mod tests {
         };
         GameState {
             players: PerPlayer::new(one, two),
+            coin: None,
             turn: TurnState {
                 active_player: PlayerId::One,
                 phase: Phase::Main,

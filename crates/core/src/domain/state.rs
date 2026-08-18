@@ -87,6 +87,13 @@ pub struct ManaBank {
     pub spirit: u32,
 }
 
+/// The second player's one-use resource (rules §7).
+///
+/// The marker carries no data. Its presence at the game root means Player
+/// Two holds it; its absence means it has left the game.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Coin;
+
 /// One player's complete zones and resources.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlayerState {
@@ -100,8 +107,6 @@ pub struct PlayerState {
     pub mana: ManaBank,
     /// Rules §2: a player loses on their third Main Summon loss.
     pub main_losses: u8,
-    /// Rules §7: only the second player starts with the Coin.
-    pub has_coin: bool,
     /// Rules §44: Enchantments this player has cast, still in play. Cleared
     /// only by an effect that removes one; `scenario::from_scenario` cannot
     /// seed a starting Enchantment yet — `Scenario` carries no field for it.
@@ -341,6 +346,9 @@ pub enum WorkItem {
 #[derive(Debug, Clone)]
 pub struct GameState {
     pub players: PerPlayer<PlayerState>,
+    /// `Some(Coin)` means Player Two holds the Coin. `None` means the Coin
+    /// has left the game (rules §7).
+    pub coin: Option<Coin>,
     pub turn: TurnState,
     pub stack: Vec<StackItem>,
     /// Segment base indices into `stack` (design's "Phases and Priority").
@@ -364,6 +372,7 @@ pub struct GameState {
 impl PartialEq for GameState {
     fn eq(&self, other: &Self) -> bool {
         self.players == other.players
+            && self.coin == other.coin
             && self.turn == other.turn
             && self.stack == other.stack
             && self.stack_segment_bases == other.stack_segment_bases
@@ -411,7 +420,6 @@ mod tests {
             discard: vec![],
             mana: ManaBank::default(),
             main_losses: 0,
-            has_coin: false,
             enchantments: vec![],
         }
     }
@@ -419,6 +427,7 @@ mod tests {
     fn minimal_state() -> GameState {
         GameState {
             players: PerPlayer::new(minimal_player_state(), minimal_player_state()),
+            coin: None,
             turn: TurnState {
                 active_player: PlayerId::One,
                 phase: Phase::Main,

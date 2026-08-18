@@ -48,7 +48,6 @@ fn empty_player_with_main(main: SummonInstance) -> PlayerState {
         discard: vec![],
         mana: ManaBank::default(),
         main_losses: 0,
-        has_coin: false,
         enchantments: vec![],
     }
 }
@@ -63,6 +62,7 @@ fn base_state_with_cards(cards: Arc<CardSet>, def: EntityId, ready: bool) -> Gam
             empty_player_with_main(summon_with_def(PlayerId::One, def, ready)),
             empty_player(PlayerId::Two, "quarry-whelp", true),
         ),
+        coin: None,
         turn: TurnState {
             active_player: PlayerId::One,
             phase: Phase::Main,
