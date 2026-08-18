@@ -19,6 +19,164 @@ use crate::domain::cards::{EffectLeaf, TriggerEvent};
 use crate::domain::state::Readiness;
 use crate::scenario::{Scenario, ScenarioPlayer, ScenarioSummon, from_scenario};
 
+#[test]
+fn ready_and_exhausted_state_flows_through_scenario_and_engine_apis() {
+    let scenario = Scenario {
+        players: PerPlayer::new(
+            ScenarioPlayer {
+                deck: vec![],
+                hand: vec![
+                    card_ref(3, "second-wind"),
+                    card_ref(4, "quarry-whelp"),
+                    card_ref(5, "quarry-brute"),
+                ],
+                prizes: vec![],
+                discard: vec![],
+                mana: ManaBank::default(),
+                main_losses: 0,
+                main: Some(ScenarioSummon {
+                    chain: vec![card_ref(1, "quarry-well-tender")],
+                    damage: 0,
+                    readiness: Readiness::Ready,
+                }),
+                bench: [
+                    Some(ScenarioSummon {
+                        chain: vec![card_ref(2, "quarry-whelp")],
+                        damage: 0,
+                        readiness: Readiness::Ready,
+                    }),
+                    None,
+                    None,
+                ],
+            },
+            ScenarioPlayer {
+                deck: vec![],
+                hand: vec![],
+                prizes: vec![],
+                discard: vec![],
+                mana: ManaBank::default(),
+                main_losses: 0,
+                main: Some(ScenarioSummon {
+                    chain: vec![card_ref(101, "quarry-well-tender")],
+                    damage: 0,
+                    readiness: Readiness::Exhausted,
+                }),
+                bench: [None, None, None],
+            },
+        ),
+        active_player: PlayerId::One,
+        coin: None,
+    };
+    let state =
+        from_scenario(fixtures::card_set(), &scenario).expect("the typed scenario is legal");
+
+    assert_eq!(
+        state.players.one.main.as_ref().expect("One's main").readiness,
+        Readiness::Ready
+    );
+    assert_eq!(
+        state.players.two.main.as_ref().expect("Two's main").readiness,
+        Readiness::Exhausted
+    );
+
+    let activated = apply(
+        &state,
+        &GameAction::ActivateSkill {
+            player: PlayerId::One,
+            position: Position::Main,
+            ability: fixtures::skill_id("quarry-well-tender"),
+            targets: vec![Position::Main],
+            mana_hint: None,
+        },
+    )
+    .expect("the Ready Summon can activate its Skill");
+    assert_eq!(
+        activated.state.players.one.main.as_ref().expect("One's main").readiness,
+        Readiness::Exhausted
+    );
+
+    let rejected = apply(
+        &activated.state,
+        &GameAction::ActivateSkill {
+            player: PlayerId::One,
+            position: Position::Main,
+            ability: fixtures::skill_id("quarry-well-tender"),
+            targets: vec![Position::Main],
+            mana_hint: None,
+        },
+    );
+    assert_eq!(rejected, Err(ActionError::SummonExhausted));
+
+    let cast = apply(
+        &activated.state,
+        &GameAction::CastSpell {
+            player: PlayerId::One,
+            card: CardInstanceId(3),
+            targets: vec![Position::Main],
+            mana_hint: None,
+        },
+    )
+    .expect("the first Skill activation produced the Mana for Second Wind");
+    let defender_pass = apply(
+        &cast.state,
+        &GameAction::PassPriority {
+            player: PlayerId::Two,
+        },
+    )
+    .expect("the defender can pass Priority");
+    let readied = apply(
+        &defender_pass.state,
+        &GameAction::PassPriority {
+            player: PlayerId::One,
+        },
+    )
+    .expect("the second pass resolves Second Wind");
+    assert_eq!(
+        readied.state.players.one.main.as_ref().expect("One's main").readiness,
+        Readiness::Ready
+    );
+
+    let reactivated = apply(
+        &readied.state,
+        &GameAction::ActivateSkill {
+            player: PlayerId::One,
+            position: Position::Main,
+            ability: fixtures::skill_id("quarry-well-tender"),
+            targets: vec![Position::Main],
+            mana_hint: None,
+        },
+    )
+    .expect("the Ready effect permits another activation");
+
+    let played = apply(
+        &reactivated.state,
+        &GameAction::PlaySummon {
+            player: PlayerId::One,
+            card: CardInstanceId(4),
+            slot: BenchSlot::Second,
+        },
+    )
+    .expect("the Base Summon can enter the empty Bench slot");
+    assert_eq!(
+        played.state.players.one.bench[1].as_ref().expect("played Summon").readiness,
+        Readiness::Exhausted
+    );
+
+    let upgraded = apply(
+        &played.state,
+        &GameAction::UpgradeSummon {
+            player: PlayerId::One,
+            card: CardInstanceId(5),
+            position: Position::Bench(BenchSlot::First),
+        },
+    )
+    .expect("the existing Quarry Whelp can upgrade to Quarry Brute");
+    assert_eq!(
+        upgraded.state.players.one.bench[0].as_ref().expect("upgraded Summon").readiness,
+        Readiness::Exhausted
+    );
+}
+
 /// Every signature chain this registry prints, Base through Elite, so
 /// `from_scenario`'s lineage rules (rules §20 — a chain must climb Base,
 /// Enhanced, Elite in order) get exercised against all four real fixtures
