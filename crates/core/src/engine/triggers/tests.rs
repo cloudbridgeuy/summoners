@@ -658,12 +658,12 @@ fn spite_thorn_and_dawn_tenders_triggers_read_their_printed_event_respondability
 
 #[test]
 fn a_card_printing_three_triggers_on_one_event_fires_all_three_in_authored_order() {
-    // The capability this reading style adds over a single-match projection:
-    // reading every match, not just the first `Trigger` a card printed. One
-    // probe card prints three, all matching the same event, each with its
-    // own id and its own Heal amount so both the `ability` field on
-    // `TriggerFired` and the resulting `Healed` events independently prove
-    // the order they fire in is the order they were printed.
+    // The capability this reading style adds: reading every match, not just
+    // the first `Trigger` a card printed. One probe card prints three, all
+    // matching the same event, each with its own id and its own Heal amount
+    // so both the `ability` field on `TriggerFired` and the resulting
+    // `Healed` events independently prove the order they fire in is the
+    // order they were printed.
     let probe = probe_id(0x40);
     let first = trigger_entity(
         probe_id(0x41),
