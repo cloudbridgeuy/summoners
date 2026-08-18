@@ -6,8 +6,8 @@ use super::*;
 use crate::domain::cards::{CardSet, Component, fixtures};
 use crate::domain::ids::{BenchSlot, CardInstanceId, Position};
 use crate::domain::state::{
-    CardRef, GameStatus, ManaBank, PerPlayer, Phase, PlayerState, StackWindow, TurnState,
-    UpgradeChain,
+    CardRef, GameStatus, ManaBank, PerPlayer, Phase, PlayerState, Readiness, StackWindow,
+    TurnState, UpgradeChain,
 };
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -23,7 +23,7 @@ fn summon_of(def: &'static str, owner: PlayerId) -> SummonInstance {
     SummonInstance {
         chain: UpgradeChain::new(card(def), vec![]),
         damage: 0,
-        ready: true,
+        readiness: Readiness::Ready,
         owner,
         controller: owner,
         duration_markers: vec![],
@@ -43,7 +43,7 @@ fn summon_with_def(def: EntityId, owner: PlayerId) -> SummonInstance {
             vec![],
         ),
         damage: 0,
-        ready: true,
+        readiness: Readiness::Ready,
         owner,
         controller: owner,
         duration_markers: vec![],

@@ -21,7 +21,7 @@ fn base_summon(owner: PlayerId, def: &'static str) -> SummonInstance {
     SummonInstance {
         chain: UpgradeChain::new(card_ref(1, def), vec![]),
         damage: 0,
-        ready: true,
+        readiness: Readiness::Ready,
         owner,
         controller: owner,
         duration_markers: vec![],
@@ -78,7 +78,7 @@ fn play_summon_puts_a_base_into_an_empty_bench_slot_exhausted_and_played_this_tu
     let bench = outcome.state.players.get(PlayerId::One).bench[0]
         .as_ref()
         .expect("the Bench slot now holds the played Summon");
-    assert!(!bench.ready);
+    assert_eq!(bench.readiness, Readiness::Exhausted);
     assert_eq!(bench.turn.upgrade, UpgradeActivity::PlayedThisTurn);
     assert_eq!(bench.chain.base(), card);
     assert!(outcome.state.players.get(PlayerId::One).hand.is_empty());
@@ -190,7 +190,7 @@ fn upgrade_summon_stacks_the_new_top_ready_false_and_upgraded_flag_set() {
         .expect("Main still holds the Summon");
     assert_eq!(main.chain.top(), upgrade);
     assert_eq!(main.chain.base(), card_ref(1, "quarry-whelp"));
-    assert!(!main.ready);
+    assert_eq!(main.readiness, Readiness::Exhausted);
     assert_eq!(main.turn.upgrade, UpgradeActivity::UpgradedThisTurn);
     assert!(outcome.state.players.get(PlayerId::One).hand.is_empty());
     assert_eq!(
@@ -582,7 +582,7 @@ fn play_upgrade_then_retreat_chain_through_scenario_and_apply() {
                 main: Some(ScenarioSummon {
                     chain: vec![card_ref(1, "quarry-whelp")],
                     damage: 0,
-                    ready: true,
+                    readiness: Readiness::Ready,
                 }),
                 bench: [None, None, None],
             },
@@ -596,7 +596,7 @@ fn play_upgrade_then_retreat_chain_through_scenario_and_apply() {
                 main: Some(ScenarioSummon {
                     chain: vec![card_ref(101, "set-path-adept")],
                     damage: 0,
-                    ready: true,
+                    readiness: Readiness::Ready,
                 }),
                 bench: [None, None, None],
             },

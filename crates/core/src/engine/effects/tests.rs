@@ -19,7 +19,7 @@ fn whelp(owner: PlayerId) -> SummonInstance {
             vec![],
         ),
         damage: 0,
-        ready: false,
+        readiness: Readiness::Exhausted,
         owner,
         controller: owner,
         duration_markers: vec![],
@@ -776,14 +776,15 @@ fn ready_summon_turns_the_targeted_summon_ready() {
             positions: vec![Position::Main],
         }]
     );
-    assert!(
+    assert_eq!(
         state
             .players
             .get(PlayerId::One)
             .main
             .as_ref()
             .expect("main")
-            .ready
+            .readiness,
+        Readiness::Ready
     );
 }
 

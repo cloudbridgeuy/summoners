@@ -6,7 +6,7 @@ use crate::domain::cards::fixtures;
 use crate::domain::ids::{CardInstanceId, PlayerId, Position};
 use crate::domain::state::{
     CardRef, GameStatus, ManaBank, ManaSource, MovementStep, PendingInput, PerPlayer, Phase,
-    PlayerState, SummonInstance, TurnState, UpgradeChain,
+    PlayerState, Readiness, SummonInstance, TurnState, UpgradeChain,
 };
 use std::collections::VecDeque;
 
@@ -20,7 +20,7 @@ fn whelp(owner: PlayerId) -> SummonInstance {
             vec![],
         ),
         damage: 0,
-        ready: false,
+        readiness: Readiness::Exhausted,
         owner,
         controller: owner,
         duration_markers: vec![],

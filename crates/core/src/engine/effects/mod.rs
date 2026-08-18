@@ -28,7 +28,8 @@ use crate::domain::cards::{CardKind, EffectCondition, EffectLeaf, family};
 use crate::domain::events::GameEvent;
 use crate::domain::ids::{CardInstanceId, PlayerId, Position};
 use crate::domain::state::{
-    DurationMarker, GameState, ManaSource, MovementStep, PlayerState, SummonInstance, WorkItem,
+    DurationMarker, GameState, ManaSource, MovementStep, PlayerState, Readiness, SummonInstance,
+    WorkItem,
 };
 use crate::engine::upkeep;
 
@@ -418,7 +419,7 @@ fn draw_cards(state: &GameState, controller: PlayerId, amount: u32) -> (GameStat
 /// (`engine::skills::activate_skill` rejects an occupied destination or a
 /// missing source with `ActionError::InvalidTarget` first), so this stays a
 /// defensive no-op on any input it cannot act on, matching this
-/// interpreter's other leaves. `ready` and every other field travel with the
+/// interpreter's other leaves. `readiness` and every other field travel with the
 /// moved Summon unchanged (movement, not a new arrival — the same reading
 /// `engine::destruction::promote_from_slot` gives Promotion). Enqueues the
 /// two movement triggers a Bench-to-Bench move fires (rules §28, §36).
@@ -467,7 +468,7 @@ fn move_summon(
 /// by `targets[0]` — the same exchange `engine::board::retreat` performs,
 /// reached here through a Skill instead of the normal Retreat action (rules
 /// §43). Callers validate both sides are occupied before this runs, so this
-/// stays a defensive no-op otherwise. `ready` travels with each Summon
+/// stays a defensive no-op otherwise. `readiness` travels with each Summon
 /// unchanged; the Main-entry record is left alone here and set instead
 /// when the queued `EnteringMain` trigger below drains through
 /// `engine::triggers::movement_trigger` — the one place in this crate that
@@ -566,7 +567,7 @@ fn ready_summon(
     let Some(summon) = summon_at_mut(state.players.get_mut(controller), position) else {
         return (state, Vec::new());
     };
-    summon.ready = true;
+    summon.readiness = Readiness::Ready;
 
     (
         state,

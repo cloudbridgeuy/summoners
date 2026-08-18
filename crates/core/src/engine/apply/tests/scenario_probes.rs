@@ -16,6 +16,7 @@
 
 use super::*;
 use crate::domain::cards::{EffectLeaf, TriggerEvent};
+use crate::domain::state::Readiness;
 use crate::scenario::{Scenario, ScenarioPlayer, ScenarioSummon, from_scenario};
 
 /// Every signature chain this registry prints, Base through Elite, so
@@ -48,7 +49,7 @@ fn every_signature_chains_elite_is_reachable_through_from_scenario() {
                     main: Some(ScenarioSummon {
                         chain: vec![card_ref(1, base), card_ref(2, enhanced), card_ref(3, elite)],
                         damage: 0,
-                        ready: true,
+                        readiness: Readiness::Ready,
                     }),
                     bench: [None, None, None],
                 },
@@ -62,7 +63,7 @@ fn every_signature_chains_elite_is_reachable_through_from_scenario() {
                     main: Some(ScenarioSummon {
                         chain: vec![card_ref(101, "quarry-whelp")],
                         damage: 0,
-                        ready: true,
+                        readiness: Readiness::Ready,
                     }),
                     bench: [None, None, None],
                 },
@@ -115,7 +116,7 @@ fn a_single_destruction_check_can_end_both_players_mains_at_once() {
                     // Life(40): already at the destruction threshold before
                     // this action runs at all.
                     damage: 40,
-                    ready: true,
+                    readiness: Readiness::Ready,
                 }),
                 bench: [None, None, None],
             },
@@ -132,13 +133,13 @@ fn a_single_destruction_check_can_end_both_players_mains_at_once() {
                     // Main in the same resolution that also finds One's own
                     // Main already over its Life.
                     damage: 30,
-                    ready: true,
+                    readiness: Readiness::Ready,
                 }),
                 bench: [
                     Some(ScenarioSummon {
                         chain: vec![card_ref(102, "quarry-whelp")],
                         damage: 0,
-                        ready: true,
+                        readiness: Readiness::Ready,
                     }),
                     None,
                     None,
@@ -280,7 +281,7 @@ fn a_rooted_main_blocks_rearrange_for_the_opponents_whole_turn_then_allows_it() 
                         card_ref(3, "warden-of-set-paths"),
                     ],
                     damage: 0,
-                    ready: true,
+                    readiness: Readiness::Ready,
                 }),
                 bench: [None, None, None],
             },
@@ -302,13 +303,13 @@ fn a_rooted_main_blocks_rearrange_for_the_opponents_whole_turn_then_allows_it() 
                         card_ref(103, "old-sow-of-the-barrow"),
                     ],
                     damage: 0,
-                    ready: true,
+                    readiness: Readiness::Ready,
                 }),
                 bench: [
                     Some(ScenarioSummon {
                         chain: vec![card_ref(201, "quarry-whelp")],
                         damage: 0,
-                        ready: true,
+                        readiness: Readiness::Ready,
                     }),
                     None,
                     None,
@@ -332,15 +333,16 @@ fn a_rooted_main_blocks_rearrange_for_the_opponents_whole_turn_then_allows_it() 
         },
     )
     .expect("Two's Main is Ready and Root and Renew's cost is covered");
-    assert!(
-        !rooted
+    assert_eq!(
+        rooted
             .state
             .players
             .get(PlayerId::Two)
             .main
             .as_ref()
             .expect("Two still has a Main")
-            .ready,
+            .readiness,
+        Readiness::Exhausted,
         "activating a Skill exhausts the Summon (rules §15)"
     );
 
@@ -449,7 +451,7 @@ fn a_destruction_trigger_opens_a_nested_window_before_its_own_chain_finishes() {
                 main: Some(ScenarioSummon {
                     chain: vec![card_ref(1, "quarry-whelp")],
                     damage: 0,
-                    ready: true,
+                    readiness: Readiness::Ready,
                 }),
                 bench: [None, None, None],
             },
@@ -464,7 +466,7 @@ fn a_destruction_trigger_opens_a_nested_window_before_its_own_chain_finishes() {
                     chain: vec![card_ref(101, "quarry-whelp")],
                     // Life(40): One's free Attack (10 Damage) finishes it.
                     damage: 30,
-                    ready: true,
+                    readiness: Readiness::Ready,
                 }),
                 bench: [
                     Some(ScenarioSummon {
@@ -474,7 +476,7 @@ fn a_destruction_trigger_opens_a_nested_window_before_its_own_chain_finishes() {
                             card_ref(203, "griefsinger"),
                         ],
                         damage: 0,
-                        ready: true,
+                        readiness: Readiness::Ready,
                     }),
                     None,
                     None,
@@ -608,7 +610,7 @@ fn a_resolved_enchantment_stays_in_play_through_a_full_turn_handover() {
                 main: Some(ScenarioSummon {
                     chain: vec![card_ref(1, "quarry-whelp")],
                     damage: 0,
-                    ready: true,
+                    readiness: Readiness::Ready,
                 }),
                 bench: [None, None, None],
             },
@@ -622,7 +624,7 @@ fn a_resolved_enchantment_stays_in_play_through_a_full_turn_handover() {
                 main: Some(ScenarioSummon {
                     chain: vec![card_ref(101, "quarry-whelp")],
                     damage: 0,
-                    ready: true,
+                    readiness: Readiness::Ready,
                 }),
                 bench: [None, None, None],
             },
@@ -703,7 +705,7 @@ fn a_second_turn_reaches_its_own_main_phase_and_can_act_in_it() {
                 main: Some(ScenarioSummon {
                     chain: vec![card_ref(1, "quarry-whelp")],
                     damage: 0,
-                    ready: true,
+                    readiness: Readiness::Ready,
                 }),
                 bench: [None, None, None],
             },
@@ -717,7 +719,7 @@ fn a_second_turn_reaches_its_own_main_phase_and_can_act_in_it() {
                 main: Some(ScenarioSummon {
                     chain: vec![card_ref(101, "quarry-whelp")],
                     damage: 0,
-                    ready: true,
+                    readiness: Readiness::Ready,
                 }),
                 bench: [None, None, None],
             },
