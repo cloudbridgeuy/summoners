@@ -108,9 +108,7 @@ fn positioned_summons(player: &ScenarioPlayer) -> Vec<(Position, &ScenarioSummon
 }
 
 /// The Form printed on one card, read straight off its entity, or the
-/// chain-order error this card causes if it prints no Form at all. This is
-/// the one place in this crate that reads a `CardSet` and its entities
-/// directly rather than through the compatibility shim.
+/// chain-order error this card causes if it prints no Form at all.
 fn form_of(
     cards: &CardSet,
     card: CardRef,

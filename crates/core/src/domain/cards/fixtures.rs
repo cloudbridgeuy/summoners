@@ -2,19 +2,19 @@
 //! `CardSet` and lookups that reach them. Test-only: nothing outside
 //! `#[cfg(test)]` may depend on this data's shape.
 //!
-//! The same vanilla and signature cards `registry.rs` used to hold as
-//! `CardDef` literals, now authored as `Entity` values instead: one Base
-//! Summon three-step chain and one two-step chain; a Skill, a Trigger, and a
-//! Spell fixture for each shape the engine reads; the four signature
-//! Base/Enhanced/Elite chains; the one vanilla Enchantment. Fixture stats and
-//! names are test data, not final card designs.
+//! The vanilla and signature cards this crate's engine and scenario tests
+//! exercise, authored as `Entity` values: one Base Summon three-step chain
+//! and one two-step chain; a Skill, a Trigger, and a Spell fixture for each
+//! shape the engine reads; the four signature Base/Enhanced/Elite chains;
+//! the one vanilla Enchantment. Fixture stats and names are test data, not
+//! final card designs.
 //!
 //! `card_set` hands every caller the same `Arc<CardSet>` (one process-wide
 //! `OnceLock`), so a hand-written `GameState::eq` can compare two
 //! independently built states' card sets by handle (`Arc::ptr_eq`) and still
-//! find them equal. `id` looks a card up by the same slug its old
-//! `CardDefId` used to carry, so `CardDefId("some-slug")` converts
-//! mechanically to `fixtures::id("some-slug")` at every call site.
+//! find them equal. `id` looks a card up by its slug — a fixture's printed
+//! name, lowercased, with spaces turned to hyphens (see `slugify`) — so a
+//! test can write `fixtures::id("some-slug")` for any fixture card.
 
 use std::sync::{Arc, OnceLock};
 
@@ -29,7 +29,7 @@ use super::{
 use crate::domain::ids::ManaType;
 
 /// A deterministic, non-minting fixture id: `card` identifies the printed
-/// card (1–25, matching the old registry's order), `ability` distinguishes
+/// card (1–25, in the order `entities` builds them), `ability` distinguishes
 /// its nested Attack (1), Skill (2), and Trigger (3) entities from the card
 /// itself (0) and from each other. No two fixture entities ever share a
 /// `(card, ability)` pair, so every id this module builds is unique.
@@ -149,7 +149,8 @@ fn enchantment(card: u32, name: &str, cost: Cost, effects: Vec<EffectLeaf>) -> E
     }
 }
 
-/// Every fixture entity, in the old registry's order.
+/// Every fixture entity this module authors, card by card, in `card`
+/// order.
 pub(crate) fn entities() -> Vec<Entity> {
     vec![
         // Chain 1 — three steps.
@@ -731,11 +732,10 @@ pub(crate) fn card_set() -> Arc<CardSet> {
     Arc::clone(SET.get_or_init(|| Arc::new(CardSet::new(entities()))))
 }
 
-/// The same slug a fixture's old `CardDefId` carried, e.g. `"quarry-whelp"`:
-/// its printed name, lowercased, with spaces turned to hyphens. Every
-/// fixture name in this module slugifies to the string its old `CardDefId`
-/// held, so `CardDefId("some-slug")` converts mechanically to
-/// `fixtures::id("some-slug")`.
+/// A fixture's lookup slug, e.g. `"quarry-whelp"`: its printed name,
+/// lowercased, with spaces turned to hyphens. Every fixture name in this
+/// module slugifies to a distinct string, so a test can look any fixture
+/// card up by writing `fixtures::id("some-slug")`.
 fn slugify(name: &str) -> String {
     name.to_lowercase().replace(' ', "-")
 }

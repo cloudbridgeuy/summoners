@@ -141,9 +141,9 @@ pub(crate) fn cast_spell(
     let Some(entity) = state.cards.get(card_ref.def) else {
         return Err(ActionError::UnknownCard);
     };
-    // A Spell with no printed Timing is uncastable (the shim's projection
-    // never invents one), so that arm rejects on `None` instead of
-    // defaulting to `SpellTiming::Support`. An Enchantment carries no
+    // A Spell with no printed Timing is uncastable (this read never invents
+    // one), so that arm rejects on `None` instead of defaulting to
+    // `SpellTiming::Support`. An Enchantment carries no
     // Timing at all — it always follows a Support Spell's timing rule
     // (rules §44) — so that arm never reads one.
     let (timing, cost): (SpellTiming, Cost) = match family(entity) {
