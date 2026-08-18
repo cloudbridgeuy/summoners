@@ -71,11 +71,23 @@ fn ready_and_exhausted_state_flows_through_scenario_and_engine_apis() {
         from_scenario(fixtures::card_set(), &scenario).expect("the typed scenario is legal");
 
     assert_eq!(
-        state.players.one.main.as_ref().expect("One's main").readiness,
+        state
+            .players
+            .one
+            .main
+            .as_ref()
+            .expect("One's main")
+            .readiness,
         Readiness::Ready
     );
     assert_eq!(
-        state.players.two.main.as_ref().expect("Two's main").readiness,
+        state
+            .players
+            .two
+            .main
+            .as_ref()
+            .expect("Two's main")
+            .readiness,
         Readiness::Exhausted
     );
 
@@ -91,7 +103,14 @@ fn ready_and_exhausted_state_flows_through_scenario_and_engine_apis() {
     )
     .expect("the Ready Summon can activate its Skill");
     assert_eq!(
-        activated.state.players.one.main.as_ref().expect("One's main").readiness,
+        activated
+            .state
+            .players
+            .one
+            .main
+            .as_ref()
+            .expect("One's main")
+            .readiness,
         Readiness::Exhausted
     );
 
@@ -132,7 +151,14 @@ fn ready_and_exhausted_state_flows_through_scenario_and_engine_apis() {
     )
     .expect("the second pass resolves Second Wind");
     assert_eq!(
-        readied.state.players.one.main.as_ref().expect("One's main").readiness,
+        readied
+            .state
+            .players
+            .one
+            .main
+            .as_ref()
+            .expect("One's main")
+            .readiness,
         Readiness::Ready
     );
 
@@ -158,7 +184,10 @@ fn ready_and_exhausted_state_flows_through_scenario_and_engine_apis() {
     )
     .expect("the Base Summon can enter the empty Bench slot");
     assert_eq!(
-        played.state.players.one.bench[1].as_ref().expect("played Summon").readiness,
+        played.state.players.one.bench[1]
+            .as_ref()
+            .expect("played Summon")
+            .readiness,
         Readiness::Exhausted
     );
 
@@ -172,7 +201,10 @@ fn ready_and_exhausted_state_flows_through_scenario_and_engine_apis() {
     )
     .expect("the existing Quarry Whelp can upgrade to Quarry Brute");
     assert_eq!(
-        upgraded.state.players.one.bench[0].as_ref().expect("upgraded Summon").readiness,
+        upgraded.state.players.one.bench[0]
+            .as_ref()
+            .expect("upgraded Summon")
+            .readiness,
         Readiness::Exhausted
     );
 }

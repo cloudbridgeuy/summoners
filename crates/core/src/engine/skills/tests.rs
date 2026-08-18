@@ -729,8 +729,7 @@ fn activating_by_id_finds_the_same_ability_no_matter_where_it_sits_in_print_orde
     };
 
     let activate = |card: Entity| {
-        let mut state =
-            base_state_with_cards(cards_with(vec![card]), probe, Readiness::Ready);
+        let mut state = base_state_with_cards(cards_with(vec![card]), probe, Readiness::Ready);
         state.players.get_mut(PlayerId::One).main = Some(SummonInstance {
             damage: 5,
             ..summon_with_def(PlayerId::One, probe, Readiness::Ready)
