@@ -45,7 +45,6 @@ fn every_signature_chains_elite_is_reachable_through_from_scenario() {
                     discard: vec![],
                     mana: ManaBank::default(),
                     main_losses: 0,
-                    has_coin: false,
                     main: Some(ScenarioSummon {
                         chain: vec![card_ref(1, base), card_ref(2, enhanced), card_ref(3, elite)],
                         damage: 0,
@@ -60,7 +59,6 @@ fn every_signature_chains_elite_is_reachable_through_from_scenario() {
                     discard: vec![],
                     mana: ManaBank::default(),
                     main_losses: 0,
-                    has_coin: false,
                     main: Some(ScenarioSummon {
                         chain: vec![card_ref(101, "quarry-whelp")],
                         damage: 0,
@@ -70,6 +68,7 @@ fn every_signature_chains_elite_is_reachable_through_from_scenario() {
                 },
             ),
             active_player: PlayerId::One,
+            coin: None,
         };
 
         let state = from_scenario(fixtures::card_set(), &scenario).unwrap_or_else(|error| {
@@ -111,7 +110,6 @@ fn a_single_destruction_check_can_end_both_players_mains_at_once() {
                 // Already two Main losses; a third one, still queued behind
                 // Two's own full destruction chain, must end the game.
                 main_losses: 2,
-                has_coin: false,
                 main: Some(ScenarioSummon {
                     chain: vec![card_ref(1, "quarry-whelp")],
                     // Life(40): already at the destruction threshold before
@@ -128,7 +126,6 @@ fn a_single_destruction_check_can_end_both_players_mains_at_once() {
                 discard: vec![],
                 mana: ManaBank::default(),
                 main_losses: 0,
-                has_coin: false,
                 main: Some(ScenarioSummon {
                     chain: vec![card_ref(101, "quarry-whelp")],
                     // Life(40): One's free Attack deals 10, finishing Two's
@@ -149,6 +146,7 @@ fn a_single_destruction_check_can_end_both_players_mains_at_once() {
             },
         ),
         active_player: PlayerId::One,
+        coin: None,
     };
     let state = from_scenario(fixtures::card_set(), &scenario).expect("both boards are legal");
 
@@ -275,7 +273,6 @@ fn a_rooted_main_blocks_rearrange_for_the_opponents_whole_turn_then_allows_it() 
                     spirit: 0,
                 },
                 main_losses: 0,
-                has_coin: false,
                 main: Some(ScenarioSummon {
                     chain: vec![
                         card_ref(1, "warden-initiate"),
@@ -298,7 +295,6 @@ fn a_rooted_main_blocks_rearrange_for_the_opponents_whole_turn_then_allows_it() 
                     spirit: 1,
                 },
                 main_losses: 0,
-                has_coin: false,
                 main: Some(ScenarioSummon {
                     chain: vec![
                         card_ref(101, "sow-piglet"),
@@ -320,6 +316,7 @@ fn a_rooted_main_blocks_rearrange_for_the_opponents_whole_turn_then_allows_it() 
             },
         ),
         active_player: PlayerId::Two,
+        coin: None,
     };
     let state = from_scenario(fixtures::card_set(), &scenario).expect("both boards are legal");
 
@@ -449,7 +446,6 @@ fn a_destruction_trigger_opens_a_nested_window_before_its_own_chain_finishes() {
                 discard: vec![],
                 mana: ManaBank::default(),
                 main_losses: 0,
-                has_coin: false,
                 main: Some(ScenarioSummon {
                     chain: vec![card_ref(1, "quarry-whelp")],
                     damage: 0,
@@ -464,7 +460,6 @@ fn a_destruction_trigger_opens_a_nested_window_before_its_own_chain_finishes() {
                 discard: vec![card_ref(210, "ember-lance")],
                 mana: ManaBank::default(),
                 main_losses: 0,
-                has_coin: false,
                 main: Some(ScenarioSummon {
                     chain: vec![card_ref(101, "quarry-whelp")],
                     // Life(40): One's free Attack (10 Damage) finishes it.
@@ -487,6 +482,7 @@ fn a_destruction_trigger_opens_a_nested_window_before_its_own_chain_finishes() {
             },
         ),
         active_player: PlayerId::One,
+        coin: None,
     };
     let state = from_scenario(fixtures::card_set(), &scenario).expect("both boards are legal");
 
@@ -609,7 +605,6 @@ fn a_resolved_enchantment_stays_in_play_through_a_full_turn_handover() {
                     spirit: 0,
                 },
                 main_losses: 0,
-                has_coin: false,
                 main: Some(ScenarioSummon {
                     chain: vec![card_ref(1, "quarry-whelp")],
                     damage: 0,
@@ -624,7 +619,6 @@ fn a_resolved_enchantment_stays_in_play_through_a_full_turn_handover() {
                 discard: vec![],
                 mana: ManaBank::default(),
                 main_losses: 0,
-                has_coin: false,
                 main: Some(ScenarioSummon {
                     chain: vec![card_ref(101, "quarry-whelp")],
                     damage: 0,
@@ -634,6 +628,7 @@ fn a_resolved_enchantment_stays_in_play_through_a_full_turn_handover() {
             },
         ),
         active_player: PlayerId::One,
+        coin: None,
     };
     let state = from_scenario(fixtures::card_set(), &scenario).expect("both boards are legal");
 
@@ -705,7 +700,6 @@ fn a_second_turn_reaches_its_own_main_phase_and_can_act_in_it() {
                 discard: vec![],
                 mana: ManaBank::default(),
                 main_losses: 0,
-                has_coin: false,
                 main: Some(ScenarioSummon {
                     chain: vec![card_ref(1, "quarry-whelp")],
                     damage: 0,
@@ -720,7 +714,6 @@ fn a_second_turn_reaches_its_own_main_phase_and_can_act_in_it() {
                 discard: vec![],
                 mana: ManaBank::default(),
                 main_losses: 0,
-                has_coin: false,
                 main: Some(ScenarioSummon {
                     chain: vec![card_ref(101, "quarry-whelp")],
                     damage: 0,
@@ -730,6 +723,7 @@ fn a_second_turn_reaches_its_own_main_phase_and_can_act_in_it() {
             },
         ),
         active_player: PlayerId::One,
+        coin: None,
     };
     let state = from_scenario(fixtures::card_set(), &scenario).expect("both boards are legal");
 

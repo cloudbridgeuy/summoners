@@ -161,19 +161,16 @@ pub(crate) fn convert_coin(
         return Err(ActionError::WrongPhase);
     }
 
+    if player != PlayerId::Two || state.coin.is_none() {
+        return Err(ActionError::InvalidTarget);
+    }
+    if !anchor_types(&state.cards, state.players.get(player)).contains(&mana_type) {
+        return Err(ActionError::InvalidTarget);
+    }
+
     let mut state = state.clone();
-    let cards = state.cards.clone();
-    let player_state = state.players.get_mut(player);
-
-    if !player_state.has_coin {
-        return Err(ActionError::InvalidTarget);
-    }
-    if !anchor_types(&cards, player_state).contains(&mana_type) {
-        return Err(ActionError::InvalidTarget);
-    }
-
-    player_state.has_coin = false;
-    bank(player_state, mana_type);
+    state.coin = None;
+    bank(state.players.get_mut(player), mana_type);
 
     Ok(ActionOutcome {
         state,
@@ -226,7 +223,7 @@ mod tests {
     use crate::domain::cards::fixtures;
     use crate::domain::ids::{CardInstanceId, Position};
     use crate::domain::state::{
-        CardRef, GameStatus, ManaBank, PerPlayer, PlayerState, StackWindow, SummonInstance,
+        CardRef, Coin, GameStatus, ManaBank, PerPlayer, PlayerState, StackWindow, SummonInstance,
         UpgradeChain,
     };
     use std::collections::VecDeque;
@@ -273,7 +270,6 @@ mod tests {
             discard: vec![],
             mana: ManaBank::default(),
             main_losses: 0,
-            has_coin: false,
             enchantments: vec![],
         }
     }
@@ -289,6 +285,7 @@ mod tests {
         };
         GameState {
             players: PerPlayer::new(one, two),
+            coin: None,
             turn: TurnState {
                 active_player: PlayerId::One,
                 phase: Phase::Main,
@@ -304,6 +301,13 @@ mod tests {
             status: GameStatus::Playing,
             cards: fixtures::card_set(),
         }
+    }
+
+    fn player_two_main_state_with_coin() -> GameState {
+        let mut state = base_state();
+        state.turn.active_player = PlayerId::Two;
+        state.coin = Some(Coin);
+        state
     }
 
     // -- end_turn: opening the §47 window, and the handover it leads to ------
@@ -592,52 +596,50 @@ mod tests {
 
     #[test]
     fn convert_coin_banks_an_anchored_type_and_removes_the_coin() {
-        let mut state = base_state();
-        state.players.get_mut(PlayerId::One).has_coin = true;
+        let state = player_two_main_state_with_coin();
 
-        let outcome = convert_coin(&state, PlayerId::One, ManaType::Matter).expect("anchored");
+        let outcome = convert_coin(&state, PlayerId::Two, ManaType::Matter).expect("anchored");
 
         assert_eq!(
             outcome.events,
             vec![GameEvent::CoinConverted {
-                player: PlayerId::One,
+                player: PlayerId::Two,
                 mana_type: ManaType::Matter,
             }]
         );
-        let player_state = outcome.state.players.get(PlayerId::One);
+        let player_state = outcome.state.players.get(PlayerId::Two);
         assert_eq!(player_state.mana.matter, 1);
-        assert!(!player_state.has_coin);
+        assert_eq!(outcome.state.coin, None);
     }
 
     #[test]
     fn convert_coin_rejects_an_out_of_anchor_type() {
-        let mut state = base_state();
-        state.players.get_mut(PlayerId::One).has_coin = true;
+        let state = player_two_main_state_with_coin();
 
         assert_eq!(
-            convert_coin(&state, PlayerId::One, ManaType::Spirit),
+            convert_coin(&state, PlayerId::Two, ManaType::Spirit),
             Err(ActionError::InvalidTarget)
         );
     }
 
     #[test]
     fn convert_coin_is_one_use() {
-        let mut state = base_state();
-        state.players.get_mut(PlayerId::One).has_coin = true;
-        let outcome = convert_coin(&state, PlayerId::One, ManaType::Matter).expect("first use");
+        let state = player_two_main_state_with_coin();
+        let outcome = convert_coin(&state, PlayerId::Two, ManaType::Matter).expect("first use");
 
         assert_eq!(
-            convert_coin(&outcome.state, PlayerId::One, ManaType::Matter),
+            convert_coin(&outcome.state, PlayerId::Two, ManaType::Matter),
             Err(ActionError::InvalidTarget)
         );
     }
 
     #[test]
     fn convert_coin_rejects_a_player_with_no_coin() {
-        let state = base_state();
+        let mut state = base_state();
+        state.turn.active_player = PlayerId::Two;
 
         assert_eq!(
-            convert_coin(&state, PlayerId::One, ManaType::Matter),
+            convert_coin(&state, PlayerId::Two, ManaType::Matter),
             Err(ActionError::InvalidTarget)
         );
     }
@@ -653,7 +655,7 @@ mod tests {
             holder: PlayerId::Two,
             prior_pass: false,
         });
-        state.players.get_mut(PlayerId::Two).has_coin = true;
+        state.coin = Some(Coin);
 
         let outcome =
             convert_coin(&state, PlayerId::Two, ManaType::Matter).expect("Two holds Priority");
@@ -673,25 +675,24 @@ mod tests {
         let mut state = base_state();
         state.turn.phase = Phase::Combat;
         state.turn.window = Some(StackWindow {
-            holder: PlayerId::Two,
+            holder: PlayerId::One,
             prior_pass: false,
         });
-        state.players.get_mut(PlayerId::One).has_coin = true;
+        state.coin = Some(Coin);
 
         assert_eq!(
             convert_coin(&state, PlayerId::One, ManaType::Matter),
-            Err(ActionError::WrongPhase)
+            Err(ActionError::InvalidTarget)
         );
     }
 
     #[test]
     fn convert_coin_is_rejected_outside_the_owners_main_phase() {
-        let mut state = base_state();
-        state.players.get_mut(PlayerId::One).has_coin = true;
+        let mut state = player_two_main_state_with_coin();
         state.turn.phase = Phase::Combat;
 
         assert_eq!(
-            convert_coin(&state, PlayerId::One, ManaType::Matter),
+            convert_coin(&state, PlayerId::Two, ManaType::Matter),
             Err(ActionError::WrongPhase)
         );
     }
