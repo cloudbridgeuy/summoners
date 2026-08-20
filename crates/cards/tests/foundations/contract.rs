@@ -194,6 +194,45 @@ fn all_twenty_cards_keep_their_names_and_family_tags() {
 }
 
 #[test]
+fn every_card_has_exactly_its_approved_ability_and_modifier_counts() {
+    let loaded = parse_set(FOUNDATIONS).expect("Foundations must load");
+    let expected = [
+        ("warden-initiate", 1, 0, 0, 0),
+        ("warden-pathkeeper", 1, 0, 0, 0),
+        ("warden-of-set-paths", 1, 1, 0, 1),
+        ("quarry-scout", 1, 1, 0, 0),
+        ("quarry-warden-guard", 1, 1, 1, 0),
+        ("quarry-well-tender", 1, 1, 1, 0),
+        ("set-path-adept", 1, 0, 0, 0),
+        ("ember-lance", 0, 0, 0, 0),
+        ("scrying-glass", 0, 0, 0, 0),
+        ("second-wind", 0, 0, 0, 0),
+        ("standing-ward", 0, 0, 0, 1),
+        ("sow-piglet", 1, 0, 0, 0),
+        ("sow-matriarch", 1, 0, 0, 0),
+        ("old-sow-of-the-barrow", 1, 1, 1, 0),
+        ("hearth-warden", 1, 0, 1, 0),
+        ("dawn-tender", 1, 0, 1, 0),
+        ("barrow-grazer", 1, 0, 1, 0),
+        ("ash-shepherd", 1, 0, 1, 0),
+        ("barrow-seer", 1, 1, 0, 0),
+        ("renewing-balm", 0, 0, 0, 0),
+    ];
+
+    for (code, attacks, skills, triggers, modifiers) in expected {
+        let entity = card(&loaded, code);
+        assert_eq!(entity.all::<Attack>().len(), attacks, "{code} attacks");
+        assert_eq!(entity.all::<Skill>().len(), skills, "{code} skills");
+        assert_eq!(entity.all::<Trigger>().len(), triggers, "{code} triggers");
+        assert_eq!(
+            entity.all::<Modifier>().len(),
+            modifiers,
+            "{code} modifiers"
+        );
+    }
+}
+
+#[test]
 fn every_attack_keeps_its_cost_and_ordered_effects() {
     let loaded = parse_set(FOUNDATIONS).expect("Foundations must load");
     let expected = [
