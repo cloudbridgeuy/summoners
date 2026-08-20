@@ -78,6 +78,37 @@ document order do not determine them.
 - **AND** a Spell or Enchantment cannot use Source because it has no
   battlefield position
 
+### Requirement: Strict Deck loading and one built-in catalog
+
+A Deck byte buffer declares exact Set revisions and qualified stable card
+references. The card boundary resolves one separate Base Starter and an
+expanded 20-card body. It rejects unknown schema data, unavailable or wrong
+Set revisions, unresolved references, duplicate Set requirements, a Starter
+in the body, a non-Base Starter, a wrong body total, and more than two copies
+of one definition. The embedded Foundations Set and both Decks use this same
+public byte path once, and all callers share the cached catalog and core card
+pool.
+
+#### Scenario: A valid Deck is resolved
+
+- **WHEN** a caller passes either built-in Deck byte buffer and the Foundations
+  library to the Deck parser
+- **THEN** it receives the correct separate Base Starter and 20 body cards
+- **AND** the body contains ten definitions with two copies of each
+
+#### Scenario: A Deck is malformed or cannot resolve
+
+- **WHEN** a Deck has malformed schema data, an invalid stable reference, a
+  missing or wrong Set revision, an unresolved card, or an illegal construction
+- **THEN** parsing fails with a typed document kind, phase, schema version,
+  stable path, and cause
+
+#### Scenario: The built-in catalog is requested more than once
+
+- **WHEN** callers request the built-in catalog and its core card pool again
+- **THEN** each caller receives the same cached catalog allocation and core
+  card-pool allocation
+
 ### Requirement: Turn structure and phase order
 
 A turn moves through Upkeep, Main Phase, and Combat, and phases only move

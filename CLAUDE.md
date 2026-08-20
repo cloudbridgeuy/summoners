@@ -9,7 +9,9 @@ It must not read files, call a network, use a clock, or own another I/O effect.
 
 `crates/cards` is the strict authored-document boundary. It parses caller-held
 bytes without file I/O, applies content policy, and converts valid definitions
-into core entities. There is no product runtime shell yet. Add a CLI, server,
+into core entities. It also assembles loaded Sets into one shared card library,
+resolves strict Deck documents, and exposes the embedded catalog through one
+cached runtime path. There is no product runtime shell yet. Add a CLI, server,
 simulator, runtime file loader, client, protocol adapter, or FFI crate only
 after its boundary and dependency set are explicit.
 

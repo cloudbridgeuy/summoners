@@ -6,6 +6,7 @@ use summoners_core::domain::cards::EntityId;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DocumentKind {
     Set,
+    Deck,
 }
 
 /// The deterministic parser phase that rejected the document.

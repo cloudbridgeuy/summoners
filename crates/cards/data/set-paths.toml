@@ -1,0 +1,45 @@
+schema_version = 1
+id = "set-paths"
+name = "Set Paths"
+starter = "foundations/warden-initiate"
+requires = [{ set = "foundations", revision = 1 }]
+
+[[cards]]
+card = "foundations/warden-pathkeeper"
+quantity = 2
+
+[[cards]]
+card = "foundations/warden-of-set-paths"
+quantity = 2
+
+[[cards]]
+card = "foundations/quarry-scout"
+quantity = 2
+
+[[cards]]
+card = "foundations/quarry-warden-guard"
+quantity = 2
+
+[[cards]]
+card = "foundations/quarry-well-tender"
+quantity = 2
+
+[[cards]]
+card = "foundations/set-path-adept"
+quantity = 2
+
+[[cards]]
+card = "foundations/ember-lance"
+quantity = 2
+
+[[cards]]
+card = "foundations/scrying-glass"
+quantity = 2
+
+[[cards]]
+card = "foundations/second-wind"
+quantity = 2
+
+[[cards]]
+card = "foundations/standing-ward"
+quantity = 2
