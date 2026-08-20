@@ -64,7 +64,7 @@ fn a_probe_spells_four_printed_effects_resolve_in_authored_order() {
     state.cards = cards_with(vec![entity]);
     state.players.get_mut(PlayerId::One).main = Some(SummonInstance {
         damage: 5,
-        ready: false,
+        readiness: Readiness::Exhausted,
         ..summon(PlayerId::One)
     });
     state.players.get_mut(PlayerId::One).hand = vec![card];

@@ -5,8 +5,8 @@ use super::*;
 use crate::domain::cards::fixtures;
 use crate::domain::ids::{BenchSlot, CardInstanceId};
 use crate::domain::state::{
-    CardRef, GameStatus, ManaBank, PendingInput, PerPlayer, PlayerState, SummonInstance, TurnState,
-    UpgradeChain, WorkItem,
+    CardRef, GameStatus, ManaBank, PendingInput, PerPlayer, PlayerState, Readiness, SummonInstance,
+    TurnState, UpgradeChain, WorkItem,
 };
 use std::collections::VecDeque;
 
@@ -20,13 +20,11 @@ fn summon(owner: PlayerId, def: &'static str) -> SummonInstance {
             vec![],
         ),
         damage: 0,
-        ready: true,
+        readiness: Readiness::Ready,
         owner,
         controller: owner,
         duration_markers: vec![],
-        played_this_turn: false,
-        upgraded_this_turn: false,
-        entered_main_this_turn: false,
+        turn: crate::domain::state::SummonTurnRecord::fresh(),
     }
 }
 
@@ -40,7 +38,6 @@ fn player_state(owner: PlayerId) -> PlayerState {
         discard: vec![],
         mana: ManaBank::default(),
         main_losses: 0,
-        has_coin: false,
         enchantments: vec![],
     }
 }
@@ -48,6 +45,7 @@ fn player_state(owner: PlayerId) -> PlayerState {
 fn base_state() -> GameState {
     GameState {
         players: PerPlayer::new(player_state(PlayerId::One), player_state(PlayerId::Two)),
+        coin: None,
         turn: TurnState {
             active_player: PlayerId::One,
             phase: Phase::Main,

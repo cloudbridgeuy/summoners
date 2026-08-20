@@ -16,7 +16,8 @@ use crate::domain::cards::{CardSet, ManaTypes};
 use crate::domain::events::GameEvent;
 use crate::domain::ids::{BenchSlot, ManaType, Position};
 use crate::domain::state::{
-    GameState, ManaSource, PendingInput, Phase, PlayerState, SummonInstance,
+    GameState, ManaSource, PendingInput, Phase, PlayerState, Readiness, SummonInstance,
+    SummonTurnRecord,
 };
 
 // ---------------------------------------------------------------------------
@@ -134,35 +135,31 @@ pub(crate) fn bank(player_state: &mut PlayerState, mana_type: ManaType) {
 }
 
 // ---------------------------------------------------------------------------
-// Per-turn Summon flag reset
+// Per-turn Summon record reset
 // ---------------------------------------------------------------------------
 
-/// Clear the per-turn flags on every Summon in `player_state`, Main and
-/// Bench alike: `played_this_turn` (rules §17, §52 — a Base Summon cannot
-/// be upgraded during the turn it was played), `upgraded_this_turn` (rules
-/// §18, §52 — a Summon may be upgraded only once per turn), and
-/// `entered_main_this_turn` (read by an opposing attacker's conditional
-/// bonus during that attacker's own turn; no fixture carries the effect
-/// that reads it yet, so the design document does not pin down its exact
-/// clearing point — this is a deferred decision, resolved below).
+/// Clear the per-turn record on every Summon in `player_state`, Main and
+/// Bench alike. Upgrade activity enforces rules §17, §18, and §52. Main
+/// entry is read by an opposing attacker's conditional bonus during that
+/// attacker's own turn.
 ///
 /// All three share one reset point: the moment a turn changes hands, for
 /// both players' boards (see `engine::turn::handover`). The rules describe
-/// each flag against "this turn" as a single game-wide concept (§9:
+/// each fact against "this turn" as a single game-wide concept (§9:
 /// "players alternate complete turns"), not a clock that runs only while a
 /// Summon's controller happens to be active. That reading is provably
-/// correct for `played_this_turn` and `upgraded_this_turn`: both are read
+/// correct for upgrade activity: it is read
 /// only during their controller's own Main Phase, which cannot arrive
 /// before their own next Upkeep, so clearing them at the handoff that
 /// starts the *other* player's turn already lands before that next read.
-/// It is also the only reading available for `entered_main_this_turn`,
+/// It is also the only reading available for Main entry,
 /// which can be set on either player's Summon and must stay true for the
 /// remainder of the turn that set it, whether that Summon belongs to the
 /// player about to act or not — clearing only the newly active player's
 /// own board would leave a stale `true` sitting on the other player's
 /// board indefinitely. `pub(crate)` because `engine::turn::handover` is
 /// where this reset actually runs.
-pub(crate) fn reset_per_turn_summon_flags(player_state: &mut PlayerState) {
+pub(crate) fn reset_per_turn_summon_records(player_state: &mut PlayerState) {
     if let Some(summon) = player_state.main.as_mut() {
         clear_per_turn_flags(summon);
     }
@@ -172,9 +169,7 @@ pub(crate) fn reset_per_turn_summon_flags(player_state: &mut PlayerState) {
 }
 
 fn clear_per_turn_flags(summon: &mut SummonInstance) {
-    summon.played_this_turn = false;
-    summon.upgraded_this_turn = false;
-    summon.entered_main_this_turn = false;
+    summon.turn = SummonTurnRecord::fresh();
 }
 
 // ---------------------------------------------------------------------------
@@ -189,10 +184,10 @@ pub(crate) fn ready_all(state: &GameState) -> (GameState, Vec<GameEvent>) {
     let positions = controlled_positions(player_state);
 
     if let Some(summon) = player_state.main.as_mut() {
-        summon.ready = true;
+        summon.readiness = Readiness::Ready;
     }
     for summon in player_state.bench.iter_mut().flatten() {
-        summon.ready = true;
+        summon.readiness = Readiness::Ready;
     }
 
     (state, vec![GameEvent::SummonsReadied { player, positions }])
@@ -300,13 +295,11 @@ mod tests {
                 vec![],
             ),
             damage: 0,
-            ready: false,
+            readiness: Readiness::Exhausted,
             owner,
             controller: owner,
             duration_markers: vec![],
-            played_this_turn: false,
-            upgraded_this_turn: false,
-            entered_main_this_turn: false,
+            turn: crate::domain::state::SummonTurnRecord::fresh(),
         }
     }
 
@@ -332,7 +325,6 @@ mod tests {
             discard: vec![],
             mana: ManaBank::default(),
             main_losses: 0,
-            has_coin: false,
             enchantments: vec![],
         }
     }
@@ -348,6 +340,7 @@ mod tests {
         };
         GameState {
             players: PerPlayer::new(one, two),
+            coin: None,
             turn: TurnState {
                 active_player: PlayerId::One,
                 phase: Phase::Main,
@@ -430,8 +423,14 @@ mod tests {
         let (state, events) = ready_all(&state);
 
         let player_state = state.players.get(PlayerId::One);
-        assert!(player_state.main.as_ref().expect("main set").ready);
-        assert!(player_state.bench[1].as_ref().expect("bench set").ready);
+        assert_eq!(
+            player_state.main.as_ref().expect("main set").readiness,
+            Readiness::Ready
+        );
+        assert_eq!(
+            player_state.bench[1].as_ref().expect("bench set").readiness,
+            Readiness::Ready
+        );
         assert_eq!(
             events,
             vec![GameEvent::SummonsReadied {
@@ -548,34 +547,40 @@ mod tests {
         assert!(events.is_empty());
     }
 
-    // -- reset_per_turn_summon_flags -----------------------------------------
+    // -- reset_per_turn_summon_records ---------------------------------------
 
     #[test]
     fn reset_per_turn_summon_flags_clears_every_controlled_summon_main_and_bench() {
         let played = SummonInstance {
-            played_this_turn: true,
-            upgraded_this_turn: true,
-            entered_main_this_turn: true,
+            turn: crate::domain::state::SummonTurnRecord {
+                upgrade: crate::domain::state::UpgradeActivity::PlayedThisTurn,
+                main_entry: Some(crate::domain::state::EnteredMain),
+            },
+            ..whelp(PlayerId::One)
+        };
+        let upgraded = SummonInstance {
+            turn: crate::domain::state::SummonTurnRecord {
+                upgrade: crate::domain::state::UpgradeActivity::UpgradedThisTurn,
+                main_entry: Some(crate::domain::state::EnteredMain),
+            },
             ..whelp(PlayerId::One)
         };
         let mut player_state = PlayerState {
-            main: Some(played.clone()),
+            main: Some(played),
             ..empty_player_state()
         };
         player_state.bench[0] = Some(SummonInstance {
             controller: PlayerId::One,
-            ..played
+            ..upgraded
         });
 
-        reset_per_turn_summon_flags(&mut player_state);
+        reset_per_turn_summon_records(&mut player_state);
 
         for summon in [
             player_state.main.as_ref().expect("main set"),
             player_state.bench[0].as_ref().expect("bench set"),
         ] {
-            assert!(!summon.played_this_turn);
-            assert!(!summon.upgraded_this_turn);
-            assert!(!summon.entered_main_this_turn);
+            assert_eq!(summon.turn, SummonTurnRecord::fresh());
         }
     }
 }

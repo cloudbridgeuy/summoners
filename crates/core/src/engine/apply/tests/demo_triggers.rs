@@ -74,7 +74,7 @@ fn demo_retreat_fires_the_four_movement_triggers_and_heals_the_entering_main_sum
         .as_ref()
         .expect("Hearth Warden landed on Main");
     assert_eq!(healed.damage, 5);
-    assert!(healed.entered_main_this_turn);
+    assert!(healed.turn.main_entry.is_some());
 }
 
 #[test]

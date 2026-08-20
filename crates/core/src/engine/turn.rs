@@ -22,7 +22,7 @@ use crate::domain::state::{
 use crate::engine::apply::ActionOutcome;
 use crate::engine::stack::window_after_play;
 use crate::engine::triggers::discover_back;
-use crate::engine::upkeep::{anchor_types, available_types, bank, reset_per_turn_summon_flags};
+use crate::engine::upkeep::{anchor_types, available_types, bank, reset_per_turn_summon_records};
 
 // ---------------------------------------------------------------------------
 // Dispatch handlers: `EndTurn`, `ConvertCoin`, `ChooseManaType`
@@ -60,7 +60,7 @@ pub(crate) fn end_turn(state: &GameState, player: PlayerId) -> Result<ActionOutc
 /// Clear `DurationMarker::CannotBeMovedByOpponent` from every Summon on
 /// `player_state`'s own board (Main and Bench) — the Old Sow's `Root and
 /// Renew` expiring (rules §44). Distinct from
-/// `reset_per_turn_summon_flags`, which runs for both players every
+/// `reset_per_turn_summon_records`, which runs for both players every
 /// handover; this runs only for the player becoming newly active, since the
 /// marker is only ever cleared from its own holder's board once that
 /// holder's next turn comes around (see the call site in `handover`).
@@ -79,7 +79,7 @@ fn expire_cannot_be_moved_by_opponent(player_state: &mut PlayerState) {
 /// The direct turn handoff (rules §48), reached once both players pass
 /// consecutively with an empty Stack (see `engine::stack::pass`). Every
 /// Summon's per-turn flags reset for both players (see
-/// `reset_per_turn_summon_flags`), the opponent's Upkeep begins, and
+/// `reset_per_turn_summon_records`), the opponent's Upkeep begins, and
 /// `Ready`, draw, natural production, and finally the Main Phase advance
 /// itself (`WorkItem::BeginMainPhase`, rules §9) are queued as work for the
 /// resolution loop to drain. Queuing the advance last, behind everything
@@ -102,8 +102,8 @@ pub(crate) fn handover(state: &GameState) -> ActionOutcome {
         normal_retreat_used: false,
         spell_played_this_turn: false,
     };
-    reset_per_turn_summon_flags(state.players.get_mut(player));
-    reset_per_turn_summon_flags(state.players.get_mut(opponent));
+    reset_per_turn_summon_records(state.players.get_mut(player));
+    reset_per_turn_summon_records(state.players.get_mut(opponent));
     // The Old Sow's `Root and Renew` (rules §44) sets `CannotBeMovedByOpponent`
     // on the Sow's own controller's board during that controller's Main
     // Phase, to survive exactly one opposing turn. It only ever expires on
@@ -161,19 +161,16 @@ pub(crate) fn convert_coin(
         return Err(ActionError::WrongPhase);
     }
 
+    if player != PlayerId::Two || state.coin.is_none() {
+        return Err(ActionError::InvalidTarget);
+    }
+    if !anchor_types(&state.cards, state.players.get(player)).contains(&mana_type) {
+        return Err(ActionError::InvalidTarget);
+    }
+
     let mut state = state.clone();
-    let cards = state.cards.clone();
-    let player_state = state.players.get_mut(player);
-
-    if !player_state.has_coin {
-        return Err(ActionError::InvalidTarget);
-    }
-    if !anchor_types(&cards, player_state).contains(&mana_type) {
-        return Err(ActionError::InvalidTarget);
-    }
-
-    player_state.has_coin = false;
-    bank(player_state, mana_type);
+    state.coin = None;
+    bank(state.players.get_mut(player), mana_type);
 
     Ok(ActionOutcome {
         state,
@@ -226,7 +223,7 @@ mod tests {
     use crate::domain::cards::fixtures;
     use crate::domain::ids::{CardInstanceId, Position};
     use crate::domain::state::{
-        CardRef, GameStatus, ManaBank, PerPlayer, PlayerState, StackWindow, SummonInstance,
+        CardRef, Coin, GameStatus, ManaBank, PerPlayer, PlayerState, StackWindow, SummonInstance,
         UpgradeChain,
     };
     use std::collections::VecDeque;
@@ -241,13 +238,11 @@ mod tests {
                 vec![],
             ),
             damage: 0,
-            ready: false,
+            readiness: crate::domain::state::Readiness::Exhausted,
             owner,
             controller: owner,
             duration_markers: vec![],
-            played_this_turn: false,
-            upgraded_this_turn: false,
-            entered_main_this_turn: false,
+            turn: crate::domain::state::SummonTurnRecord::fresh(),
         }
     }
 
@@ -273,7 +268,6 @@ mod tests {
             discard: vec![],
             mana: ManaBank::default(),
             main_losses: 0,
-            has_coin: false,
             enchantments: vec![],
         }
     }
@@ -289,6 +283,7 @@ mod tests {
         };
         GameState {
             players: PerPlayer::new(one, two),
+            coin: None,
             turn: TurnState {
                 active_player: PlayerId::One,
                 phase: Phase::Main,
@@ -304,6 +299,13 @@ mod tests {
             status: GameStatus::Playing,
             cards: fixtures::card_set(),
         }
+    }
+
+    fn player_two_main_state_with_coin() -> GameState {
+        let mut state = base_state();
+        state.turn.active_player = PlayerId::Two;
+        state.coin = Some(Coin);
+        state
     }
 
     // -- end_turn: opening the §47 window, and the handover it leads to ------
@@ -498,19 +500,23 @@ mod tests {
 
     #[test]
     fn end_turn_resets_per_turn_summon_flags_for_both_players() {
-        let flagged = SummonInstance {
-            played_this_turn: true,
-            upgraded_this_turn: true,
-            entered_main_this_turn: true,
+        let played = SummonInstance {
+            turn: crate::domain::state::SummonTurnRecord {
+                upgrade: crate::domain::state::UpgradeActivity::PlayedThisTurn,
+                main_entry: Some(crate::domain::state::EnteredMain),
+            },
             ..whelp(PlayerId::One)
         };
+        let upgraded = SummonInstance {
+            turn: crate::domain::state::SummonTurnRecord {
+                upgrade: crate::domain::state::UpgradeActivity::UpgradedThisTurn,
+                main_entry: Some(crate::domain::state::EnteredMain),
+            },
+            ..whelp(PlayerId::Two)
+        };
         let mut state = base_state();
-        state.players.get_mut(PlayerId::One).main = Some(flagged.clone());
-        state.players.get_mut(PlayerId::Two).main = Some(SummonInstance {
-            controller: PlayerId::Two,
-            owner: PlayerId::Two,
-            ..flagged
-        });
+        state.players.get_mut(PlayerId::One).main = Some(played);
+        state.players.get_mut(PlayerId::Two).main = Some(upgraded);
 
         let outcome = full_end_turn(&state, PlayerId::One);
 
@@ -522,20 +528,25 @@ mod tests {
                 .main
                 .as_ref()
                 .expect("main set");
-            assert!(!summon.played_this_turn, "{player:?}");
-            assert!(!summon.upgraded_this_turn, "{player:?}");
-            assert!(!summon.entered_main_this_turn, "{player:?}");
+            assert_eq!(
+                summon.turn,
+                crate::domain::state::SummonTurnRecord::fresh(),
+                "{player:?}"
+            );
         }
     }
 
     #[test]
     fn a_summon_played_this_turn_can_be_upgraded_on_its_controllers_next_turn() {
         // Simulates what `PlaySummon` will set once it lands: a freshly
-        // played Base Summon carries `played_this_turn = true` for the rest
+        // played Base Summon records `PlayedThisTurn` for the rest
         // of the turn it was played (rules §17, §52).
         let mut state = base_state();
         state.players.get_mut(PlayerId::One).main = Some(SummonInstance {
-            played_this_turn: true,
+            turn: crate::domain::state::SummonTurnRecord {
+                upgrade: crate::domain::state::UpgradeActivity::PlayedThisTurn,
+                main_entry: None,
+            },
             ..whelp(PlayerId::One)
         });
         // Each player needs a card to draw so their own Upkeep can drain
@@ -554,15 +565,17 @@ mod tests {
         // reaching Main on its own (rules §9), with no hand edit needed.
         let after_one = full_end_turn(&state, PlayerId::One);
         let (after_one, _) = crate::engine::resolution::drain(&after_one.state);
-        assert!(
-            !after_one
+        assert_eq!(
+            after_one
                 .players
                 .get(PlayerId::One)
                 .main
                 .as_ref()
                 .expect("main set")
-                .played_this_turn,
-            "the flag is already clear as soon as One's own turn ends"
+                .turn
+                .upgrade,
+            crate::domain::state::UpgradeActivity::Available,
+            "the activity is available as soon as One's own turn ends"
         );
 
         // Two's turn ends; play returns to One, whose own Upkeep drains the
@@ -576,14 +589,16 @@ mod tests {
             Phase::Main,
             "One's own Upkeep reaches Main on its own too, with no hand edit"
         );
-        assert!(
-            !after_two
+        assert_eq!(
+            after_two
                 .players
                 .get(PlayerId::One)
                 .main
                 .as_ref()
                 .expect("main set")
-                .played_this_turn,
+                .turn
+                .upgrade,
+            crate::domain::state::UpgradeActivity::Available,
             "still clear on One's next turn, so upgrading is no longer blocked"
         );
     }
@@ -592,52 +607,50 @@ mod tests {
 
     #[test]
     fn convert_coin_banks_an_anchored_type_and_removes_the_coin() {
-        let mut state = base_state();
-        state.players.get_mut(PlayerId::One).has_coin = true;
+        let state = player_two_main_state_with_coin();
 
-        let outcome = convert_coin(&state, PlayerId::One, ManaType::Matter).expect("anchored");
+        let outcome = convert_coin(&state, PlayerId::Two, ManaType::Matter).expect("anchored");
 
         assert_eq!(
             outcome.events,
             vec![GameEvent::CoinConverted {
-                player: PlayerId::One,
+                player: PlayerId::Two,
                 mana_type: ManaType::Matter,
             }]
         );
-        let player_state = outcome.state.players.get(PlayerId::One);
+        let player_state = outcome.state.players.get(PlayerId::Two);
         assert_eq!(player_state.mana.matter, 1);
-        assert!(!player_state.has_coin);
+        assert_eq!(outcome.state.coin, None);
     }
 
     #[test]
     fn convert_coin_rejects_an_out_of_anchor_type() {
-        let mut state = base_state();
-        state.players.get_mut(PlayerId::One).has_coin = true;
+        let state = player_two_main_state_with_coin();
 
         assert_eq!(
-            convert_coin(&state, PlayerId::One, ManaType::Spirit),
+            convert_coin(&state, PlayerId::Two, ManaType::Spirit),
             Err(ActionError::InvalidTarget)
         );
     }
 
     #[test]
     fn convert_coin_is_one_use() {
-        let mut state = base_state();
-        state.players.get_mut(PlayerId::One).has_coin = true;
-        let outcome = convert_coin(&state, PlayerId::One, ManaType::Matter).expect("first use");
+        let state = player_two_main_state_with_coin();
+        let outcome = convert_coin(&state, PlayerId::Two, ManaType::Matter).expect("first use");
 
         assert_eq!(
-            convert_coin(&outcome.state, PlayerId::One, ManaType::Matter),
+            convert_coin(&outcome.state, PlayerId::Two, ManaType::Matter),
             Err(ActionError::InvalidTarget)
         );
     }
 
     #[test]
     fn convert_coin_rejects_a_player_with_no_coin() {
-        let state = base_state();
+        let mut state = base_state();
+        state.turn.active_player = PlayerId::Two;
 
         assert_eq!(
-            convert_coin(&state, PlayerId::One, ManaType::Matter),
+            convert_coin(&state, PlayerId::Two, ManaType::Matter),
             Err(ActionError::InvalidTarget)
         );
     }
@@ -653,7 +666,7 @@ mod tests {
             holder: PlayerId::Two,
             prior_pass: false,
         });
-        state.players.get_mut(PlayerId::Two).has_coin = true;
+        state.coin = Some(Coin);
 
         let outcome =
             convert_coin(&state, PlayerId::Two, ManaType::Matter).expect("Two holds Priority");
@@ -673,25 +686,24 @@ mod tests {
         let mut state = base_state();
         state.turn.phase = Phase::Combat;
         state.turn.window = Some(StackWindow {
-            holder: PlayerId::Two,
+            holder: PlayerId::One,
             prior_pass: false,
         });
-        state.players.get_mut(PlayerId::One).has_coin = true;
+        state.coin = Some(Coin);
 
         assert_eq!(
             convert_coin(&state, PlayerId::One, ManaType::Matter),
-            Err(ActionError::WrongPhase)
+            Err(ActionError::InvalidTarget)
         );
     }
 
     #[test]
     fn convert_coin_is_rejected_outside_the_owners_main_phase() {
-        let mut state = base_state();
-        state.players.get_mut(PlayerId::One).has_coin = true;
+        let mut state = player_two_main_state_with_coin();
         state.turn.phase = Phase::Combat;
 
         assert_eq!(
-            convert_coin(&state, PlayerId::One, ManaType::Matter),
+            convert_coin(&state, PlayerId::Two, ManaType::Matter),
             Err(ActionError::WrongPhase)
         );
     }

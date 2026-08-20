@@ -59,24 +59,59 @@ pub enum DurationMarker {
     CannotBeMovedByOpponent,
 }
 
+/// A Summon's mutually exclusive upgrade activity during the current turn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UpgradeActivity {
+    /// The Summon can be upgraded this turn.
+    Available,
+    /// The Summon entered play this turn and cannot be upgraded yet.
+    PlayedThisTurn,
+    /// The Summon already received its one upgrade for this turn.
+    UpgradedThisTurn,
+}
+
+/// Proof that a Summon entered Main during the current turn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EnteredMain;
+
+/// The independent per-turn facts held by one Summon.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SummonTurnRecord {
+    pub upgrade: UpgradeActivity,
+    pub main_entry: Option<EnteredMain>,
+}
+
+impl SummonTurnRecord {
+    /// Start a turn with upgrade activity available and no Main entry.
+    pub const fn fresh() -> Self {
+        Self {
+            upgrade: UpgradeActivity::Available,
+            main_entry: None,
+        }
+    }
+}
+
+/// A Summon's ability to activate a Skill.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Readiness {
+    /// The Summon can activate a Skill.
+    Ready,
+    /// The Summon cannot activate a Skill until it becomes Ready.
+    Exhausted,
+}
+
 /// One Summon in play: its upgrade chain, accumulated Damage, Ready state,
 /// who owns and who controls it, any duration markers, and the per-turn
-/// flags that gate upgrading, attacking, and Retreating.
+/// record that gates upgrading and records Main entry.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SummonInstance {
     pub chain: UpgradeChain,
     pub damage: u32,
-    pub ready: bool,
+    pub readiness: Readiness,
     pub owner: PlayerId,
     pub controller: PlayerId,
     pub duration_markers: Vec<DurationMarker>,
-    /// Rules §17: a Base Summon cannot be upgraded the turn it was played.
-    pub played_this_turn: bool,
-    /// Rules §18: a Summon may be upgraded only once per turn.
-    pub upgraded_this_turn: bool,
-    /// Rules §30: whether this Summon entered Main this turn (feeds
-    /// `ConditionalBonus { condition: DefenderEnteredMainThisTurn, .. }`).
-    pub entered_main_this_turn: bool,
+    pub turn: SummonTurnRecord,
 }
 
 /// The three typed Mana pools a player has banked (rules §11).
@@ -86,6 +121,13 @@ pub struct ManaBank {
     pub mind: u32,
     pub spirit: u32,
 }
+
+/// The second player's one-use resource (rules §7).
+///
+/// The marker carries no data. Its presence at the game root means Player
+/// Two holds it; its absence means it has left the game.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Coin;
 
 /// One player's complete zones and resources.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -100,8 +142,6 @@ pub struct PlayerState {
     pub mana: ManaBank,
     /// Rules §2: a player loses on their third Main Summon loss.
     pub main_losses: u8,
-    /// Rules §7: only the second player starts with the Coin.
-    pub has_coin: bool,
     /// Rules §44: Enchantments this player has cast, still in play. Cleared
     /// only by an effect that removes one; `scenario::from_scenario` cannot
     /// seed a starting Enchantment yet — `Scenario` carries no field for it.
@@ -341,6 +381,9 @@ pub enum WorkItem {
 #[derive(Debug, Clone)]
 pub struct GameState {
     pub players: PerPlayer<PlayerState>,
+    /// `Some(Coin)` means Player Two holds the Coin. `None` means the Coin
+    /// has left the game (rules §7).
+    pub coin: Option<Coin>,
     pub turn: TurnState,
     pub stack: Vec<StackItem>,
     /// Segment base indices into `stack` (design's "Phases and Priority").
@@ -364,6 +407,7 @@ pub struct GameState {
 impl PartialEq for GameState {
     fn eq(&self, other: &Self) -> bool {
         self.players == other.players
+            && self.coin == other.coin
             && self.turn == other.turn
             && self.stack == other.stack
             && self.stack_segment_bases == other.stack_segment_bases
@@ -411,7 +455,6 @@ mod tests {
             discard: vec![],
             mana: ManaBank::default(),
             main_losses: 0,
-            has_coin: false,
             enchantments: vec![],
         }
     }
@@ -419,6 +462,7 @@ mod tests {
     fn minimal_state() -> GameState {
         GameState {
             players: PerPlayer::new(minimal_player_state(), minimal_player_state()),
+            coin: None,
             turn: TurnState {
                 active_player: PlayerId::One,
                 phase: Phase::Main,
@@ -497,6 +541,39 @@ mod tests {
     }
 
     #[test]
+    fn summon_turn_record_fresh_is_available_with_no_main_entry() {
+        assert_eq!(
+            SummonTurnRecord::fresh(),
+            SummonTurnRecord {
+                upgrade: UpgradeActivity::Available,
+                main_entry: None,
+            }
+        );
+    }
+
+    #[test]
+    fn every_upgrade_activity_variant_constructs() {
+        let activities = [
+            UpgradeActivity::Available,
+            UpgradeActivity::PlayedThisTurn,
+            UpgradeActivity::UpgradedThisTurn,
+        ];
+
+        assert_eq!(activities.len(), 3);
+    }
+
+    #[test]
+    fn entered_main_is_independent_from_upgrade_activity() {
+        let record = SummonTurnRecord {
+            upgrade: UpgradeActivity::UpgradedThisTurn,
+            main_entry: Some(EnteredMain),
+        };
+
+        assert_eq!(record.upgrade, UpgradeActivity::UpgradedThisTurn);
+        assert_eq!(record.main_entry, Some(EnteredMain));
+    }
+
+    #[test]
     fn stack_window_and_phase_variants_construct() {
         let window = StackWindow {
             holder: PlayerId::One,
@@ -537,7 +614,7 @@ mod tests {
 
     #[test]
     fn pending_input_variants_construct() {
-        let pendings = [
+        let pending_inputs = [
             PendingInput::ManaProduction {
                 player: PlayerId::One,
                 source: ManaSource::Player,
@@ -549,7 +626,7 @@ mod tests {
                 chooser: PlayerId::One,
             },
         ];
-        assert_eq!(pendings.len(), 3);
+        assert_eq!(pending_inputs.len(), 3);
     }
 
     #[test]
