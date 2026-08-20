@@ -53,7 +53,7 @@ fn state() -> GameState {
             window: None,
             normal_attack_used: false,
             normal_retreat_used: false,
-            spell_played_this_turn: false,
+            spell_played_this_turn: PerPlayer::new(false, false),
         },
         stack: vec![],
         stack_segment_bases: vec![],
@@ -136,7 +136,7 @@ fn add_two_wards(state: &mut GameState) {
 #[test]
 fn evaluate_applies_a_true_conditional_addition_before_two_wards() {
     let mut state = state();
-    state.turn.spell_played_this_turn = true;
+    *state.turn.spell_played_this_turn.get_mut(PlayerId::One) = true;
     add_two_wards(&mut state);
     let intent = intent(
         source("attack"),
@@ -214,7 +214,7 @@ fn evaluate_omits_a_false_conditional_addition() {
 #[test]
 fn evaluate_skips_addition_when_damage_is_unincreasable() {
     let mut state = state();
-    state.turn.spell_played_this_turn = true;
+    *state.turn.spell_played_this_turn.get_mut(PlayerId::One) = true;
     let intent = intent(
         source("attack"),
         DamageEffect {
@@ -306,7 +306,7 @@ fn condition_holds_reads_each_supported_condition() {
         &[Position::Main],
         EffectCondition::SpellPlayedThisTurn,
     ));
-    state.turn.spell_played_this_turn = true;
+    *state.turn.spell_played_this_turn.get_mut(PlayerId::One) = true;
     assert!(condition_holds(
         &state,
         PlayerId::One,
@@ -325,6 +325,25 @@ fn condition_holds_reads_each_supported_condition() {
         PlayerId::One,
         &[Position::Main],
         EffectCondition::DefenderEnteredMainThisTurn,
+    ));
+}
+
+#[test]
+fn spell_played_condition_is_relative_to_the_effect_controller() {
+    let mut state = state();
+    *state.turn.spell_played_this_turn.get_mut(PlayerId::One) = true;
+
+    assert!(condition_holds(
+        &state,
+        PlayerId::One,
+        &[Position::Main],
+        EffectCondition::SpellPlayedThisTurn,
+    ));
+    assert!(!condition_holds(
+        &state,
+        PlayerId::Two,
+        &[Position::Main],
+        EffectCondition::SpellPlayedThisTurn,
     ));
 }
 

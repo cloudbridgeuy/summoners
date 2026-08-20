@@ -100,7 +100,7 @@ pub(crate) fn handover(state: &GameState) -> ActionOutcome {
         window: None,
         normal_attack_used: false,
         normal_retreat_used: false,
-        spell_played_this_turn: false,
+        spell_played_this_turn: crate::domain::state::PerPlayer::new(false, false),
     };
     reset_per_turn_summon_flags(state.players.get_mut(player));
     reset_per_turn_summon_flags(state.players.get_mut(opponent));
@@ -122,9 +122,10 @@ pub(crate) fn handover(state: &GameState) -> ActionOutcome {
     // production this same Upkeep also queues.
     state = discover_back(&state, &[opponent], TriggerEvent::YourUpkeep);
     state.work.push_back(WorkItem::DrawCard);
-    state
-        .work
-        .push_back(WorkItem::ProduceMana(ManaSource::Player));
+    state.work.push_back(WorkItem::ProduceMana {
+        player: opponent,
+        source: ManaSource::Player,
+    });
     // Rules §9: "Phases only move forward." Queued last, so the Main Phase
     // is reached only once every other Upkeep step above has drained.
     state.work.push_back(WorkItem::BeginMainPhase);
@@ -295,7 +296,7 @@ mod tests {
                 window: None,
                 normal_attack_used: false,
                 normal_retreat_used: false,
-                spell_played_this_turn: false,
+                spell_played_this_turn: PerPlayer::new(false, false),
             },
             stack: vec![],
             stack_segment_bases: vec![],
@@ -367,7 +368,10 @@ mod tests {
             VecDeque::from(vec![
                 WorkItem::ReadyAll,
                 WorkItem::DrawCard,
-                WorkItem::ProduceMana(ManaSource::Player),
+                WorkItem::ProduceMana {
+                    player: PlayerId::Two,
+                    source: ManaSource::Player,
+                },
                 WorkItem::BeginMainPhase,
             ])
         );
@@ -505,6 +509,7 @@ mod tests {
             ..whelp(PlayerId::One)
         };
         let mut state = base_state();
+        state.turn.spell_played_this_turn = PerPlayer::new(true, true);
         state.players.get_mut(PlayerId::One).main = Some(flagged.clone());
         state.players.get_mut(PlayerId::Two).main = Some(SummonInstance {
             controller: PlayerId::Two,
@@ -525,6 +530,7 @@ mod tests {
             assert!(!summon.played_this_turn, "{player:?}");
             assert!(!summon.upgraded_this_turn, "{player:?}");
             assert!(!summon.entered_main_this_turn, "{player:?}");
+            assert!(!*outcome.state.turn.spell_played_this_turn.get(player));
         }
     }
 

@@ -51,7 +51,7 @@ fn base_state() -> GameState {
             window: None,
             normal_attack_used: false,
             normal_retreat_used: false,
-            spell_played_this_turn: false,
+            spell_played_this_turn: PerPlayer::new(false, false),
         },
         stack: vec![],
         stack_segment_bases: vec![],
@@ -275,6 +275,7 @@ fn with_no_pending_and_no_window_only_the_active_player_may_act() {
 
 mod board_economy;
 mod broken_game;
+mod controller_stack_rules;
 mod damage_trace;
 mod demo;
 mod demo_triggers;

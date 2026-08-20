@@ -117,6 +117,23 @@ impl EffectSource {
             | EffectSource::Trigger { controller, .. } => controller,
         }
     }
+
+    #[must_use]
+    pub const fn position(self) -> Option<Position> {
+        match self {
+            EffectSource::Attack { position, .. }
+            | EffectSource::Skill { position, .. }
+            | EffectSource::Trigger { position, .. } => Some(position),
+            EffectSource::Spell { .. } => None,
+        }
+    }
+}
+
+/// How a positional effect chooses the object it acts on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EffectTarget {
+    Selected,
+    Source,
 }
 
 /// A semantic rule that can prevent one family of Damage adjustments.
@@ -211,6 +228,7 @@ pub enum EffectLeaf {
     DealDamage(DamageEffect),
     Heal {
         amount: u32,
+        target: EffectTarget,
     },
     MoveSummon,
     SwapPositions,
@@ -224,8 +242,12 @@ pub enum EffectLeaf {
         amount: u32,
     },
     ReturnSpellToDeckTop,
-    ProduceMana,
-    CannotBeMovedByOpponent,
+    ProduceMana {
+        target: EffectTarget,
+    },
+    CannotBeMovedByOpponent {
+        target: EffectTarget,
+    },
     /// Turn the targeted Summon Ready (rules §53: an effect may Ready an
     /// Exhausted Summon outside Upkeep, letting it activate another Skill).
     /// Not part of the design document's first leaf set; added for the
@@ -297,6 +319,53 @@ mod tests {
             TriggerEvent::AnySummonDestroyed,
         ];
         assert_eq!(events.len(), 6);
+    }
+
+    #[test]
+    fn effect_source_position_is_present_only_for_battlefield_sources() {
+        let ability = fixtures::skill_id("quarry-scout");
+        let card = fixtures::id("renewing-balm");
+        assert_eq!(
+            EffectSource::Skill {
+                controller: PlayerId::One,
+                position: Position::Main,
+                ability,
+            }
+            .position(),
+            Some(Position::Main)
+        );
+        assert_eq!(
+            EffectSource::Attack {
+                controller: PlayerId::One,
+                position: Position::Main,
+                ability,
+            }
+            .position(),
+            Some(Position::Main)
+        );
+        assert_eq!(
+            EffectSource::Trigger {
+                controller: PlayerId::One,
+                position: Position::Main,
+                ability,
+            }
+            .position(),
+            Some(Position::Main)
+        );
+        assert_eq!(
+            EffectSource::Spell {
+                controller: PlayerId::One,
+                card: CardInstanceId(1),
+                definition: card,
+            }
+            .position(),
+            None
+        );
+    }
+
+    #[test]
+    fn effect_target_variants_construct() {
+        assert_eq!([EffectTarget::Selected, EffectTarget::Source].len(), 2);
     }
 
     #[test]
@@ -399,7 +468,10 @@ mod tests {
                     amount: 20,
                 }],
             }),
-            EffectLeaf::Heal { amount: 10 },
+            EffectLeaf::Heal {
+                amount: 10,
+                target: EffectTarget::Selected,
+            },
             EffectLeaf::MoveSummon,
             EffectLeaf::SwapPositions,
             EffectLeaf::BlockResponses {
@@ -410,8 +482,12 @@ mod tests {
             EffectLeaf::LookAtPrizes,
             EffectLeaf::DrawCards { amount: 1 },
             EffectLeaf::ReturnSpellToDeckTop,
-            EffectLeaf::ProduceMana,
-            EffectLeaf::CannotBeMovedByOpponent,
+            EffectLeaf::ProduceMana {
+                target: EffectTarget::Selected,
+            },
+            EffectLeaf::CannotBeMovedByOpponent {
+                target: EffectTarget::Selected,
+            },
             EffectLeaf::ReadySummon,
             EffectLeaf::SwapOpposingPositions,
         ];

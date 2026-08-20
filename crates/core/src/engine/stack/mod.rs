@@ -120,7 +120,7 @@ pub(crate) fn declare_attack(
 /// like `declare_attack` pays an Attack's cost, pushes the card onto the
 /// Stack, opens the same Priority window `declare_attack` and
 /// `engine::turn::end_turn` already open (rules §32), and marks the turn's
-/// Spell flag.
+/// per-player Spell history.
 pub(crate) fn cast_spell(
     state: &GameState,
     player: PlayerId,
@@ -183,7 +183,7 @@ pub(crate) fn cast_spell(
 
     let mut next = state.clone();
     next.turn.window = Some(window_after_play(player));
-    next.turn.spell_played_this_turn = true;
+    *next.turn.spell_played_this_turn.get_mut(player) = true;
     next.stack.push(StackItem::Spell {
         caster: player,
         card: card_ref,
@@ -214,15 +214,23 @@ pub(crate) fn cast_spell(
     })
 }
 
-/// Whether the open Attack at the top of the Stack currently blocks Attack
+/// Whether the nearest Attack in the current Stack segment blocks Attack
 /// Spell responses (rules §32–33, the Griefsinger's Attack). Reads the
 /// attacker's printed Attack effects fresh, the same way
 /// `engine::resolution::resolve_attack` re-reads them at resolution time,
 /// rather than trusting anything cached on the `StackItem::Attack` itself.
-/// Anything other than an open Attack on top — no Stack item, or the top
-/// item is a Spell or a Trigger — never blocks.
+/// Support Spells above that Attack do not hide it. An Attack below the
+/// current segment base is outside this response window and cannot block.
 fn attack_responses_blocked(state: &GameState) -> bool {
-    let Some(StackItem::Attack { attacker, target }) = state.stack.last() else {
+    let base = state.stack_segment_bases.last().copied().unwrap_or(0);
+    let Some(StackItem::Attack { attacker, target }) = state
+        .stack
+        .get(base..)
+        .unwrap_or(&[])
+        .iter()
+        .rev()
+        .find(|item| matches!(item, StackItem::Attack { .. }))
+    else {
         return false;
     };
     let attacker_state = state.players.get(*attacker);

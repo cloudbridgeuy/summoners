@@ -82,7 +82,9 @@ for that choice when it is. The second player's one-use Coin converts to one
 Mana of a Type their board already produces, and is then removed from the
 game (rules §7). Paying a cost spends typed components from their matching
 pool first; a Generic component is paid from a named pool or, without one,
-from the largest remaining pool (rules §11–12, §50).
+from the largest remaining pool (rules §11–12, §50). Mana produced by an
+effect belongs to that effect's controller, even when another player is
+active, and a required Mana Type choice remains assigned to that controller.
 
 #### Scenario: A dual-type board pauses for a Mana Type choice
 
@@ -95,6 +97,12 @@ from the largest remaining pool (rules §11–12, §50).
 - **WHEN** the second player converts their Coin for a Type their board
   produces
 - **THEN** the Coin leaves the game, and converting again is rejected
+
+#### Scenario: A non-active player's effect produces Mana
+
+- **WHEN** a Trigger controlled by the non-active player produces Mana
+- **THEN** the Mana is banked for that Trigger's controller, and any Mana
+  Type choice waits for that same player
 
 ### Requirement: Playing, upgrading, and retreating Summons
 
@@ -150,7 +158,10 @@ cost, puts the card on the Stack, and opens a Priority window. A resolved
 Spell moves to its caster's discard pile; a resolved Enchantment instead
 remains in play until something removes it (rules §44, §56). A card's own
 printed Attack effect can block Attack Spell responses to it under a stated
-condition.
+condition. Each player has independent Spell-play history for the current
+turn. A response block reads the nearest unresolved Attack in the current
+Stack segment, even when Support Spells sit above it, and never reads an
+outer or completed Attack.
 
 #### Scenario: A Support Spell heals through the Stack
 
@@ -164,6 +175,12 @@ condition.
 - **WHEN** an Enchantment resolves
 - **THEN** it stays in play rather than discarding, and it is still in play
   after a full turn hands off to the opponent
+
+#### Scenario: Spell history and response blocks stay local
+
+- **WHEN** one player casts a Support Spell above a protected Attack
+- **THEN** only that caster's Spell-play condition becomes true, and the
+  protected Attack remains visible within its current Stack segment
 
 ### Requirement: Source-aware Damage resolution
 
@@ -210,7 +227,9 @@ A reduction cannot make the running total less than zero.
 Activating a Skill requires the Summon to be Ready. Activation checks
 Readiness, pays the cost, exhausts the Summon, then resolves the Skill's
 effect, always in that order (rules §15). No currently printed Skill uses the
-Stack, so every Skill resolves immediately (rules §43).
+Stack, so every Skill resolves immediately (rules §43). An effect authored
+to act on its source uses the activating or triggering Summon's position and
+cannot be redirected through an action's selected target.
 
 #### Scenario: Exhaustion happens before the Skill's effect
 
@@ -225,6 +244,12 @@ Stack, so every Skill resolves immediately (rules §43).
 - **THEN** an opposing Skill that would move it is rejected for the whole of
   the opponent's next turn, and becomes legal again only once the
   controller's following turn begins
+
+#### Scenario: A self effect ignores a redirected selected target
+
+- **WHEN** a source-targeted heal and movement protection resolves with a
+  different friendly Summon in the selected-target list
+- **THEN** both effects apply to the source Summon
 
 ### Requirement: Triggered abilities
 
@@ -281,7 +306,10 @@ The game ends the moment any losing condition is met: a third Main loss, no
 Bench Summon available to promote into an empty Main, or an attempted draw
 from an empty Deck (rules §2, §10, §24, §58). A third Main loss ends the game
 even if another losing condition is pending at the very same moment, and once
-the game has ended every later action is rejected.
+the game has ended every later action is rejected. When an effect requires
+more cards than remain in the Deck, the player draws every available card in
+order, then loses before any later effect leaf resolves. Drawing exactly the
+final available card succeeds and does not cause an early loss.
 
 #### Scenario: A third Main loss ends the game outright
 
@@ -295,6 +323,17 @@ the game has ended every later action is rejected.
 - **WHEN** a player must draw from an empty Deck during Upkeep
 - **THEN** the game ends immediately, and that Upkeep's Mana production never
   runs
+
+#### Scenario: A required multi-card effect draw cannot complete
+
+- **WHEN** an effect requires more cards than remain in the player's Deck
+- **THEN** every available card is drawn and reported first, the player then
+  loses for draw failure, and no later effect leaf resolves
+
+#### Scenario: A required draw takes the final available card
+
+- **WHEN** an effect requires exactly the number of cards left in the Deck
+- **THEN** the draw succeeds and emptying the Deck alone does not end the game
 
 ## Sources
 
