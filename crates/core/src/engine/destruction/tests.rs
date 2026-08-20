@@ -176,7 +176,7 @@ fn state_with_life_less_main(player: PlayerId) -> GameState {
 }
 
 #[test]
-fn life_of_breaks_when_the_entitys_card_prints_no_life() {
+fn life_of_breaks_when_the_entity_card_prints_no_life() {
     let state = state_with_life_less_main(PlayerId::Two);
     let summon = state
         .players

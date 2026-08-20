@@ -367,7 +367,7 @@ fn activate_skill_pays_a_nonzero_cost_before_skill_activated_and_the_move_leaf_e
 }
 
 #[test]
-fn activate_skill_with_a_free_cost_skips_mana_deducted_and_emits_the_leafs_event() {
+fn activate_skill_with_a_free_cost_skips_mana_deducted_and_emits_the_leaves_event() {
     let state = base_state("quarry-well-tender", Readiness::Ready);
 
     let outcome = activate_skill(
