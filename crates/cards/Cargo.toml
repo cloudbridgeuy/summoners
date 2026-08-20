@@ -1,0 +1,20 @@
+[package]
+name = "summoners_cards"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+repository.workspace = true
+description = "Strict authored card documents for Summoners."
+
+[dependencies]
+serde.workspace = true
+serde_path_to_error.workspace = true
+summoners_core = { path = "../core" }
+toml.workspace = true
+uuid.workspace = true
+
+[lints]
+workspace = true
