@@ -1,6 +1,6 @@
 #![allow(clippy::expect_used)]
 
-use std::{collections::BTreeMap, sync::Arc};
+use std::sync::Arc;
 
 use summoners_cards::{
     CardLibrary, DeckLoadCause, DocumentKind, LibraryError, LoadPhase, built_in_catalog,
@@ -395,6 +395,8 @@ fn built_in_catalog_has_exact_recipes_and_shared_allocations() {
     let expected = [
         (
             first.set_paths(),
+            "set-paths",
+            "Set Paths",
             "foundations/warden-initiate",
             [
                 "foundations/warden-pathkeeper",
@@ -411,6 +413,8 @@ fn built_in_catalog_has_exact_recipes_and_shared_allocations() {
         ),
         (
             first.barrow_herd(),
+            "barrow-herd",
+            "Barrow Herd",
             "foundations/sow-piglet",
             [
                 "foundations/sow-matriarch",
@@ -427,31 +431,19 @@ fn built_in_catalog_has_exact_recipes_and_shared_allocations() {
         ),
     ];
 
-    for (deck, starter, keys) in expected {
+    for (deck, id, name, starter, keys) in expected {
+        assert_eq!(deck.id(), id);
+        assert_eq!(deck.name(), name);
         assert_eq!(
             deck.starter(),
             first.library().card_id(starter).expect("Starter exists")
         );
-        let counts = deck
-            .body()
-            .iter()
-            .copied()
-            .fold(BTreeMap::new(), |mut counts, id| {
-                *counts.entry(format!("{id:?}")).or_insert(0) += 1;
-                counts
-            });
-        assert_eq!(deck.body().len(), 20);
-        assert_eq!(counts.len(), 10);
-        assert!(counts.values().all(|count| *count == 2));
-        for key in keys {
-            let id = first.library().card_id(key).expect("recipe card exists");
-            assert_eq!(
-                deck.body()
-                    .iter()
-                    .filter(|candidate| **candidate == id)
-                    .count(),
-                2
-            );
-        }
+        let expected_body: Vec<_> = keys
+            .into_iter()
+            .flat_map(|key| {
+                std::iter::repeat_n(first.library().card_id(key).expect("recipe card exists"), 2)
+            })
+            .collect();
+        assert_eq!(deck.body(), expected_body);
     }
 }

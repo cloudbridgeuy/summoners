@@ -183,7 +183,31 @@ mod tests {
     }
 
     #[test]
-    fn duplicate_id_check_includes_retained_ability_ids() {
+    fn from_sets_rejects_a_card_id_collision() {
+        let first = foundations();
+        let mut second = first.clone();
+        second.code = "other-foundations".to_string();
+        second.id =
+            EntityId::parse("eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee").expect("test Set id is valid");
+
+        let error =
+            CardLibrary::from_sets([first, second]).expect_err("a card definition id repeats");
+        let LibraryError::DuplicateId {
+            first_key,
+            duplicate_key,
+            ..
+        } = error
+        else {
+            panic!("expected duplicate id");
+        };
+        assert!(first_key.contains('/'));
+        assert!(!first_key.contains('#'));
+        assert!(duplicate_key.starts_with("other-foundations/"));
+        assert!(!duplicate_key.contains('#'));
+    }
+
+    #[test]
+    fn from_sets_rejects_a_retained_ability_id_collision() {
         let first = foundations();
         let mut second = first.clone();
         second.code = "other-foundations".to_string();
@@ -192,7 +216,7 @@ mod tests {
         second.cards = CardSet::new(vec![]);
         second.card_ids.clear();
 
-        let error = reject_duplicate_ids(&[first, second]).expect_err("an ability id repeats");
+        let error = CardLibrary::from_sets([first, second]).expect_err("an ability id repeats");
         let LibraryError::DuplicateId {
             first_key,
             duplicate_key,
