@@ -614,7 +614,7 @@ mod tests {
 
     #[test]
     fn pending_input_variants_construct() {
-        let pendings = [
+        let pending_inputs = [
             PendingInput::ManaProduction {
                 player: PlayerId::One,
                 source: ManaSource::Player,
@@ -626,7 +626,7 @@ mod tests {
                 chooser: PlayerId::One,
             },
         ];
-        assert_eq!(pendings.len(), 3);
+        assert_eq!(pending_inputs.len(), 3);
     }
 
     #[test]
