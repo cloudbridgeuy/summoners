@@ -6,7 +6,7 @@ use summoners_cards::built_in_catalog;
 use summoners_core::{
     domain::{
         actions::GameAction,
-        cards::{Attack, DamageConstraints, Skill, TriggerEvent},
+        cards::{Attack, DamageConstraints, Skill, Trigger, TriggerEvent},
         events::{
             BattlefieldTarget, DamageContext, DamageOperation, DamageOrigin, DamageSource,
             DamageStage, GameEvent,
@@ -31,6 +31,8 @@ fn g1_economy_and_development_reaches_no_promotion_loss_through_public_actions()
     let set_paths_starter = physical.one("foundations/warden-initiate");
     let set_paths = physical.deck(catalog.set_paths());
     let barrow_herd = physical.deck(catalog.barrow_herd());
+    assert_eq!(barrow_starter.def, catalog.barrow_herd().starter());
+    assert_eq!(set_paths_starter.def, catalog.set_paths().starter());
 
     // Use the physical cards expanded from the real Deck recipes. Their
     // positions follow each Deck document's authored order.
@@ -616,6 +618,18 @@ fn g1_economy_and_development_reaches_no_promotion_loss_through_public_actions()
     assert!(upgraded_main.upgraded_this_turn);
     assert!(!upgraded_main.ready);
 
+    let tender_leave_bench_trigger = upgraded
+        .state
+        .cards
+        .get(well_tender.def)
+        .and_then(|entity| entity.get::<Trigger>())
+        .expect("the real Well-Tender prints one Trigger");
+    assert_eq!(
+        tender_leave_bench_trigger.get::<TriggerEvent>(),
+        Some(&TriggerEvent::LeavesBench)
+    );
+    let tender_leave_bench_trigger_id = tender_leave_bench_trigger.id;
+
     let retreated = apply(
         &upgraded.state,
         &GameAction::Retreat {
@@ -625,19 +639,6 @@ fn g1_economy_and_development_reaches_no_promotion_loss_through_public_actions()
         },
     )
     .expect("the bank covers Warden Pathkeeper's normal Retreat");
-    let tender_trigger = retreated
-        .events
-        .iter()
-        .find_map(|event| match event {
-            GameEvent::TriggerFired {
-                controller: PlayerId::Two,
-                position: Position::Main,
-                event: TriggerEvent::LeavesBench,
-                ability,
-            } => Some(*ability),
-            _ => None,
-        })
-        .expect("the real Well-Tender fires after it leaves the Bench");
     assert_eq!(
         retreated.events,
         vec![
@@ -654,7 +655,7 @@ fn g1_economy_and_development_reaches_no_promotion_loss_through_public_actions()
                 controller: PlayerId::Two,
                 position: Position::Main,
                 event: TriggerEvent::LeavesBench,
-                ability: tender_trigger,
+                ability: tender_leave_bench_trigger_id,
             },
         ]
     );
