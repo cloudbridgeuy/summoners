@@ -405,6 +405,10 @@ fn reject_duplicate_id(
 }
 
 #[cfg(test)]
+#[path = "convert/coverage_tests.rs"]
+mod coverage_tests;
+
+#[cfg(test)]
 mod tests {
     #![allow(clippy::expect_used)]
 

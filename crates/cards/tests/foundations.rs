@@ -12,6 +12,12 @@ use summoners_core::domain::{
 
 const FOUNDATIONS: &[u8] = include_bytes!("../data/foundations.toml");
 
+#[path = "foundations/contract.rs"]
+mod contract;
+
+#[path = "foundations/negative_cases.rs"]
+mod negative_cases;
+
 struct ExpectedSummon {
     code: &'static str,
     name: &'static str,

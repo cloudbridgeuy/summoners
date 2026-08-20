@@ -830,6 +830,18 @@ fn semantic_error(path: impl Into<String>, cause: SetLoadCause) -> SetLoadError 
 }
 
 #[cfg(test)]
+#[path = "model/coverage_tests.rs"]
+mod coverage_tests;
+
+#[cfg(test)]
+#[path = "model/modifier_coverage_tests.rs"]
+mod modifier_coverage_tests;
+
+#[cfg(test)]
+#[path = "model/card_ability_branch_tests.rs"]
+mod card_ability_branch_tests;
+
+#[cfg(test)]
 mod tests {
     #![allow(clippy::expect_used, clippy::unwrap_used)]
 
