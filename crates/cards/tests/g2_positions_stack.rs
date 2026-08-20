@@ -6,7 +6,9 @@ use summoners_cards::{CardLibrary, built_in_catalog};
 use summoners_core::{
     domain::{
         actions::GameAction,
-        cards::{Attack, DamageConstraint, DamageConstraints, EntityId, Skill, TriggerEvent},
+        cards::{
+            Attack, DamageConstraint, DamageConstraints, EntityId, Skill, Trigger, TriggerEvent,
+        },
         errors::ActionError,
         events::{
             BattlefieldTarget, DamageContext, DamageOperation, DamageOrigin, DamageSource,
@@ -29,8 +31,13 @@ struct G2 {
     warden_skill: EntityId,
     guard_skill: EntityId,
     sow_skill: EntityId,
+    grazer_trigger: EntityId,
+    hearth_trigger: EntityId,
+    guard_trigger: EntityId,
+    tender_trigger: EntityId,
     adept_attack: EntityId,
     sow_attack: EntityId,
+    tender_attack: EntityId,
     one_ember: CardRef,
     one_scrying: CardRef,
     one_wards: [CardRef; 2],
@@ -84,6 +91,17 @@ fn attack_id(cards: &GameState, definition: EntityId) -> EntityId {
         .get::<Attack>()
         .expect("Summon must print an Attack")
         .id
+}
+
+fn only_trigger(cards: &GameState, definition: EntityId) -> EntityId {
+    let entity = cards.cards.get(definition).expect("card must exist");
+    let triggers = entity.all::<Trigger>();
+    assert_eq!(
+        triggers.len(),
+        1,
+        "the selected printed card has one Trigger"
+    );
+    triggers[0].id
 }
 
 fn seeded_g2() -> G2 {
@@ -162,14 +180,22 @@ fn seeded_g2() -> G2 {
     let warden = one_card(&state, "foundations/warden-of-set-paths", library);
     let guard = one_card(&state, "foundations/quarry-warden-guard", library);
     let adept = one_card(&state, "foundations/set-path-adept", library);
+    let tender = one_card(&state, "foundations/quarry-well-tender", library);
     let sow = one_card(&state, "foundations/old-sow-of-the-barrow", library);
+    let grazer = one_card(&state, "foundations/barrow-grazer", library);
+    let hearth = one_card(&state, "foundations/hearth-warden", library);
 
     G2 {
         warden_skill: only_skill(&state, warden),
         guard_skill: only_skill(&state, guard),
         sow_skill: only_skill(&state, sow),
+        grazer_trigger: only_trigger(&state, grazer),
+        hearth_trigger: only_trigger(&state, hearth),
+        guard_trigger: only_trigger(&state, guard),
+        tender_trigger: only_trigger(&state, tender),
         adept_attack: attack_id(&state, adept),
         sow_attack: attack_id(&state, sow),
+        tender_attack: attack_id(&state, tender),
         state,
         one_ember,
         one_scrying,
@@ -288,20 +314,7 @@ fn g2_positions_and_stack_follow_one_public_action_path() {
                 controller: PlayerId::Two,
                 position: Position::Bench(BenchSlot::First),
                 event: TriggerEvent::EntersBench,
-                ability: g2
-                    .state
-                    .cards
-                    .get(
-                        g2.state.players.two.bench[0]
-                            .as_ref()
-                            .expect("grazer")
-                            .chain
-                            .top()
-                            .def
-                    )
-                    .expect("grazer definition")
-                    .all::<summoners_core::domain::cards::Trigger>()[0]
-                    .id,
+                ability: g2.grazer_trigger,
             },
             GameEvent::Healed {
                 position: Position::Bench(BenchSlot::First),
@@ -311,23 +324,7 @@ fn g2_positions_and_stack_follow_one_public_action_path() {
                 controller: PlayerId::Two,
                 position: Position::Main,
                 event: TriggerEvent::EntersMain,
-                ability: g2
-                    .state
-                    .cards
-                    .get(
-                        g2.state
-                            .players
-                            .two
-                            .main
-                            .as_ref()
-                            .expect("hearth")
-                            .chain
-                            .top()
-                            .def
-                    )
-                    .expect("hearth definition")
-                    .all::<summoners_core::domain::cards::Trigger>()[0]
-                    .id,
+                ability: g2.hearth_trigger,
             },
             GameEvent::Healed {
                 position: Position::Main,
@@ -550,21 +547,21 @@ fn g2_positions_and_stack_follow_one_public_action_path() {
             mana_hint: Some(ManaType::Spirit),
         },
     );
-    assert!(matches!(
-        retreat.first(),
-        Some(GameEvent::ManaDeducted {
-            player: PlayerId::Two,
-            mana_type: ManaType::Spirit,
-            amount: 2,
-        })
-    ));
-    assert!(matches!(
-        retreat.get(1),
-        Some(GameEvent::SummonsSwapped {
-            player: PlayerId::Two,
-            main: BenchSlot::Second,
-        })
-    ));
+    assert_eq!(
+        retreat,
+        vec![
+            GameEvent::ManaDeducted {
+                player: PlayerId::Two,
+                mana_type: ManaType::Spirit,
+                amount: 2,
+            },
+            GameEvent::SummonsSwapped {
+                player: PlayerId::Two,
+                main: BenchSlot::Second,
+            },
+        ],
+        "the Warden adds exactly one to Hearth Warden's printed Retreat"
+    );
 
     let sow_skill = step(
         &mut g2.state,
@@ -576,10 +573,31 @@ fn g2_positions_and_stack_follow_one_public_action_path() {
             mana_hint: None,
         },
     );
-    assert!(sow_skill.contains(&GameEvent::Healed {
-        position: Position::Main,
-        amount: 30,
-    }));
+    assert_eq!(
+        sow_skill,
+        vec![
+            GameEvent::ManaDeducted {
+                player: PlayerId::Two,
+                mana_type: ManaType::Matter,
+                amount: 1,
+            },
+            GameEvent::ManaDeducted {
+                player: PlayerId::Two,
+                mana_type: ManaType::Spirit,
+                amount: 1,
+            },
+            GameEvent::SkillActivated {
+                player: PlayerId::Two,
+                position: Position::Main,
+                ability: g2.sow_skill,
+            },
+            GameEvent::Healed {
+                position: Position::Main,
+                amount: 30,
+            },
+        ],
+        "the source-bound protection is applied without an extra event"
+    );
     assert!(
         g2.state
             .players
@@ -683,7 +701,7 @@ fn g2_positions_and_stack_follow_one_public_action_path() {
         "movement protection rejects without change"
     );
 
-    step(
+    let guard_to_main = step(
         &mut g2.state,
         GameAction::ActivateSkill {
             player: PlayerId::One,
@@ -693,6 +711,20 @@ fn g2_positions_and_stack_follow_one_public_action_path() {
             mana_hint: None,
         },
     );
+    assert_eq!(
+        guard_to_main,
+        vec![
+            GameEvent::SkillActivated {
+                player: PlayerId::One,
+                position: Position::Bench(BenchSlot::First),
+                ability: g2.guard_skill,
+            },
+            GameEvent::SummonsSwapped {
+                player: PlayerId::One,
+                main: BenchSlot::First,
+            },
+        ]
+    );
     let moved_own = step(
         &mut g2.state,
         GameAction::Retreat {
@@ -701,24 +733,37 @@ fn g2_positions_and_stack_follow_one_public_action_path() {
             mana_hint: Some(ManaType::Matter),
         },
     );
-    assert!(moved_own.iter().any(|event| matches!(
-        event,
-        GameEvent::TriggerFired {
-            controller: PlayerId::One,
-            position: Position::Bench(BenchSlot::Third),
-            event: TriggerEvent::LeavesMain,
-            ..
-        }
-    )));
-    assert!(moved_own.iter().any(|event| matches!(
-        event,
-        GameEvent::TriggerFired {
-            controller: PlayerId::One,
-            position: Position::Main,
-            event: TriggerEvent::LeavesBench,
-            ..
-        }
-    )));
+    assert_eq!(
+        moved_own,
+        vec![
+            GameEvent::ManaDeducted {
+                player: PlayerId::One,
+                mana_type: ManaType::Matter,
+                amount: 1,
+            },
+            GameEvent::SummonsSwapped {
+                player: PlayerId::One,
+                main: BenchSlot::Third,
+            },
+            GameEvent::TriggerFired {
+                controller: PlayerId::One,
+                position: Position::Bench(BenchSlot::Third),
+                event: TriggerEvent::LeavesMain,
+                ability: g2.guard_trigger,
+            },
+            GameEvent::Healed {
+                position: Position::Bench(BenchSlot::Third),
+                amount: 10,
+            },
+            GameEvent::TriggerFired {
+                controller: PlayerId::One,
+                position: Position::Main,
+                event: TriggerEvent::LeavesBench,
+                ability: g2.tender_trigger,
+            },
+        ],
+        "movement triggers fire once, immediately, and in printed order"
+    );
     assert!(
         g2.state.pending.is_some(),
         "dual-type Tender requests its Mana type"
@@ -765,13 +810,34 @@ fn g2_positions_and_stack_follow_one_public_action_path() {
             mana_hint: None,
         },
     );
-    assert!(after_expiry.contains(&GameEvent::SummonsSwapped {
-        player: PlayerId::Two,
-        main: BenchSlot::First,
-    }));
+    assert_eq!(
+        after_expiry,
+        vec![
+            GameEvent::ManaDeducted {
+                player: PlayerId::One,
+                mana_type: ManaType::Matter,
+                amount: 1,
+            },
+            GameEvent::ManaDeducted {
+                player: PlayerId::One,
+                mana_type: ManaType::Mind,
+                amount: 1,
+            },
+            GameEvent::SkillActivated {
+                player: PlayerId::One,
+                position: Position::Bench(BenchSlot::First),
+                ability: g2.warden_skill,
+            },
+            GameEvent::SummonsSwapped {
+                player: PlayerId::Two,
+                main: BenchSlot::First,
+            },
+        ],
+        "the same Warden move resolves exactly once after protection expires"
+    );
 
     assert_eq!(g2.state.turn.phase, Phase::Main);
-    step(
+    let declared = step(
         &mut g2.state,
         GameAction::DeclareAttack {
             player: PlayerId::One,
@@ -779,17 +845,81 @@ fn g2_positions_and_stack_follow_one_public_action_path() {
             mana_hint: None,
         },
     );
-    pass(&mut g2.state, PlayerId::Two);
+    assert_eq!(
+        declared,
+        vec![GameEvent::AttackDeclared {
+            player: PlayerId::One,
+            target: Position::Main,
+        }]
+    );
+    assert_eq!(
+        pass(&mut g2.state, PlayerId::Two),
+        vec![GameEvent::PriorityPassed {
+            player: PlayerId::Two,
+        }]
+    );
     let final_combat = pass(&mut g2.state, PlayerId::One);
-    assert!(final_combat.iter().any(|event| matches!(
-        event,
-        GameEvent::StackItemResolved {
-            item: StackItem::Attack {
-                attacker: PlayerId::One,
-                target: Position::Main,
+    let tender_context = DamageContext {
+        source: DamageSource::Attack {
+            controller: PlayerId::One,
+            position: Position::Main,
+            ability: g2.tender_attack,
+        },
+        target: BattlefieldTarget {
+            controller: PlayerId::Two,
+            position: Position::Main,
+        },
+    };
+    assert_eq!(
+        final_combat,
+        vec![
+            GameEvent::PriorityPassed {
+                player: PlayerId::One,
             },
-        }
-    )));
+            GameEvent::StackItemResolved {
+                item: StackItem::Attack {
+                    attacker: PlayerId::One,
+                    target: Position::Main,
+                },
+            },
+            GameEvent::DamageCalculationStarted {
+                context: tender_context,
+                base: 10,
+                constraints: DamageConstraints::new(),
+            },
+            GameEvent::DamageAdjustmentApplied {
+                context: tender_context,
+                stage: DamageStage::PersistentReduction,
+                operation: DamageOperation::Reduce(10),
+                origin: DamageOrigin::PersistentCard(g2.two_wards[1].instance),
+                input: 10,
+                output: 0,
+            },
+            GameEvent::DamageAdjustmentApplied {
+                context: tender_context,
+                stage: DamageStage::PersistentReduction,
+                operation: DamageOperation::Reduce(10),
+                origin: DamageOrigin::PersistentCard(g2.two_wards[0].instance),
+                input: 0,
+                output: 0,
+            },
+            GameEvent::DamageAdjustmentApplied {
+                context: tender_context,
+                stage: DamageStage::Clamp,
+                operation: DamageOperation::ClampToZero,
+                origin: DamageOrigin::PrintedAbility(g2.tender_attack),
+                input: 0,
+                output: 0,
+            },
+            GameEvent::DamageApplied {
+                context: tender_context,
+                amount: 0,
+                before: 10,
+                after: 10,
+            },
+        ],
+        "final Combat has no missing, extra, reordered, or wrong-source event"
+    );
     assert_eq!(g2.state.turn.phase, Phase::Combat);
     assert!(g2.state.stack.is_empty());
     assert_eq!(
