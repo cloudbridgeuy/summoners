@@ -3,6 +3,7 @@
 
 mod error;
 mod document;
+mod identity;
 mod v1;
 
 use std::collections::BTreeMap;

@@ -41,6 +41,7 @@ pub enum SemanticRule {
     EffectTarget,
     EffectCombination,
     AmountMustBePositive,
+    ModifierAmountOutOfRange,
 }
 
 /// The typed reason a Set load failed.
@@ -75,6 +76,9 @@ pub enum SetLoadCause {
     DuplicateGeneratedId {
         id: String,
         first_path: String,
+    },
+    GeneratedIdRejected {
+        id: String,
     },
     MissingRequiredField {
         field: &'static str,
