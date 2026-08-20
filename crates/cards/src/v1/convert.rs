@@ -3,8 +3,8 @@ use std::collections::{BTreeMap, HashMap};
 use summoners_core::domain::{
     cards::{
         CardSet, Component, Cost, DamageAddition, DamageConstraint, DamageConstraints,
-        DamageEffect, EffectCondition, EffectLeaf, Entity, EntityId, Form, Life, ManaTypes,
-        Modifier, Name, ResponseBlock, RetreatCost, SpellTiming, Tags, TriggerEvent,
+        DamageEffect, EffectCondition, EffectLeaf, EffectTarget, Entity, EntityId, Form, Life,
+        ManaTypes, Modifier, Name, ResponseBlock, RetreatCost, SpellTiming, Tags, TriggerEvent,
     },
     ids::ManaType,
 };
@@ -230,9 +230,7 @@ fn ability_components(
 }
 
 /// Convert selectors only after semantic parsing has paired them with a legal
-/// effect family. The current core leaf vocabulary infers these selectors
-/// from the resolving source and effect kind, so selector values do not yet
-/// appear in the constructed leaf.
+/// effect family and source context.
 fn convert_effect(effect: model::Effect) -> EffectLeaf {
     match effect {
         model::Effect::Damage {
@@ -257,12 +255,10 @@ fn convert_effect(effect: model::Effect) -> EffectLeaf {
                     .collect(),
             })
         }
-        model::Effect::Heal { target, amount } => {
-            match target {
-                model::OwnTarget::Source | model::OwnTarget::Selected => {}
-            }
-            EffectLeaf::Heal { amount }
-        }
+        model::Effect::Heal { target, amount } => EffectLeaf::Heal {
+            amount,
+            target: convert_own_target(target),
+        },
         model::Effect::MoveOwnBenchedToEmptyBench => EffectLeaf::MoveSummon,
         model::Effect::SwapPositions {
             side: model::SwapSide::Own,
@@ -278,14 +274,22 @@ fn convert_effect(effect: model::Effect) -> EffectLeaf {
         model::Effect::LookAtPrizes => EffectLeaf::LookAtPrizes,
         model::Effect::DrawCards { amount } => EffectLeaf::DrawCards { amount },
         model::Effect::ReturnSpellToDeckTop => EffectLeaf::ReturnSpellToDeckTop,
-        model::Effect::ProduceMana { target } => {
-            match target {
-                model::OwnTarget::Source | model::OwnTarget::Selected => {}
+        model::Effect::ProduceMana { target } => EffectLeaf::ProduceMana {
+            target: convert_own_target(target),
+        },
+        model::Effect::ProtectFromOpposingMovement { target } => {
+            EffectLeaf::CannotBeMovedByOpponent {
+                target: convert_own_target(target),
             }
-            EffectLeaf::ProduceMana
         }
-        model::Effect::ProtectSourceFromOpposingMovement => EffectLeaf::CannotBeMovedByOpponent,
         model::Effect::ReadyOwnSummon => EffectLeaf::ReadySummon,
+    }
+}
+
+fn convert_own_target(target: model::OwnTarget) -> EffectTarget {
+    match target {
+        model::OwnTarget::Source => EffectTarget::Source,
+        model::OwnTarget::Selected => EffectTarget::Selected,
     }
 }
 
@@ -469,6 +473,14 @@ base = 20
         assert_eq!(
             convert_damage_constraint(dto::DamageConstraint::Unpreventable),
             DamageConstraint::Unpreventable
+        );
+        assert_eq!(
+            convert_own_target(model::OwnTarget::Selected),
+            EffectTarget::Selected
+        );
+        assert_eq!(
+            convert_own_target(model::OwnTarget::Source),
+            EffectTarget::Source
         );
     }
 

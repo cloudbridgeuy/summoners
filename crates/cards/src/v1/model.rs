@@ -160,7 +160,9 @@ pub(crate) enum Effect {
     ProduceMana {
         target: OwnTarget,
     },
-    ProtectSourceFromOpposingMovement,
+    ProtectFromOpposingMovement {
+        target: OwnTarget,
+    },
     ReadyOwnSummon,
 }
 
@@ -465,6 +467,7 @@ fn parse_effect(
     context: EffectContext,
     path: &str,
 ) -> Result<Effect, SetLoadError> {
+    reject_source_without_position(&raw, context, path)?;
     match raw {
         dto::Effect::Damage {
             target,
@@ -608,7 +611,9 @@ fn parse_effect(
                 && target == dto::Target::Source
                 && duration == dto::Duration::UntilYourNextTurn =>
         {
-            Ok(Effect::ProtectSourceFromOpposingMovement)
+            Ok(Effect::ProtectFromOpposingMovement {
+                target: OwnTarget::Source,
+            })
         }
         dto::Effect::ReadySummon { target }
             if context == EffectContext::SupportSpell
@@ -617,6 +622,43 @@ fn parse_effect(
             Ok(Effect::ReadyOwnSummon)
         }
         _ => Err(rule_error(path, SemanticRule::EffectCombination)),
+    }
+}
+
+fn reject_source_without_position(
+    effect: &dto::Effect,
+    context: EffectContext,
+    path: &str,
+) -> Result<(), SetLoadError> {
+    if !matches!(
+        context,
+        EffectContext::AttackSpell | EffectContext::SupportSpell | EffectContext::Enchantment
+    ) {
+        return Ok(());
+    }
+
+    let target = match effect {
+        dto::Effect::Damage { target, .. }
+        | dto::Effect::Heal { target, .. }
+        | dto::Effect::MoveSummon { target, .. }
+        | dto::Effect::SwapPositions { target }
+        | dto::Effect::ProduceMana { target }
+        | dto::Effect::CannotBeMovedByOpponent { target, .. }
+        | dto::Effect::ReadySummon { target } => Some(*target),
+        dto::Effect::BlockResponses { .. }
+        | dto::Effect::ReturnSpellFromDiscard
+        | dto::Effect::LookAtPrizes
+        | dto::Effect::DrawCards { .. }
+        | dto::Effect::ReturnSpellToDeckTop => None,
+    };
+
+    if target == Some(dto::Target::Source) {
+        Err(rule_error(
+            format!("{path}.target"),
+            SemanticRule::EffectTarget,
+        ))
+    } else {
+        Ok(())
     }
 }
 
@@ -899,6 +941,29 @@ base = 10
                 rule: SemanticRule::EffectTarget,
             }
         );
+    }
+
+    #[test]
+    fn spell_and_enchantment_effects_reject_source_selectors() {
+        let effect = dto::Effect::Heal {
+            target: dto::Target::Source,
+            amount: 10,
+        };
+        for context in [
+            EffectContext::AttackSpell,
+            EffectContext::SupportSpell,
+            EffectContext::Enchantment,
+        ] {
+            let error = reject_source_without_position(&effect, context, "cards[0].effects[0]")
+                .unwrap_err();
+            assert_eq!(error.path, "cards[0].effects[0].target");
+            assert_eq!(
+                error.cause,
+                SetLoadCause::InvalidSemantics {
+                    rule: SemanticRule::EffectTarget,
+                }
+            );
+        }
     }
 
     #[test]

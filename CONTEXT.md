@@ -70,6 +70,14 @@ document order do not determine them.
 - **THEN** parsing fails before caller-visible core conversion with a typed
   phase, schema version when known, stable path, and cause
 
+#### Scenario: A positional effect keeps its authored selector
+
+- **WHEN** a Set effect selects an own Summon or refers to its battlefield
+  source
+- **THEN** its core effect leaf keeps the matching Selected or Source target
+- **AND** a Spell or Enchantment cannot use Source because it has no
+  battlefield position
+
 ### Requirement: Turn structure and phase order
 
 A turn moves through Upkeep, Main Phase, and Combat, and phases only move

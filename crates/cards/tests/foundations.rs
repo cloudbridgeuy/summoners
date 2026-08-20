@@ -3,9 +3,9 @@
 use summoners_cards::{LoadPhase, SemanticRule, SetLoadCause, StableKeyKind, parse_set};
 use summoners_core::domain::{
     cards::{
-        Attack, Cost, DamageConstraint, EffectCondition, EffectLeaf, Form, Life, ManaTypes,
-        Modifier, Name, Persistent, Respondable, RetreatCost, Skill, SpellTiming, Tags, Trigger,
-        TriggerEvent,
+        Attack, Cost, DamageConstraint, EffectCondition, EffectLeaf, EffectTarget, Form, Life,
+        ManaTypes, Modifier, Name, Persistent, Respondable, RetreatCost, Skill, SpellTiming, Tags,
+        Trigger, TriggerEvent,
     },
     ids::ManaType,
 };
@@ -255,7 +255,10 @@ fn real_set_preserves_the_approved_spell_and_enchantment_semantics() {
     let balm = card(&loaded, "renewing-balm");
     assert!(matches!(
         balm.get::<EffectLeaf>(),
-        Some(EffectLeaf::Heal { amount: 20 })
+        Some(EffectLeaf::Heal {
+            amount: 20,
+            target: EffectTarget::Selected,
+        })
     ));
 
     let ward = card(&loaded, "standing-ward");
@@ -267,7 +270,10 @@ fn real_set_preserves_the_approved_spell_and_enchantment_semantics() {
     );
     assert!(matches!(
         ward.get::<EffectLeaf>(),
-        Some(EffectLeaf::Heal { amount: 10 })
+        Some(EffectLeaf::Heal {
+            amount: 10,
+            target: EffectTarget::Selected,
+        })
     ));
     assert_eq!(
         ward.get::<Modifier>(),
@@ -317,10 +323,32 @@ fn real_set_preserves_complex_ability_semantics_and_response_modes() {
     assert!(matches!(
         skill_effects.as_slice(),
         [
-            EffectLeaf::Heal { amount: 30 },
-            EffectLeaf::CannotBeMovedByOpponent
+            EffectLeaf::Heal {
+                amount: 30,
+                target: EffectTarget::Source,
+            },
+            EffectLeaf::CannotBeMovedByOpponent {
+                target: EffectTarget::Source,
+            }
         ]
     ));
+
+    assert_eq!(
+        card(&loaded, "quarry-well-tender").all::<Skill>()[0].get::<EffectLeaf>(),
+        Some(&EffectLeaf::ProduceMana {
+            target: EffectTarget::Selected,
+        })
+    );
+    assert_trigger(
+        &loaded,
+        "old-sow-of-the-barrow",
+        TriggerEvent::YourUpkeep,
+        false,
+        &EffectLeaf::Heal {
+            amount: 10,
+            target: EffectTarget::Source,
+        },
+    );
     let EffectLeaf::DealDamage(damage) = old_sow.all::<Attack>()[0]
         .get::<EffectLeaf>()
         .expect("Old Sow Damage")
@@ -335,35 +363,49 @@ fn real_set_preserves_complex_ability_semantics_and_response_modes() {
         "quarry-warden-guard",
         TriggerEvent::LeavesMain,
         false,
-        &EffectLeaf::Heal { amount: 10 },
+        &EffectLeaf::Heal {
+            amount: 10,
+            target: EffectTarget::Source,
+        },
     );
     assert_trigger(
         &loaded,
         "quarry-well-tender",
         TriggerEvent::LeavesBench,
         false,
-        &EffectLeaf::ProduceMana,
+        &EffectLeaf::ProduceMana {
+            target: EffectTarget::Source,
+        },
     );
     assert_trigger(
         &loaded,
         "hearth-warden",
         TriggerEvent::EntersMain,
         false,
-        &EffectLeaf::Heal { amount: 15 },
+        &EffectLeaf::Heal {
+            amount: 15,
+            target: EffectTarget::Source,
+        },
     );
     assert_trigger(
         &loaded,
         "dawn-tender",
         TriggerEvent::YourUpkeep,
         false,
-        &EffectLeaf::Heal { amount: 10 },
+        &EffectLeaf::Heal {
+            amount: 10,
+            target: EffectTarget::Source,
+        },
     );
     assert_trigger(
         &loaded,
         "barrow-grazer",
         TriggerEvent::EntersBench,
         false,
-        &EffectLeaf::Heal { amount: 10 },
+        &EffectLeaf::Heal {
+            amount: 10,
+            target: EffectTarget::Source,
+        },
     );
     assert_trigger(
         &loaded,
