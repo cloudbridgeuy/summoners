@@ -2,6 +2,8 @@
 #![deny(clippy::unwrap_used, clippy::expect_used)]
 
 mod error;
+mod document;
+mod v1;
 
 use std::collections::BTreeMap;
 
@@ -60,11 +62,7 @@ impl LoadedSet {
 }
 
 /// Parse one complete Set document from caller-held bytes.
-pub fn parse_set(_bytes: &[u8]) -> Result<LoadedSet, SetLoadError> {
-    Err(SetLoadError::new(
-        LoadPhase::Version,
-        None,
-        "schema_version",
-        SetLoadCause::MissingSchemaVersion,
-    ))
+pub fn parse_set(bytes: &[u8]) -> Result<LoadedSet, SetLoadError> {
+    let decoded = document::decode(bytes)?;
+    v1::load(decoded)
 }
