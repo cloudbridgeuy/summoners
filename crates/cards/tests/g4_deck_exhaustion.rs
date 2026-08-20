@@ -30,6 +30,7 @@ struct G4 {
     one_effect_draw: CardRef,
     two_skill_draw: CardRef,
     returned_spell: CardRef,
+    retained_spell: CardRef,
     prizes: [CardRef; 2],
 }
 
@@ -61,13 +62,20 @@ fn seeded_g4() -> G4 {
     let scrying_glass = take(&mut one_recipe, library, "foundations/scrying-glass");
     let one_upkeep_draw = one_recipe.remove(0);
     let one_effect_draw = one_recipe.remove(0);
+    let one_starter = physical.one("foundations/warden-initiate");
+    assert_eq!(one_starter.def, catalog.set_paths().starter());
 
     let seer = take(&mut two_recipe, library, "foundations/barrow-seer");
     let returned_spell = take(&mut two_recipe, library, "foundations/renewing-balm");
+    let retained_spell = take(&mut two_recipe, library, "foundations/ember-lance");
     let two_skill_draw = two_recipe.remove(0);
     let prizes = [two_recipe.remove(0), two_recipe.remove(0)];
 
-    let mut one = player(physical.summon(["foundations/warden-initiate"], 0, true));
+    let mut one = player(summoners_core::scenario::ScenarioSummon {
+        chain: vec![one_starter],
+        damage: 0,
+        ready: true,
+    });
     one.deck = vec![one_upkeep_draw, one_effect_draw];
     one.hand = vec![scrying_glass];
     one.mana.matter = 1;
@@ -78,7 +86,7 @@ fn seeded_g4() -> G4 {
         ready: true,
     });
     two.deck = vec![two_skill_draw];
-    two.hand = vec![returned_spell];
+    two.hand = vec![returned_spell, retained_spell];
     two.prizes = prizes.to_vec();
     two.mana = ManaBank {
         matter: 1,
@@ -95,6 +103,7 @@ fn seeded_g4() -> G4 {
         one_effect_draw,
         two_skill_draw,
         returned_spell,
+        retained_spell,
         prizes,
     }
 }
@@ -113,6 +122,11 @@ fn pass(state: &mut GameState, player: PlayerId) -> Vec<GameEvent> {
 #[test]
 fn g4_effect_draws_empty_the_deck_before_the_next_upkeep_draw_ends_the_game() {
     let mut g4 = seeded_g4();
+    assert_eq!(
+        g4.state.players.two.hand,
+        vec![g4.returned_spell, g4.retained_spell],
+        "the two physical Spells start in the order selected from the Deck recipe"
+    );
 
     let seer = step(
         &mut g4.state,
@@ -154,8 +168,17 @@ fn g4_effect_draws_empty_the_deck_before_the_next_upkeep_draw_ends_the_game() {
         "Barrow Seer resolves its printed effects in order"
     );
     assert_eq!(g4.state.players.two.prizes, g4.prizes.to_vec());
-    assert_eq!(g4.state.players.two.hand, vec![g4.two_skill_draw]);
+    assert_eq!(
+        g4.state.players.two.hand,
+        vec![g4.retained_spell, g4.two_skill_draw],
+        "only the first Spell leaves the ordered hand"
+    );
     assert_eq!(g4.state.players.two.deck, vec![g4.returned_spell]);
+    assert_eq!(
+        g4.state.players.two.deck.last(),
+        Some(&g4.returned_spell),
+        "the first Spell becomes the Deck top"
+    );
     assert_eq!(g4.state.status, GameStatus::Playing);
     assert!(g4.state.pending.is_none());
     assert!(!g4.state.players.two.main.as_ref().expect("Seer").ready);
@@ -360,7 +383,8 @@ fn g4_effect_draws_empty_the_deck_before_the_next_upkeep_draw_ends_the_game() {
     assert_eq!(g4.state.players.two.deck, vec![]);
     assert_eq!(
         g4.state.players.two.hand,
-        vec![g4.two_skill_draw, g4.returned_spell]
+        vec![g4.retained_spell, g4.two_skill_draw, g4.returned_spell,],
+        "the returned first Spell is the next Upkeep draw"
     );
     assert_eq!(g4.state.status, GameStatus::Playing);
     assert_eq!(g4.state.turn.phase, Phase::Main);
