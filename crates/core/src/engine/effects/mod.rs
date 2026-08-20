@@ -501,10 +501,11 @@ fn swap_positions(
     )
 }
 
-/// Produce Mana from one Summon's own printed Types — `targets[0]` names its
-/// position — rather than `controller`'s player-wide anchor (rules §11–12,
+/// Produce Mana from one Summon's own printed Types. The resolved effect
+/// position can come from the selected target or the `EffectSource`, rather
+/// than `controller`'s player-wide anchor (rules §11–12,
 /// `ManaSource::Summon`). Delegates entirely to `engine::upkeep::produce_mana`
-/// so a Skill-driven production pauses on the same
+/// so an effect-driven production pauses on the same
 /// `PendingInput::ManaProduction` a multi-type Summon's natural production
 /// would. No target is a no-op: nothing names which Summon produces.
 fn produce_mana_leaf(
