@@ -32,6 +32,8 @@ fn destruction_chain_resolves_choices_triggers_healing_and_third_main_loss() {
     let sow_piglet = physical.one("foundations/sow-piglet");
     let set_paths = physical.deck(catalog.set_paths());
     let barrow_herd = physical.deck(catalog.barrow_herd());
+    assert_eq!(warden_initiate.def, catalog.set_paths().starter());
+    assert_eq!(sow_piglet.def, catalog.barrow_herd().starter());
 
     // These physical cards come from the real Deck recipes in authored
     // order. The two Hearth Wardens are distinct copies of one definition.
