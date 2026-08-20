@@ -2,6 +2,7 @@
 
 pub mod apply;
 pub(crate) mod board;
+pub(crate) mod damage;
 pub(crate) mod destruction;
 pub(crate) mod effects;
 pub mod loss;

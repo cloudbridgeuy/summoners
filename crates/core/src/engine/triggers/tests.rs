@@ -378,12 +378,14 @@ fn fire_queued_opens_a_respondable_window_for_the_opponent_of_the_controller() {
         vec![StackItem::Trigger {
             controller: PlayerId::Two,
             source: Position::Main,
+            ability: fixtures::trigger_id("spite-thorn"),
             event: TriggerEvent::AnySummonDestroyed,
             targets: vec![Position::Main],
-            effects: vec![EffectLeaf::DealDamage {
-                amount: 15,
-                immutable: false,
-            }],
+            effects: vec![EffectLeaf::DealDamage(crate::domain::cards::DamageEffect {
+                base: 15,
+                constraints: crate::domain::cards::DamageConstraints::new(),
+                additions: vec![]
+            })],
         }]
     );
     assert_eq!(
@@ -502,10 +504,11 @@ fn implicit_targets_heal_the_trigger_source_and_damage_the_opposing_main() {
     assert_eq!(
         implicit_targets(
             Position::Bench(BenchSlot::First),
-            &[EffectLeaf::DealDamage {
-                amount: 5,
-                immutable: false
-            }]
+            &[EffectLeaf::DealDamage(crate::domain::cards::DamageEffect {
+                base: 5,
+                constraints: crate::domain::cards::DamageConstraints::new(),
+                additions: vec![]
+            })]
         ),
         vec![Position::Main]
     );
@@ -631,10 +634,13 @@ fn spite_thorn_and_dawn_tenders_triggers_read_their_printed_event_respondability
     assert!(its_trigger.get::<Respondable>().is_some());
     assert_eq!(
         its_trigger.all::<EffectLeaf>(),
-        vec![&EffectLeaf::DealDamage {
-            amount: 15,
-            immutable: false,
-        }]
+        vec![&EffectLeaf::DealDamage(
+            crate::domain::cards::DamageEffect {
+                base: 15,
+                constraints: crate::domain::cards::DamageConstraints::new(),
+                additions: vec![]
+            }
+        )]
     );
 
     let dawn_tender = cards
@@ -852,6 +858,7 @@ fn when_the_second_of_three_matching_triggers_is_respondable_the_third_still_fir
                 item: StackItem::Trigger {
                     controller: PlayerId::One,
                     source: Position::Main,
+                    ability: second.id,
                     event: TriggerEvent::AnySummonDestroyed,
                     targets: vec![Position::Main],
                     effects: vec![EffectLeaf::Heal { amount: 2 }],

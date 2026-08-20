@@ -74,8 +74,8 @@ pub struct SummonInstance {
     pub played_this_turn: bool,
     /// Rules §18: a Summon may be upgraded only once per turn.
     pub upgraded_this_turn: bool,
-    /// Rules §30: whether this Summon entered Main this turn (feeds
-    /// `ConditionalBonus { condition: DefenderEnteredMainThisTurn, .. }`).
+    /// Rules §30: whether this Summon entered Main this turn (feeds a
+    /// grouped Damage addition conditioned on `DefenderEnteredMainThisTurn`).
     pub entered_main_this_turn: bool,
 }
 
@@ -265,6 +265,7 @@ pub enum StackItem {
     Trigger {
         controller: PlayerId,
         source: Position,
+        ability: EntityId,
         event: TriggerEvent,
         targets: Vec<Position>,
         effects: Vec<EffectLeaf>,
@@ -623,6 +624,7 @@ mod tests {
             StackItem::Trigger {
                 controller: PlayerId::One,
                 source: Position::Main,
+                ability: fixtures::trigger_id("spite-thorn"),
                 event: TriggerEvent::AnySummonDestroyed,
                 targets: vec![Position::Main],
                 effects: vec![],

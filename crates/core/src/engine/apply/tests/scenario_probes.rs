@@ -520,6 +520,7 @@ fn a_destruction_trigger_opens_a_nested_window_before_its_own_chain_finishes() {
         vec![StackItem::Trigger {
             controller: PlayerId::Two,
             source: Position::Bench(BenchSlot::First),
+            ability: fixtures::trigger_id("griefsinger"),
             event: TriggerEvent::AnySummonDestroyed,
             targets: vec![Position::Bench(BenchSlot::First)],
             effects: vec![EffectLeaf::ReturnSpellFromDiscard],

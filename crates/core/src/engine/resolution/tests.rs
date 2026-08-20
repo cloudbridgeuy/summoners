@@ -68,83 +68,41 @@ fn base_state() -> GameState {
     }
 }
 
-#[test]
-fn apply_leaves_skips_a_paired_conditional_bonus_when_deal_damage_is_immutable() {
-    // Rules §30, the Old Sow's `Root and Renew`-adjacent Attack text:
-    // "her attack damage can be neither increased nor prevented." No
-    // registry fixture pairs an immutable `DealDamage` with a
-    // `ConditionalBonus` today (the Old Sow's own Attack is a lone
-    // immutable `DealDamage`), so this test builds the pairing directly
-    // to prove the gate holds even if a future fixture combines them.
-    let mut state = base_state();
-    state.turn.spell_played_this_turn = true;
-    let leaves = vec![
-        EffectLeaf::DealDamage {
-            amount: 70,
-            immutable: true,
+fn legacy_damage(position: Position, before: u32, after: u32) -> GameEvent {
+    GameEvent::DamageApplied {
+        context: crate::domain::events::DamageContext {
+            source: crate::domain::events::DamageSource::Spell {
+                controller: PlayerId::One,
+                card: CardInstanceId(0),
+                definition: fixtures::id("ember-lance"),
+            },
+            target: crate::domain::events::BattlefieldTarget {
+                controller: PlayerId::One,
+                position,
+            },
         },
-        EffectLeaf::ConditionalBonus {
-            condition: crate::domain::cards::EffectCondition::SpellPlayedThisTurn,
-            amount: 40,
-        },
-    ];
-
-    let (state, events) = apply_leaves(&state, PlayerId::One, &[Position::Main], &leaves);
-
-    assert_eq!(
-        events,
-        vec![GameEvent::DamageApplied {
-            position: Position::Main,
-            before: 0,
-            after: 70,
-        }],
-        "only the immutable DealDamage's own event lands; the bonus \
-         leaf runs no code, not even to find its own condition false"
-    );
-    assert_eq!(
-        state
-            .players
-            .get(PlayerId::Two)
-            .main
-            .as_ref()
-            .expect("main")
-            .damage,
-        70
-    );
+        amount: after.saturating_sub(before),
+        before,
+        after,
+    }
 }
 
-#[test]
-fn apply_leaves_lets_a_paired_conditional_bonus_add_to_mutable_damage() {
-    // The control case: the same pairing, but `DealDamage` is not
-    // marked immutable, so the bonus adds normally (the Warden's and
-    // the Griefsinger's own Attack fixtures both pair the two this way
-    // already; this test isolates the pairing on its own).
-    let mut state = base_state();
-    state.turn.spell_played_this_turn = true;
-    let leaves = vec![
-        EffectLeaf::DealDamage {
-            amount: 50,
-            immutable: false,
-        },
-        EffectLeaf::ConditionalBonus {
-            condition: crate::domain::cards::EffectCondition::SpellPlayedThisTurn,
-            amount: 40,
-        },
-    ];
-
-    let (state, _events) = apply_leaves(&state, PlayerId::One, &[Position::Main], &leaves);
-
-    assert_eq!(
-        state
-            .players
-            .get(PlayerId::Two)
-            .main
-            .as_ref()
-            .expect("main")
-            .damage,
-        90,
-        "50 from DealDamage plus 40 from the bonus"
-    );
+fn compact_damage_events(events: &[GameEvent]) -> Vec<GameEvent> {
+    events
+        .iter()
+        .filter_map(|event| match event {
+            GameEvent::DamageCalculationStarted { .. }
+            | GameEvent::DamageAdjustmentApplied { .. }
+            | GameEvent::DamageAdjustmentSkipped { .. } => None,
+            GameEvent::DamageApplied {
+                context,
+                before,
+                after,
+                ..
+            } => Some(legacy_damage(context.target.position, *before, *after)),
+            event => Some(event.clone()),
+        })
+        .collect()
 }
 
 #[test]
@@ -160,7 +118,7 @@ fn drain_runs_the_full_upkeep_sequence_in_order() {
 
     assert!(state.work.is_empty());
     assert_eq!(
-        events,
+        compact_damage_events(&events),
         vec![
             GameEvent::SummonsReadied {
                 player: PlayerId::Two,
@@ -236,7 +194,7 @@ fn drain_stops_immediately_once_a_draw_failure_sets_status() {
          a finished game rejects every later action outright"
     );
     assert_eq!(
-        events,
+        compact_damage_events(&events),
         vec![
             GameEvent::SummonsReadied {
                 player: PlayerId::Two,
@@ -336,7 +294,7 @@ fn drain_fires_an_entering_main_trigger_and_sets_the_entered_flag() {
     let (state, events) = drain(&state);
 
     assert_eq!(
-        events,
+        compact_damage_events(&events),
         vec![
             GameEvent::TriggerFired {
                 controller: PlayerId::Two,
@@ -386,11 +344,10 @@ fn drain_opens_a_window_for_a_respondable_trigger_and_resumes_the_interrupted_dr
         ),
         WorkItem::LossCheck(PlayerId::Two),
     ]);
-
     let (state, events) = drain(&state);
 
     assert_eq!(
-        events,
+        compact_damage_events(&events),
         vec![GameEvent::TriggerFired {
             controller: PlayerId::One,
             position: Position::Main,
@@ -440,6 +397,16 @@ fn drain_resumes_the_interrupted_work_once_two_passes_close_the_triggers_window(
         ),
         WorkItem::LossCheck(PlayerId::Two),
     ]);
+    state.players.get_mut(PlayerId::Two).enchantments = vec![
+        CardRef {
+            instance: CardInstanceId(90),
+            def: fixtures::id("standing-ward"),
+        },
+        CardRef {
+            instance: CardInstanceId(91),
+            def: fixtures::id("standing-ward"),
+        },
+    ];
 
     let (state, _opening_events) = drain(&state);
     // The window opened for the opponent of the trigger's controller
@@ -457,29 +424,38 @@ fn drain_resumes_the_interrupted_work_once_two_passes_close_the_triggers_window(
     let (state, events) = drain(&after_second_pass.state);
 
     assert_eq!(
-        events,
+        compact_damage_events(&events),
         vec![
             GameEvent::StackItemResolved {
                 item: StackItem::Trigger {
                     controller: PlayerId::One,
                     source: Position::Main,
+                    ability: fixtures::trigger_id("spite-thorn"),
                     event: crate::domain::cards::TriggerEvent::AnySummonDestroyed,
                     targets: vec![Position::Main],
-                    effects: vec![crate::domain::cards::EffectLeaf::DealDamage {
-                        amount: 15,
-                        immutable: false,
-                    }],
+                    effects: vec![crate::domain::cards::EffectLeaf::DealDamage(
+                        crate::domain::cards::DamageEffect {
+                            base: 15,
+                            constraints: crate::domain::cards::DamageConstraints::new(),
+                            additions: vec![]
+                        }
+                    )],
                 },
             },
-            GameEvent::DamageApplied {
-                position: Position::Main,
-                before: 0,
-                after: 15,
-            },
+            legacy_damage(Position::Main, 0, 15),
         ],
         "the segment's own Trigger item resolved, dealing its Damage to \
          Two's Main"
     );
+    assert!(events.iter().any(|event| matches!(
+        event,
+        GameEvent::DamageCalculationStarted { context, base: 15, .. }
+            if context.source == (crate::domain::events::DamageSource::Trigger {
+                controller: PlayerId::One,
+                position: Position::Main,
+                ability: fixtures::trigger_id("spite-thorn"),
+            })
+    )));
     assert!(
         state.stack.is_empty(),
         "the segment's item is the only thing on the Stack"
@@ -568,7 +544,7 @@ fn drain_resolves_the_stack_strictly_top_first_once_work_is_empty_and_the_window
     // Quarry Whelp deals 10; the item pushed last (Two attacking One) is
     // the top of the Stack and resolves first (rules §35).
     assert_eq!(
-        events,
+        compact_damage_events(&events),
         vec![
             GameEvent::StackItemResolved {
                 item: StackItem::Attack {
@@ -576,22 +552,14 @@ fn drain_resolves_the_stack_strictly_top_first_once_work_is_empty_and_the_window
                     target: Position::Main,
                 },
             },
-            GameEvent::DamageApplied {
-                position: Position::Main,
-                before: 0,
-                after: 10,
-            },
+            legacy_damage(Position::Main, 0, 10),
             GameEvent::StackItemResolved {
                 item: StackItem::Attack {
                     attacker: PlayerId::One,
                     target: Position::Main,
                 },
             },
-            GameEvent::DamageApplied {
-                position: Position::Main,
-                before: 0,
-                after: 10,
-            },
+            legacy_damage(Position::Main, 0, 10),
         ]
     );
 }
@@ -609,7 +577,7 @@ fn drain_resolves_an_attack_on_an_empty_bench_position_as_a_miss() {
 
     assert!(state.stack.is_empty());
     assert_eq!(
-        events,
+        compact_damage_events(&events),
         vec![GameEvent::StackItemResolved {
             item: StackItem::Attack {
                 attacker: PlayerId::One,
@@ -641,12 +609,11 @@ fn drain_resolves_a_support_spell_and_discards_it_to_its_casters_pile() {
         card,
         targets: vec![Position::Main],
     }];
-
     let (state, events) = drain(&state);
 
     assert!(state.stack.is_empty());
     assert_eq!(
-        events,
+        compact_damage_events(&events),
         vec![
             GameEvent::StackItemResolved {
                 item: StackItem::Spell {
@@ -687,11 +654,21 @@ fn drain_resolves_an_attack_spell_against_the_opponents_main() {
         card,
         targets: vec![Position::Main],
     }];
+    state.players.get_mut(PlayerId::Two).enchantments = vec![
+        CardRef {
+            instance: CardInstanceId(92),
+            def: fixtures::id("standing-ward"),
+        },
+        CardRef {
+            instance: CardInstanceId(93),
+            def: fixtures::id("standing-ward"),
+        },
+    ];
 
     let (state, events) = drain(&state);
 
     assert_eq!(
-        events,
+        compact_damage_events(&events),
         vec![
             GameEvent::StackItemResolved {
                 item: StackItem::Spell {
@@ -700,14 +677,19 @@ fn drain_resolves_an_attack_spell_against_the_opponents_main() {
                     targets: vec![Position::Main],
                 },
             },
-            GameEvent::DamageApplied {
-                position: Position::Main,
-                before: 0,
-                after: 10,
-            },
+            legacy_damage(Position::Main, 0, 10),
         ]
     );
     assert_eq!(state.players.get(PlayerId::One).discard, vec![card]);
+    assert!(events.iter().any(|event| matches!(
+        event,
+        GameEvent::DamageCalculationStarted { context, base: 10, .. }
+            if context.source == (crate::domain::events::DamageSource::Spell {
+                controller: PlayerId::One,
+                card: CardInstanceId(99),
+                definition: fixtures::id("ember-lance"),
+            })
+    )));
     assert_eq!(
         state
             .players
@@ -737,7 +719,7 @@ fn drain_resolves_a_draw_spell_and_settles_the_loss_check_it_enqueues() {
     let (state, events) = drain(&state);
 
     assert_eq!(
-        events,
+        compact_damage_events(&events),
         vec![
             GameEvent::StackItemResolved {
                 item: StackItem::Spell {

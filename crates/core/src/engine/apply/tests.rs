@@ -73,6 +73,43 @@ fn card_ref(instance: u32, def: &'static str) -> CardRef {
     }
 }
 
+fn legacy_damage(position: Position, before: u32, after: u32) -> GameEvent {
+    GameEvent::DamageApplied {
+        context: crate::domain::events::DamageContext {
+            source: crate::domain::events::DamageSource::Spell {
+                controller: PlayerId::One,
+                card: CardInstanceId(0),
+                definition: fixtures::id("ember-lance"),
+            },
+            target: crate::domain::events::BattlefieldTarget {
+                controller: PlayerId::One,
+                position,
+            },
+        },
+        amount: after.saturating_sub(before),
+        before,
+        after,
+    }
+}
+
+fn compact_damage_events(events: &[GameEvent]) -> Vec<GameEvent> {
+    events
+        .iter()
+        .filter_map(|event| match event {
+            GameEvent::DamageCalculationStarted { .. }
+            | GameEvent::DamageAdjustmentApplied { .. }
+            | GameEvent::DamageAdjustmentSkipped { .. } => None,
+            GameEvent::DamageApplied {
+                context,
+                before,
+                after,
+                ..
+            } => Some(legacy_damage(context.target.position, *before, *after)),
+            event => Some(event.clone()),
+        })
+        .collect()
+}
+
 /// Run the full `EndTurn` sequence through `apply` — opening the §47
 /// window, the defender passing first, then the active player passing
 /// second — as three separate submitted actions, and report the
@@ -238,6 +275,7 @@ fn with_no_pending_and_no_window_only_the_active_player_may_act() {
 
 mod board_economy;
 mod broken_game;
+mod damage_trace;
 mod demo;
 mod demo_triggers;
 mod effect_order_and_persistence;

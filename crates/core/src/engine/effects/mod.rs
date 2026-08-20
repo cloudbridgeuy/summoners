@@ -24,13 +24,13 @@
 //! than changing board state, so `engine::stack::cast_spell` reads its
 //! condition and block directly instead of this interpreter.
 
-use crate::domain::cards::{CardKind, EffectCondition, EffectLeaf, family};
-use crate::domain::events::GameEvent;
+use crate::domain::cards::{CardKind, EffectCondition, EffectLeaf, EffectSource, family};
+use crate::domain::events::{BattlefieldTarget, DamageContext, GameEvent};
 use crate::domain::ids::{CardInstanceId, PlayerId, Position};
 use crate::domain::state::{
     DurationMarker, GameState, ManaSource, MovementStep, PlayerState, SummonInstance, WorkItem,
 };
-use crate::engine::upkeep;
+use crate::engine::{damage, upkeep};
 
 /// Apply one printed `EffectLeaf`, controlled by `controller` — the
 /// attacking or casting player — against `targets`. `DealDamage` reads its
@@ -48,21 +48,19 @@ use crate::engine::upkeep;
 /// are documented on their own functions below.
 pub(crate) fn apply_leaf(
     state: &GameState,
-    controller: PlayerId,
+    source: EffectSource,
     targets: &[Position],
     leaf: &EffectLeaf,
 ) -> (GameState, Vec<GameEvent>) {
+    let controller = source.controller();
     match leaf {
-        EffectLeaf::DealDamage { amount, .. } => deal_damage(state, controller, targets, *amount),
+        EffectLeaf::DealDamage(effect) => deal_damage(state, source, targets, effect),
         EffectLeaf::Heal { amount } => heal(state, controller, targets, *amount),
         EffectLeaf::DrawCards { amount } => draw_cards(state, controller, *amount),
         EffectLeaf::MoveSummon => move_summon(state, controller, targets),
         EffectLeaf::SwapPositions => swap_positions(state, controller, targets),
         EffectLeaf::ProduceMana => produce_mana_leaf(state, controller, targets),
         EffectLeaf::ReadySummon => ready_summon(state, controller, targets),
-        EffectLeaf::ConditionalBonus { condition, amount } => {
-            conditional_bonus(state, controller, targets, *condition, *amount)
-        }
         EffectLeaf::CannotBeMovedByOpponent => {
             cannot_be_moved_by_opponent(state, controller, targets)
         }
@@ -78,31 +76,6 @@ pub(crate) fn apply_leaf(
     }
 }
 
-/// Whether `leaves` includes a `DealDamage` marked immutable — the Old
-/// Sow's `Root and Renew`-adjacent Attack text, "her attack damage can be
-/// neither increased nor prevented" (rules §30). `engine::resolution::
-/// apply_leaves` and `engine::skills`'s own copy each compute this once per
-/// resolved leaves list and skip any `ConditionalBonus` leaf in the same
-/// list when it is true — that leaf is the only "increase" this crate's
-/// vocabulary has, since it is the only leaf that adds more Damage to a
-/// target `DealDamage` already named. "Prevented" needs no matching guard:
-/// no leaf in this crate ever reduces an opponent's already-accumulated
-/// Damage once it lands — `heal` below only ever reads `controller`'s own
-/// board, never an opponent's — so there is no code path left that could
-/// violate it. `deal_damage_applies_its_full_amount_regardless_of_immutability`
-/// in this module's tests pins that half down directly.
-pub(crate) fn immutable_damage_in(leaves: &[EffectLeaf]) -> bool {
-    leaves.iter().any(|leaf| {
-        matches!(
-            leaf,
-            EffectLeaf::DealDamage {
-                immutable: true,
-                ..
-            }
-        )
-    })
-}
-
 /// Whether `condition` currently holds for `controller`'s effect, read
 /// against `targets` where the condition needs a defender (rules §30 for
 /// `DefenderEnteredMainThisTurn`; the turn-global flag directly for
@@ -115,30 +88,7 @@ pub(crate) fn condition_holds(
     targets: &[Position],
     condition: EffectCondition,
 ) -> bool {
-    match condition {
-        EffectCondition::SpellPlayedThisTurn => state.turn.spell_played_this_turn,
-        EffectCondition::DefenderEnteredMainThisTurn => targets.first().is_some_and(|&position| {
-            summon_at(state.players.get(controller.opponent()), position)
-                .is_some_and(|summon| summon.entered_main_this_turn)
-        }),
-    }
-}
-
-/// Deal `amount` bonus Damage to `targets` the same way `DealDamage` would,
-/// but only when `condition` holds — the Warden's `Rearrange`-adjacent
-/// Attack bonus and the Griefsinger's Spell-turn bonus (rules §30). A false
-/// condition is a silent no-op: no event, no extra `DestructionCheck`.
-fn conditional_bonus(
-    state: &GameState,
-    controller: PlayerId,
-    targets: &[Position],
-    condition: EffectCondition,
-    amount: u32,
-) -> (GameState, Vec<GameEvent>) {
-    if !condition_holds(state, controller, targets, condition) {
-        return (state.clone(), Vec::new());
-    }
-    deal_damage(state, controller, targets, amount)
+    damage::condition_holds(state, controller, targets, condition)
 }
 
 /// Attach `DurationMarker::CannotBeMovedByOpponent` to `controller`'s own
@@ -325,33 +275,26 @@ fn swap_opposing_positions(
 /// no `DestructionCheck`.
 fn deal_damage(
     state: &GameState,
-    controller: PlayerId,
+    source: EffectSource,
     targets: &[Position],
-    amount: u32,
+    effect: &crate::domain::cards::DamageEffect,
 ) -> (GameState, Vec<GameEvent>) {
     let Some(&position) = targets.first() else {
         return (state.clone(), Vec::new());
     };
-
-    let mut state = state.clone();
-    let defender = controller.opponent();
-    let Some(summon) = summon_at_mut(state.players.get_mut(defender), position) else {
-        return (state, Vec::new());
-    };
-
-    let before = summon.damage;
-    let after = before.saturating_add(amount);
-    summon.damage = after;
-    state.work.push_back(WorkItem::DestructionCheck(position));
-
-    (
-        state,
-        vec![GameEvent::DamageApplied {
+    let context = DamageContext {
+        source: source.into(),
+        target: BattlefieldTarget {
+            controller: source.controller().opponent(),
             position,
-            before,
-            after,
-        }],
-    )
+        },
+    };
+    let intent = damage::DamageIntent {
+        context,
+        effect: effect.clone(),
+    };
+    let resolution = damage::evaluate(state, &intent);
+    damage::commit(state, &resolution)
 }
 
 /// Remove up to `amount` accumulated Damage from whichever Summon occupies
@@ -582,14 +525,6 @@ fn summon_at_mut(player: &mut PlayerState, position: Position) -> Option<&mut Su
     match position {
         Position::Main => player.main.as_mut(),
         Position::Bench(slot) => player.bench[slot.index()].as_mut(),
-    }
-}
-
-/// The Summon at `position`, by reference, if any.
-fn summon_at(player: &PlayerState, position: Position) -> Option<&SummonInstance> {
-    match position {
-        Position::Main => player.main.as_ref(),
-        Position::Bench(slot) => player.bench[slot.index()].as_ref(),
     }
 }
 

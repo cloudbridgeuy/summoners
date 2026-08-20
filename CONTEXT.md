@@ -165,6 +165,46 @@ condition.
 - **THEN** it stays in play rather than discarding, and it is still in play
   after a full turn hands off to the opponent
 
+### Requirement: Source-aware Damage resolution
+
+Each Damage effect groups its base amount, conditional additions, and semantic
+constraints. The engine evaluates one immutable Damage intent in the fixed
+order Addition, Persistent Reduction, Clamp, and Commit. It then changes the
+target's Damage once and queues destruction work. Every calculation emits an
+ordered, flat event trace whose lines repeat the exact source and target.
+Sources distinguish an Attack, Spell card instance, Skill ability, and Trigger
+ability.
+
+Standing Ward reduces an opposing Attack's combined Damage by 10 for each Ward
+in play. It does not reduce Spell, Skill, or Trigger Damage. `Unpreventable`
+skips each Ward reduction, and `Unincreasable` skips each conditional addition.
+A reduction cannot make the running total less than zero.
+
+#### Scenario: Conditional Damage passes through two Wards
+
+- **WHEN** a true conditional addition combines with an Attack's base Damage
+  while the defender controls two Standing Wards
+- **THEN** the addition applies first, each Ward reduces the combined total in
+  play order, the total clamps at zero or more, and one final Damage amount is
+  committed to the target
+
+#### Scenario: A constraint skips each blocked adjustment
+
+- **WHEN** an unpreventable Attack meets two Standing Wards
+- **THEN** the event trace contains one skipped persistent-reduction line for
+  each Ward and the full Attack Damage is committed
+
+- **WHEN** an unincreasable Damage effect has a true conditional addition
+- **THEN** the event trace contains a skipped addition line and commits the
+  base Damage without that addition
+
+#### Scenario: Damage events identify their complete calculation
+
+- **WHEN** Damage resolves from an Attack, Spell, Skill, or Trigger
+- **THEN** its calculation events identify the exact source, the target, each
+  applied or skipped operation, its origin and stage, the running input and
+  output or skip constraint, and the final before-and-after values
+
 ### Requirement: Skills
 
 Activating a Skill requires the Summon to be Ready. Activation checks
@@ -288,6 +328,11 @@ types/archetypes document for content-design intent.
 - **Enchantment:** a card played from hand like a Spell, but it remains in play after resolving instead of discarding.
 - **Priority:** the exclusive right to add one legal Spell to the Stack or pass.
 - **Stack:** the last-in, first-out sequence of attacks and respondable effects.
+- **Damage:** a resolved amount added to one Summon's existing Damage. Its
+  calculation retains the printed source and battlefield target.
+- **Damage constraint:** semantic text such as `Unpreventable` or
+  `Unincreasable` that skips the matching adjustment without changing the
+  running Damage total.
 - **Prize Card:** one of two face-down comeback resources recovered after the first two Main losses.
 - **Vault:** seven match-play cards outside the 20-card Deck.
 
@@ -327,11 +372,9 @@ rules without a new decision.
 The engine itself leaves further ground open that a reader should not
 mistake for settled:
 
-- No effect in the engine prevents Damage from landing at all. A card whose
-  printed Attack is marked unpreventable and unincreasable is unchangeable
-  once dealt — nothing can add to it after the fact — but that "unpreventable"
-  half of its text currently describes a state the engine can already never
-  violate, not a prevention effect it actively defeats.
+- Damage supports conditional additions, persistent reductions, constraints,
+  and a zero clamp. It does not yet support scaling, replacement, redirection,
+  or consumable shields.
 - The card set is a fixture registry held in code, not a card file loaded
   from anywhere. Its names, stats, and text are working test data for
   exercising every rule at least once, not a finished, published card list.
