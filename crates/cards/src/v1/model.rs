@@ -192,12 +192,22 @@ enum EffectContext {
 
 pub(crate) fn parse(decoded: dto::Set) -> Result<Set, SetLoadError> {
     let dto::Set {
-        schema_version: _,
+        schema_version,
         id,
         revision,
         name,
         cards,
     } = decoded;
+    if schema_version != 1 {
+        return Err(SetLoadError::new(
+            LoadPhase::Version,
+            Some(i64::from(schema_version)),
+            "schema_version",
+            SetLoadCause::UnsupportedSchemaVersion {
+                found: i64::from(schema_version),
+            },
+        ));
+    }
     let code = StableCode::parse(id, StableKeyKind::Set, "id")?;
     require_positive(revision, "revision", SemanticRule::RevisionMustBePositive)?;
     require_name(&name, "name")?;

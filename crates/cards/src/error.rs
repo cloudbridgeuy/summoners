@@ -1,5 +1,7 @@
 use std::{error::Error, fmt};
 
+use summoners_core::domain::cards::EntityId;
+
 /// The authored document family that failed to load.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DocumentKind {
@@ -74,7 +76,7 @@ pub enum SetLoadCause {
         first_path: String,
     },
     DuplicateGeneratedId {
-        id: String,
+        id: EntityId,
         first_path: String,
     },
     GeneratedIdRejected {
