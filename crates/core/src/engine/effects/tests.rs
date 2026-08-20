@@ -2,7 +2,9 @@
 //! module's items through `super::*`.
 
 use super::*;
-use crate::domain::cards::fixtures;
+use crate::domain::cards::{
+    DamageConstraint, DamageConstraints, DamageEffect, EffectSource, fixtures,
+};
 use crate::domain::ids::{BenchSlot, CardInstanceId};
 use crate::domain::state::{
     CardRef, GameStatus, ManaBank, PerPlayer, Phase, PlayerState, TurnState, UpgradeChain,
@@ -73,24 +75,35 @@ fn base_state() -> GameState {
     }
 }
 
+fn source(controller: PlayerId) -> EffectSource {
+    EffectSource::Spell {
+        controller,
+        card: CardInstanceId(999),
+        definition: fixtures::id("ember-lance"),
+    }
+}
+
 #[test]
 fn deal_damage_hits_the_defenders_main_and_enqueues_a_destruction_check() {
     let state = base_state();
-    let leaf = EffectLeaf::DealDamage {
-        amount: 10,
-        immutable: false,
-    };
+    let leaf = EffectLeaf::DealDamage(DamageEffect {
+        base: 10,
+        constraints: DamageConstraints::new(),
+        additions: vec![],
+    });
 
-    let (state, events) = apply_leaf(&state, PlayerId::One, &[Position::Main], &leaf);
+    let (state, events) = apply_leaf(&state, source(PlayerId::One), &[Position::Main], &leaf);
 
-    assert_eq!(
-        events,
-        vec![GameEvent::DamageApplied {
-            position: Position::Main,
+    assert_eq!(events.len(), 3);
+    assert!(matches!(
+        events.last(),
+        Some(GameEvent::DamageApplied {
+            amount: 10,
             before: 0,
             after: 10,
-        }]
-    );
+            ..
+        })
+    ));
     assert_eq!(
         state.work,
         VecDeque::from(vec![WorkItem::DestructionCheck(Position::Main)])
@@ -98,43 +111,68 @@ fn deal_damage_hits_the_defenders_main_and_enqueues_a_destruction_check() {
 }
 
 #[test]
-fn deal_damage_applies_its_full_amount_regardless_of_immutability() {
-    // Rules §30, the Old Sow's `Root and Renew`-adjacent Attack text: "her
-    // attack damage can be neither increased nor prevented." The "prevented"
-    // half needs no active guard anywhere in this interpreter, because no
-    // leaf in this crate ever reduces an opponent's already-accumulated
-    // Damage before it lands (`heal` only ever reads `controller`'s own
-    // board — see the `heal` tests above). This test pins that down
-    // directly: `deal_damage` computes the identical `after` amount whether
-    // `immutable` is true or false, since nothing about the flag ever
-    // reaches its own arithmetic.
-    let mutable = EffectLeaf::DealDamage {
-        amount: 70,
-        immutable: false,
-    };
-    let immutable = EffectLeaf::DealDamage {
-        amount: 70,
-        immutable: true,
-    };
+fn constraints_do_not_change_unadjusted_damage() {
+    let unconstrained = EffectLeaf::DealDamage(DamageEffect {
+        base: 70,
+        constraints: DamageConstraints::new(),
+        additions: vec![],
+    });
+    let constrained = EffectLeaf::DealDamage(DamageEffect {
+        base: 70,
+        constraints: DamageConstraints::from([
+            DamageConstraint::Unincreasable,
+            DamageConstraint::Unpreventable,
+        ]),
+        additions: vec![],
+    });
 
-    let (_, mutable_events) = apply_leaf(&base_state(), PlayerId::One, &[Position::Main], &mutable);
-    let (_, immutable_events) =
-        apply_leaf(&base_state(), PlayerId::One, &[Position::Main], &immutable);
+    let (unconstrained_state, _) = apply_leaf(
+        &base_state(),
+        source(PlayerId::One),
+        &[Position::Main],
+        &unconstrained,
+    );
+    let (constrained_state, _) = apply_leaf(
+        &base_state(),
+        source(PlayerId::One),
+        &[Position::Main],
+        &constrained,
+    );
 
-    assert_eq!(mutable_events, immutable_events);
+    assert_eq!(
+        unconstrained_state
+            .players
+            .get(PlayerId::Two)
+            .main
+            .as_ref()
+            .expect("main")
+            .damage,
+        70
+    );
+    assert_eq!(
+        constrained_state
+            .players
+            .get(PlayerId::Two)
+            .main
+            .as_ref()
+            .expect("main")
+            .damage,
+        70
+    );
 }
 
 #[test]
 fn deal_damage_on_an_empty_position_is_a_silent_miss() {
     let state = base_state();
-    let leaf = EffectLeaf::DealDamage {
-        amount: 10,
-        immutable: false,
-    };
+    let leaf = EffectLeaf::DealDamage(DamageEffect {
+        base: 10,
+        constraints: DamageConstraints::new(),
+        additions: vec![],
+    });
 
     let (state, events) = apply_leaf(
         &state,
-        PlayerId::One,
+        source(PlayerId::One),
         &[Position::Bench(BenchSlot::First)],
         &leaf,
     );
@@ -146,12 +184,13 @@ fn deal_damage_on_an_empty_position_is_a_silent_miss() {
 #[test]
 fn deal_damage_with_no_target_is_a_silent_miss() {
     let state = base_state();
-    let leaf = EffectLeaf::DealDamage {
-        amount: 10,
-        immutable: false,
-    };
+    let leaf = EffectLeaf::DealDamage(DamageEffect {
+        base: 10,
+        constraints: DamageConstraints::new(),
+        additions: vec![],
+    });
 
-    let (state, events) = apply_leaf(&state, PlayerId::One, &[], &leaf);
+    let (state, events) = apply_leaf(&state, source(PlayerId::One), &[], &leaf);
 
     assert!(events.is_empty());
     assert!(state.work.is_empty());
@@ -166,7 +205,7 @@ fn heal_removes_damage_from_the_casters_own_main() {
     });
     let leaf = EffectLeaf::Heal { amount: 20 };
 
-    let (state, events) = apply_leaf(&state, PlayerId::One, &[Position::Main], &leaf);
+    let (state, events) = apply_leaf(&state, source(PlayerId::One), &[Position::Main], &leaf);
 
     assert_eq!(
         events,
@@ -196,7 +235,7 @@ fn heal_cannot_reduce_damage_below_zero() {
     });
     let leaf = EffectLeaf::Heal { amount: 20 };
 
-    let (state, events) = apply_leaf(&state, PlayerId::One, &[Position::Main], &leaf);
+    let (state, events) = apply_leaf(&state, source(PlayerId::One), &[Position::Main], &leaf);
 
     assert_eq!(
         events,
@@ -223,7 +262,7 @@ fn heal_on_an_empty_position_is_a_silent_miss() {
     state.players.get_mut(PlayerId::One).main = None;
     let leaf = EffectLeaf::Heal { amount: 20 };
 
-    let (_state, events) = apply_leaf(&state, PlayerId::One, &[Position::Main], &leaf);
+    let (_state, events) = apply_leaf(&state, source(PlayerId::One), &[Position::Main], &leaf);
 
     assert!(events.is_empty());
 }
@@ -233,7 +272,7 @@ fn draw_cards_draws_for_the_controller_and_enqueues_a_loss_check() {
     let state = base_state();
     let leaf = EffectLeaf::DrawCards { amount: 1 };
 
-    let (state, events) = apply_leaf(&state, PlayerId::Two, &[], &leaf);
+    let (state, events) = apply_leaf(&state, source(PlayerId::Two), &[], &leaf);
 
     assert_eq!(
         events,
@@ -259,7 +298,7 @@ fn draw_cards_stops_early_once_the_deck_empties() {
     }];
     let leaf = EffectLeaf::DrawCards { amount: 5 };
 
-    let (state, events) = apply_leaf(&state, PlayerId::One, &[], &leaf);
+    let (state, events) = apply_leaf(&state, source(PlayerId::One), &[], &leaf);
 
     assert_eq!(events.len(), 1, "only one card was available to draw");
     assert!(state.players.get(PlayerId::One).deck.is_empty());
@@ -281,7 +320,7 @@ fn block_responses_is_a_documented_no_op_here() {
         block: crate::domain::cards::ResponseBlock::AttackSpells,
     };
 
-    let (next_state, events) = apply_leaf(&state, PlayerId::One, &[Position::Main], &leaf);
+    let (next_state, events) = apply_leaf(&state, source(PlayerId::One), &[Position::Main], &leaf);
 
     assert!(events.is_empty());
     assert_eq!(next_state, state);
@@ -292,7 +331,7 @@ fn look_at_prizes_emits_an_honest_observation_event_even_with_no_prizes_left() {
     let state = base_state();
     let leaf = EffectLeaf::LookAtPrizes;
 
-    let (next_state, events) = apply_leaf(&state, PlayerId::One, &[], &leaf);
+    let (next_state, events) = apply_leaf(&state, source(PlayerId::One), &[], &leaf);
 
     assert_eq!(
         events,
@@ -319,7 +358,7 @@ fn look_at_prizes_names_every_prize_still_face_down() {
     ];
     let leaf = EffectLeaf::LookAtPrizes;
 
-    let (_state, events) = apply_leaf(&state, PlayerId::One, &[], &leaf);
+    let (_state, events) = apply_leaf(&state, source(PlayerId::One), &[], &leaf);
 
     assert_eq!(
         events,
@@ -331,107 +370,11 @@ fn look_at_prizes_names_every_prize_still_face_down() {
 }
 
 #[test]
-fn conditional_bonus_applies_extra_damage_when_the_condition_holds() {
-    let mut state = base_state();
-    state.turn.spell_played_this_turn = true;
-    let leaf = EffectLeaf::ConditionalBonus {
-        condition: crate::domain::cards::EffectCondition::SpellPlayedThisTurn,
-        amount: 40,
-    };
-
-    let (state, events) = apply_leaf(&state, PlayerId::One, &[Position::Main], &leaf);
-
-    assert_eq!(
-        events,
-        vec![GameEvent::DamageApplied {
-            position: Position::Main,
-            before: 0,
-            after: 40,
-        }]
-    );
-    assert_eq!(
-        state.work,
-        VecDeque::from(vec![WorkItem::DestructionCheck(Position::Main)])
-    );
-}
-
-#[test]
-fn conditional_bonus_is_a_silent_miss_when_the_condition_does_not_hold() {
-    let state = base_state();
-    let leaf = EffectLeaf::ConditionalBonus {
-        condition: crate::domain::cards::EffectCondition::SpellPlayedThisTurn,
-        amount: 40,
-    };
-
-    let (next_state, events) = apply_leaf(&state, PlayerId::One, &[Position::Main], &leaf);
-
-    assert!(events.is_empty());
-    assert_eq!(next_state, state);
-}
-
-#[test]
-fn conditional_bonus_reads_defender_entered_main_this_turn_off_the_opponents_board() {
-    let mut state = base_state();
-    state.players.get_mut(PlayerId::Two).main = Some(SummonInstance {
-        entered_main_this_turn: true,
-        ..whelp(PlayerId::Two)
-    });
-    let leaf = EffectLeaf::ConditionalBonus {
-        condition: crate::domain::cards::EffectCondition::DefenderEnteredMainThisTurn,
-        amount: 30,
-    };
-
-    let (_state, events) = apply_leaf(&state, PlayerId::One, &[Position::Main], &leaf);
-
-    assert_eq!(
-        events,
-        vec![GameEvent::DamageApplied {
-            position: Position::Main,
-            before: 0,
-            after: 30,
-        }]
-    );
-}
-
-#[test]
-fn immutable_damage_in_finds_an_immutable_deal_damage_leaf() {
-    let leaves = [
-        EffectLeaf::DealDamage {
-            amount: 70,
-            immutable: true,
-        },
-        EffectLeaf::ConditionalBonus {
-            condition: crate::domain::cards::EffectCondition::SpellPlayedThisTurn,
-            amount: 40,
-        },
-    ];
-
-    assert!(immutable_damage_in(&leaves));
-}
-
-#[test]
-fn immutable_damage_in_is_false_without_an_immutable_deal_damage_leaf() {
-    let leaves = [
-        EffectLeaf::DealDamage {
-            amount: 50,
-            immutable: false,
-        },
-        EffectLeaf::ConditionalBonus {
-            condition: crate::domain::cards::EffectCondition::SpellPlayedThisTurn,
-            amount: 40,
-        },
-    ];
-
-    assert!(!immutable_damage_in(&leaves));
-    assert!(!immutable_damage_in(&[]));
-}
-
-#[test]
 fn cannot_be_moved_by_opponent_attaches_the_duration_marker() {
     let state = base_state();
     let leaf = EffectLeaf::CannotBeMovedByOpponent;
 
-    let (state, events) = apply_leaf(&state, PlayerId::One, &[Position::Main], &leaf);
+    let (state, events) = apply_leaf(&state, source(PlayerId::One), &[Position::Main], &leaf);
 
     assert!(events.is_empty());
     assert!(
@@ -452,7 +395,7 @@ fn cannot_be_moved_by_opponent_on_an_empty_position_is_a_silent_miss() {
     state.players.get_mut(PlayerId::One).main = None;
     let leaf = EffectLeaf::CannotBeMovedByOpponent;
 
-    let (_state, events) = apply_leaf(&state, PlayerId::One, &[Position::Main], &leaf);
+    let (_state, events) = apply_leaf(&state, source(PlayerId::One), &[Position::Main], &leaf);
 
     assert!(events.is_empty());
 }
@@ -472,7 +415,7 @@ fn return_spell_from_discard_moves_the_first_spell_to_hand() {
     ];
     let leaf = EffectLeaf::ReturnSpellFromDiscard;
 
-    let (state, events) = apply_leaf(&state, PlayerId::One, &[], &leaf);
+    let (state, events) = apply_leaf(&state, source(PlayerId::One), &[], &leaf);
 
     assert!(events.is_empty());
     assert_eq!(state.players.get(PlayerId::One).discard.len(), 1);
@@ -494,7 +437,7 @@ fn return_spell_from_discard_with_no_spell_present_is_a_silent_miss() {
     }];
     let leaf = EffectLeaf::ReturnSpellFromDiscard;
 
-    let (next_state, events) = apply_leaf(&state, PlayerId::One, &[], &leaf);
+    let (next_state, events) = apply_leaf(&state, source(PlayerId::One), &[], &leaf);
 
     assert!(events.is_empty());
     assert_eq!(next_state, state);
@@ -509,7 +452,7 @@ fn return_spell_to_deck_top_moves_the_first_spell_in_hand_to_the_deck_front() {
     }];
     let leaf = EffectLeaf::ReturnSpellToDeckTop;
 
-    let (state, events) = apply_leaf(&state, PlayerId::One, &[], &leaf);
+    let (state, events) = apply_leaf(&state, source(PlayerId::One), &[], &leaf);
 
     assert!(events.is_empty());
     assert!(state.players.get(PlayerId::One).hand.is_empty());
@@ -530,7 +473,7 @@ fn swap_opposing_positions_exchanges_the_opponents_main_and_named_bench_slot() {
 
     let (state, events) = apply_leaf(
         &state,
-        PlayerId::One,
+        source(PlayerId::One),
         &[Position::Bench(BenchSlot::First)],
         &leaf,
     );
@@ -569,7 +512,7 @@ fn swap_opposing_positions_refuses_a_main_that_cannot_be_moved_by_opponent() {
 
     let (state, events) = apply_leaf(
         &state,
-        PlayerId::One,
+        source(PlayerId::One),
         &[Position::Bench(BenchSlot::First)],
         &leaf,
     );
@@ -596,7 +539,7 @@ fn move_summon_relocates_a_bench_summon_to_an_empty_bench_slot_and_enqueues_its_
 
     let (state, events) = apply_leaf(
         &state,
-        PlayerId::One,
+        source(PlayerId::One),
         &[
             Position::Bench(BenchSlot::First),
             Position::Bench(BenchSlot::Second),
@@ -633,7 +576,7 @@ fn move_summon_onto_an_occupied_destination_is_a_silent_miss() {
 
     let (next_state, events) = apply_leaf(
         &state,
-        PlayerId::One,
+        source(PlayerId::One),
         &[
             Position::Bench(BenchSlot::First),
             Position::Bench(BenchSlot::Second),
@@ -652,7 +595,7 @@ fn move_summon_from_an_empty_source_is_a_silent_miss() {
 
     let (next_state, events) = apply_leaf(
         &state,
-        PlayerId::One,
+        source(PlayerId::One),
         &[
             Position::Bench(BenchSlot::First),
             Position::Bench(BenchSlot::Second),
@@ -672,7 +615,7 @@ fn swap_positions_exchanges_main_and_the_named_bench_slot_and_enqueues_the_four_
 
     let (state, events) = apply_leaf(
         &state,
-        PlayerId::One,
+        source(PlayerId::One),
         &[Position::Bench(BenchSlot::First)],
         &leaf,
     );
@@ -723,7 +666,7 @@ fn swap_positions_against_an_empty_bench_slot_is_a_silent_miss() {
 
     let (next_state, events) = apply_leaf(
         &state,
-        PlayerId::One,
+        source(PlayerId::One),
         &[Position::Bench(BenchSlot::First)],
         &leaf,
     );
@@ -737,7 +680,7 @@ fn produce_mana_leaf_banks_the_named_summons_own_printed_type() {
     let state = base_state();
     let leaf = EffectLeaf::ProduceMana;
 
-    let (state, events) = apply_leaf(&state, PlayerId::One, &[Position::Main], &leaf);
+    let (state, events) = apply_leaf(&state, source(PlayerId::One), &[Position::Main], &leaf);
 
     assert_eq!(
         events,
@@ -755,7 +698,7 @@ fn produce_mana_leaf_with_no_target_is_a_no_op() {
     let state = base_state();
     let leaf = EffectLeaf::ProduceMana;
 
-    let (next_state, events) = apply_leaf(&state, PlayerId::One, &[], &leaf);
+    let (next_state, events) = apply_leaf(&state, source(PlayerId::One), &[], &leaf);
 
     assert!(events.is_empty());
     assert_eq!(next_state, state);
@@ -766,7 +709,7 @@ fn ready_summon_turns_the_targeted_summon_ready() {
     let state = base_state();
     let leaf = EffectLeaf::ReadySummon;
 
-    let (state, events) = apply_leaf(&state, PlayerId::One, &[Position::Main], &leaf);
+    let (state, events) = apply_leaf(&state, source(PlayerId::One), &[Position::Main], &leaf);
 
     assert_eq!(
         events,
@@ -792,7 +735,7 @@ fn ready_summon_on_an_empty_position_is_a_silent_miss() {
     state.players.get_mut(PlayerId::One).main = None;
     let leaf = EffectLeaf::ReadySummon;
 
-    let (_state, events) = apply_leaf(&state, PlayerId::One, &[Position::Main], &leaf);
+    let (_state, events) = apply_leaf(&state, source(PlayerId::One), &[Position::Main], &leaf);
 
     assert!(events.is_empty());
 }

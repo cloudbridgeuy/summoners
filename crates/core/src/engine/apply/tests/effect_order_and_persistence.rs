@@ -50,10 +50,11 @@ fn a_probe_spells_four_printed_effects_resolve_in_authored_order() {
         components: vec![
             Component::Tags(Tags(vec!["spell".to_string()])),
             Component::Timing(SpellTiming::Support),
-            Component::Effect(EffectLeaf::DealDamage {
-                amount: 5,
-                immutable: false,
-            }),
+            Component::Effect(EffectLeaf::DealDamage(crate::domain::cards::DamageEffect {
+                base: 5,
+                constraints: crate::domain::cards::DamageConstraints::new(),
+                additions: vec![],
+            })),
             Component::Effect(EffectLeaf::Heal { amount: 3 }),
             Component::Effect(EffectLeaf::ReadySummon),
             Component::Effect(EffectLeaf::DrawCards { amount: 1 }),
@@ -97,7 +98,7 @@ fn a_probe_spells_four_printed_effects_resolve_in_authored_order() {
     .expect("the caster holds Priority second");
 
     assert_eq!(
-        resolved.events,
+        compact_damage_events(&resolved.events),
         vec![
             GameEvent::PriorityPassed {
                 player: PlayerId::One
@@ -109,11 +110,7 @@ fn a_probe_spells_four_printed_effects_resolve_in_authored_order() {
                     targets: vec![Position::Main],
                 },
             },
-            GameEvent::DamageApplied {
-                position: Position::Main,
-                before: 0,
-                after: 5,
-            },
+            legacy_damage(Position::Main, 0, 5),
             GameEvent::Healed {
                 position: Position::Main,
                 amount: 3,

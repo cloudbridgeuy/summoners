@@ -741,10 +741,13 @@ fn quarry_brutes_printed_attack_carries_its_cost_and_effects() {
     );
     assert_eq!(
         attack.all::<EffectLeaf>(),
-        vec![&EffectLeaf::DealDamage {
-            amount: 20,
-            immutable: false,
-        }]
+        vec![&EffectLeaf::DealDamage(
+            crate::domain::cards::DamageEffect {
+                base: 20,
+                constraints: crate::domain::cards::DamageConstraints::new(),
+                additions: vec![]
+            }
+        )]
     );
 }
 

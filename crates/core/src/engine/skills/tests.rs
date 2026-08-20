@@ -5,7 +5,8 @@
 use super::*;
 use crate::domain::actions::GameAction;
 use crate::domain::cards::fixtures;
-use crate::domain::cards::{CardSet, Component, Entity};
+use crate::domain::cards::{CardSet, Component, DamageConstraints, DamageEffect, Entity};
+use crate::domain::events::{DamageSource, GameEvent};
 use crate::domain::ids::{BenchSlot, CardInstanceId};
 use crate::domain::state::{
     CardRef, GameStatus, ManaBank, ManaSource, MovementStep, PerPlayer, TurnState, UpgradeChain,
@@ -96,6 +97,71 @@ fn cards_with(extra: Vec<Entity>) -> Arc<CardSet> {
     let mut entities = fixtures::entities();
     entities.extend(extra);
     Arc::new(CardSet::new(entities))
+}
+
+#[test]
+fn damage_skill_retains_its_exact_source_and_ignores_wards() {
+    let card_id = probe_id(0xd1);
+    let ability_id = probe_id(0xd2);
+    let skill = Entity {
+        id: ability_id,
+        components: vec![Component::Effect(EffectLeaf::DealDamage(DamageEffect {
+            base: 20,
+            constraints: DamageConstraints::new(),
+            additions: vec![],
+        }))],
+    };
+    let card = Entity {
+        id: card_id,
+        components: vec![Component::Skill(skill)],
+    };
+    let mut state = base_state_with_cards(cards_with(vec![card]), card_id, true);
+    state.players.get_mut(PlayerId::Two).enchantments = vec![
+        CardRef {
+            instance: CardInstanceId(90),
+            def: fixtures::id("standing-ward"),
+        },
+        CardRef {
+            instance: CardInstanceId(91),
+            def: fixtures::id("standing-ward"),
+        },
+    ];
+
+    let outcome = activate_skill(
+        &state,
+        SkillActivation {
+            player: PlayerId::One,
+            position: Position::Main,
+            ability: ability_id,
+            targets: vec![Position::Main],
+            mana_hint: None,
+        },
+    )
+    .expect("free damage skill is legal");
+
+    assert!(matches!(
+        outcome.events.get(1),
+        Some(GameEvent::DamageCalculationStarted {
+            context,
+            base: 20,
+            ..
+        }) if context.source == (DamageSource::Skill {
+            controller: PlayerId::One,
+            position: Position::Main,
+            ability: ability_id,
+        })
+    ));
+    assert_eq!(
+        outcome
+            .state
+            .players
+            .get(PlayerId::Two)
+            .main
+            .as_ref()
+            .expect("main")
+            .damage,
+        20
+    );
 }
 
 // --- a fixture fact, read straight off the container -----------------

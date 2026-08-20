@@ -23,8 +23,8 @@ use super::entity::{
     Trigger,
 };
 use super::{
-    CardSet, Cost, EffectCondition, EffectLeaf, Form, Modifier, ResponseBlock, SpellTiming,
-    TriggerEvent,
+    CardSet, Cost, DamageAddition, DamageConstraint, DamageConstraints, DamageEffect,
+    EffectCondition, EffectLeaf, Form, Modifier, ResponseBlock, SpellTiming, TriggerEvent,
 };
 use crate::domain::ids::ManaType;
 
@@ -141,6 +141,7 @@ fn enchantment(card: u32, name: &str, cost: Cost, effects: Vec<EffectLeaf>) -> E
         // a printed fact, not a consequence of the "enchantment" tag — see
         // `Persistent`'s own doc comment.
         Component::Persistent,
+        Component::Passive(Modifier::IncomingAttackDamageReduction(10)),
     ];
     components.extend(effects.into_iter().map(Component::Effect));
     Entity {
@@ -166,10 +167,11 @@ pub(crate) fn entities() -> Vec<Entity> {
             vec![attack(
                 1,
                 Cost::default(),
-                vec![EffectLeaf::DealDamage {
-                    amount: 10,
-                    immutable: false,
-                }],
+                vec![EffectLeaf::DealDamage(DamageEffect {
+                    base: 10,
+                    constraints: DamageConstraints::new(),
+                    additions: vec![],
+                })],
             )],
         ),
         summon(
@@ -187,10 +189,11 @@ pub(crate) fn entities() -> Vec<Entity> {
                     generic: 1,
                     ..Cost::default()
                 },
-                vec![EffectLeaf::DealDamage {
-                    amount: 20,
-                    immutable: false,
-                }],
+                vec![EffectLeaf::DealDamage(DamageEffect {
+                    base: 20,
+                    constraints: DamageConstraints::new(),
+                    additions: vec![],
+                })],
             )],
         ),
         summon(
@@ -209,10 +212,11 @@ pub(crate) fn entities() -> Vec<Entity> {
                     generic: 1,
                     ..Cost::default()
                 },
-                vec![EffectLeaf::DealDamage {
-                    amount: 90,
-                    immutable: false,
-                }],
+                vec![EffectLeaf::DealDamage(DamageEffect {
+                    base: 90,
+                    constraints: DamageConstraints::new(),
+                    additions: vec![],
+                })],
             )],
         ),
         // Chain 2 — two steps.
@@ -228,10 +232,11 @@ pub(crate) fn entities() -> Vec<Entity> {
             vec![attack(
                 4,
                 Cost::default(),
-                vec![EffectLeaf::DealDamage {
-                    amount: 10,
-                    immutable: false,
-                }],
+                vec![EffectLeaf::DealDamage(DamageEffect {
+                    base: 10,
+                    constraints: DamageConstraints::new(),
+                    additions: vec![],
+                })],
             )],
         ),
         summon(
@@ -249,10 +254,11 @@ pub(crate) fn entities() -> Vec<Entity> {
                     generic: 1,
                     ..Cost::default()
                 },
-                vec![EffectLeaf::DealDamage {
-                    amount: 20,
-                    immutable: false,
-                }],
+                vec![EffectLeaf::DealDamage(DamageEffect {
+                    base: 20,
+                    constraints: DamageConstraints::new(),
+                    additions: vec![],
+                })],
             )],
         ),
         // Skill fixtures.
@@ -269,10 +275,11 @@ pub(crate) fn entities() -> Vec<Entity> {
                 attack(
                     6,
                     Cost::default(),
-                    vec![EffectLeaf::DealDamage {
-                        amount: 10,
-                        immutable: false,
-                    }],
+                    vec![EffectLeaf::DealDamage(DamageEffect {
+                        base: 10,
+                        constraints: DamageConstraints::new(),
+                        additions: vec![],
+                    })],
                 ),
                 skill(
                     6,
@@ -297,10 +304,11 @@ pub(crate) fn entities() -> Vec<Entity> {
                 attack(
                     7,
                     Cost::default(),
-                    vec![EffectLeaf::DealDamage {
-                        amount: 10,
-                        immutable: false,
-                    }],
+                    vec![EffectLeaf::DealDamage(DamageEffect {
+                        base: 10,
+                        constraints: DamageConstraints::new(),
+                        additions: vec![],
+                    })],
                 ),
                 skill(7, Cost::default(), vec![EffectLeaf::SwapPositions]),
             ],
@@ -318,10 +326,11 @@ pub(crate) fn entities() -> Vec<Entity> {
                 attack(
                     8,
                     Cost::default(),
-                    vec![EffectLeaf::DealDamage {
-                        amount: 10,
-                        immutable: false,
-                    }],
+                    vec![EffectLeaf::DealDamage(DamageEffect {
+                        base: 10,
+                        constraints: DamageConstraints::new(),
+                        additions: vec![],
+                    })],
                 ),
                 skill(8, Cost::default(), vec![EffectLeaf::ProduceMana]),
             ],
@@ -340,10 +349,11 @@ pub(crate) fn entities() -> Vec<Entity> {
                 attack(
                     9,
                     Cost::default(),
-                    vec![EffectLeaf::DealDamage {
-                        amount: 10,
-                        immutable: false,
-                    }],
+                    vec![EffectLeaf::DealDamage(DamageEffect {
+                        base: 10,
+                        constraints: DamageConstraints::new(),
+                        additions: vec![],
+                    })],
                 ),
                 trigger(
                     9,
@@ -366,19 +376,21 @@ pub(crate) fn entities() -> Vec<Entity> {
                 attack(
                     10,
                     Cost::default(),
-                    vec![EffectLeaf::DealDamage {
-                        amount: 10,
-                        immutable: false,
-                    }],
+                    vec![EffectLeaf::DealDamage(DamageEffect {
+                        base: 10,
+                        constraints: DamageConstraints::new(),
+                        additions: vec![],
+                    })],
                 ),
                 trigger(
                     10,
                     TriggerEvent::AnySummonDestroyed,
                     true,
-                    vec![EffectLeaf::DealDamage {
-                        amount: 15,
-                        immutable: false,
-                    }],
+                    vec![EffectLeaf::DealDamage(DamageEffect {
+                        base: 15,
+                        constraints: DamageConstraints::new(),
+                        additions: vec![],
+                    })],
                 ),
             ],
         ),
@@ -395,10 +407,11 @@ pub(crate) fn entities() -> Vec<Entity> {
                 attack(
                     11,
                     Cost::default(),
-                    vec![EffectLeaf::DealDamage {
-                        amount: 10,
-                        immutable: false,
-                    }],
+                    vec![EffectLeaf::DealDamage(DamageEffect {
+                        base: 10,
+                        constraints: DamageConstraints::new(),
+                        additions: vec![],
+                    })],
                 ),
                 trigger(
                     11,
@@ -417,10 +430,11 @@ pub(crate) fn entities() -> Vec<Entity> {
                 generic: 1,
                 ..Cost::default()
             },
-            vec![EffectLeaf::DealDamage {
-                amount: 10,
-                immutable: false,
-            }],
+            vec![EffectLeaf::DealDamage(DamageEffect {
+                base: 10,
+                constraints: DamageConstraints::new(),
+                additions: vec![],
+            })],
         ),
         spell(
             13,
@@ -465,10 +479,11 @@ pub(crate) fn entities() -> Vec<Entity> {
             vec![attack(
                 16,
                 Cost::default(),
-                vec![EffectLeaf::DealDamage {
-                    amount: 10,
-                    immutable: false,
-                }],
+                vec![EffectLeaf::DealDamage(DamageEffect {
+                    base: 10,
+                    constraints: DamageConstraints::new(),
+                    additions: vec![],
+                })],
             )],
         ),
         summon(
@@ -486,10 +501,11 @@ pub(crate) fn entities() -> Vec<Entity> {
                     generic: 1,
                     ..Cost::default()
                 },
-                vec![EffectLeaf::DealDamage {
-                    amount: 20,
-                    immutable: false,
-                }],
+                vec![EffectLeaf::DealDamage(DamageEffect {
+                    base: 20,
+                    constraints: DamageConstraints::new(),
+                    additions: vec![],
+                })],
             )],
         ),
         summon(
@@ -519,16 +535,14 @@ pub(crate) fn entities() -> Vec<Entity> {
                         generic: 2,
                         ..Cost::default()
                     },
-                    vec![
-                        EffectLeaf::DealDamage {
-                            amount: 50,
-                            immutable: false,
-                        },
-                        EffectLeaf::ConditionalBonus {
+                    vec![EffectLeaf::DealDamage(DamageEffect {
+                        base: 50,
+                        constraints: DamageConstraints::new(),
+                        additions: vec![DamageAddition {
                             condition: EffectCondition::DefenderEnteredMainThisTurn,
                             amount: 30,
-                        },
-                    ],
+                        }],
+                    })],
                 ),
             ],
         ),
@@ -545,10 +559,11 @@ pub(crate) fn entities() -> Vec<Entity> {
             vec![attack(
                 19,
                 Cost::default(),
-                vec![EffectLeaf::DealDamage {
-                    amount: 10,
-                    immutable: false,
-                }],
+                vec![EffectLeaf::DealDamage(DamageEffect {
+                    base: 10,
+                    constraints: DamageConstraints::new(),
+                    additions: vec![],
+                })],
             )],
         ),
         summon(
@@ -566,10 +581,11 @@ pub(crate) fn entities() -> Vec<Entity> {
                     generic: 1,
                     ..Cost::default()
                 },
-                vec![EffectLeaf::DealDamage {
-                    amount: 20,
-                    immutable: false,
-                }],
+                vec![EffectLeaf::DealDamage(DamageEffect {
+                    base: 20,
+                    constraints: DamageConstraints::new(),
+                    additions: vec![],
+                })],
             )],
         ),
         summon(
@@ -610,14 +626,14 @@ pub(crate) fn entities() -> Vec<Entity> {
                         ..Cost::default()
                     },
                     vec![
-                        EffectLeaf::DealDamage {
-                            amount: 40,
-                            immutable: false,
-                        },
-                        EffectLeaf::ConditionalBonus {
-                            condition: EffectCondition::SpellPlayedThisTurn,
-                            amount: 40,
-                        },
+                        EffectLeaf::DealDamage(DamageEffect {
+                            base: 40,
+                            constraints: DamageConstraints::new(),
+                            additions: vec![DamageAddition {
+                                condition: EffectCondition::SpellPlayedThisTurn,
+                                amount: 40,
+                            }],
+                        }),
                         EffectLeaf::BlockResponses {
                             condition: EffectCondition::SpellPlayedThisTurn,
                             block: ResponseBlock::AttackSpells,
@@ -639,10 +655,11 @@ pub(crate) fn entities() -> Vec<Entity> {
             vec![attack(
                 22,
                 Cost::default(),
-                vec![EffectLeaf::DealDamage {
-                    amount: 10,
-                    immutable: false,
-                }],
+                vec![EffectLeaf::DealDamage(DamageEffect {
+                    base: 10,
+                    constraints: DamageConstraints::new(),
+                    additions: vec![],
+                })],
             )],
         ),
         summon(
@@ -660,10 +677,11 @@ pub(crate) fn entities() -> Vec<Entity> {
                     generic: 1,
                     ..Cost::default()
                 },
-                vec![EffectLeaf::DealDamage {
-                    amount: 20,
-                    immutable: false,
-                }],
+                vec![EffectLeaf::DealDamage(DamageEffect {
+                    base: 20,
+                    constraints: DamageConstraints::new(),
+                    additions: vec![],
+                })],
             )],
         ),
         summon(
@@ -702,10 +720,14 @@ pub(crate) fn entities() -> Vec<Entity> {
                         generic: 2,
                         ..Cost::default()
                     },
-                    vec![EffectLeaf::DealDamage {
-                        amount: 70,
-                        immutable: true,
-                    }],
+                    vec![EffectLeaf::DealDamage(DamageEffect {
+                        base: 70,
+                        constraints: DamageConstraints::from([
+                            DamageConstraint::Unincreasable,
+                            DamageConstraint::Unpreventable,
+                        ]),
+                        additions: vec![],
+                    })],
                 ),
             ],
         ),

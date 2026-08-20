@@ -16,6 +16,8 @@
 //! builds a `CardSet` against: the vanilla and signature cards, authored as
 //! `Entity` values.
 
+use crate::domain::ids::{CardInstanceId, PlayerId, Position};
+
 /// The three card families (rules §3).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CardKind {
@@ -72,13 +74,112 @@ pub enum TriggerEvent {
     AnySummonDestroyed,
 }
 
-/// A condition an effect leaf can test before applying a bonus. `pub` for
-/// the same reason `EffectLeaf` is: `EffectLeaf::ConditionalBonus` names it
-/// and `EffectLeaf` is reachable from the public `StackItem::Trigger`.
+/// A condition a grouped Damage addition or response block can test.
+/// `pub` because public card and Stack vocabulary names it directly.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EffectCondition {
     DefenderEnteredMainThisTurn,
     SpellPlayedThisTurn,
+}
+
+/// The exact game object whose printed ability is resolving an effect.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EffectSource {
+    Attack {
+        controller: PlayerId,
+        position: Position,
+        ability: EntityId,
+    },
+    Spell {
+        controller: PlayerId,
+        card: CardInstanceId,
+        definition: EntityId,
+    },
+    Skill {
+        controller: PlayerId,
+        position: Position,
+        ability: EntityId,
+    },
+    Trigger {
+        controller: PlayerId,
+        position: Position,
+        ability: EntityId,
+    },
+}
+
+impl EffectSource {
+    #[must_use]
+    pub const fn controller(self) -> PlayerId {
+        match self {
+            EffectSource::Attack { controller, .. }
+            | EffectSource::Spell { controller, .. }
+            | EffectSource::Skill { controller, .. }
+            | EffectSource::Trigger { controller, .. } => controller,
+        }
+    }
+}
+
+/// A semantic rule that can prevent one family of Damage adjustments.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DamageConstraint {
+    Unincreasable,
+    Unpreventable,
+}
+
+/// The semantic constraints printed on one grouped Damage effect.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct DamageConstraints(u8);
+
+impl DamageConstraints {
+    const UNINCREASABLE: u8 = 1 << 0;
+    const UNPREVENTABLE: u8 = 1 << 1;
+
+    #[must_use]
+    pub const fn new() -> Self {
+        Self(0)
+    }
+
+    pub fn insert(&mut self, constraint: DamageConstraint) {
+        self.0 |= match constraint {
+            DamageConstraint::Unincreasable => Self::UNINCREASABLE,
+            DamageConstraint::Unpreventable => Self::UNPREVENTABLE,
+        };
+    }
+
+    #[must_use]
+    pub const fn contains(self, constraint: DamageConstraint) -> bool {
+        let mask = match constraint {
+            DamageConstraint::Unincreasable => Self::UNINCREASABLE,
+            DamageConstraint::Unpreventable => Self::UNPREVENTABLE,
+        };
+        self.0 & mask != 0
+    }
+}
+
+impl<const N: usize> From<[DamageConstraint; N]> for DamageConstraints {
+    fn from(constraints: [DamageConstraint; N]) -> Self {
+        let mut result = Self::new();
+        for constraint in constraints {
+            result.insert(constraint);
+        }
+        result
+    }
+}
+
+/// One conditional increase owned by the Damage effect it can adjust.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DamageAddition {
+    pub amount: u32,
+    pub condition: EffectCondition,
+}
+
+/// One printed Damage effect, including all additions and constraints that
+/// can affect its single committed total.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DamageEffect {
+    pub base: u32,
+    pub constraints: DamageConstraints,
+    pub additions: Vec<DamageAddition>,
 }
 
 /// The family of response an effect can block. `pub` for the same reason
@@ -107,19 +208,12 @@ pub struct Cost {
 /// entry.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EffectLeaf {
-    DealDamage {
-        amount: u32,
-        immutable: bool,
-    },
+    DealDamage(DamageEffect),
     Heal {
         amount: u32,
     },
     MoveSummon,
     SwapPositions,
-    ConditionalBonus {
-        condition: EffectCondition,
-        amount: u32,
-    },
     BlockResponses {
         condition: EffectCondition,
         block: ResponseBlock,
@@ -152,6 +246,7 @@ pub enum EffectLeaf {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Modifier {
     OpposingRetreatCostDelta(i32),
+    IncomingAttackDamageReduction(u32),
 }
 
 /// The card container: `Entity`, `Component`, and the typed reads over them.
@@ -214,6 +309,68 @@ mod tests {
     }
 
     #[test]
+    fn every_effect_source_variant_retains_its_controller() {
+        let ability = EntityId::parse(&"0".repeat(32)).expect("valid probe id");
+        let sources = [
+            EffectSource::Attack {
+                controller: PlayerId::One,
+                position: Position::Main,
+                ability,
+            },
+            EffectSource::Spell {
+                controller: PlayerId::One,
+                card: CardInstanceId(1),
+                definition: ability,
+            },
+            EffectSource::Skill {
+                controller: PlayerId::One,
+                position: Position::Main,
+                ability,
+            },
+            EffectSource::Trigger {
+                controller: PlayerId::One,
+                position: Position::Main,
+                ability,
+            },
+        ];
+
+        assert!(
+            sources
+                .iter()
+                .all(|source| source.controller() == PlayerId::One)
+        );
+    }
+
+    #[test]
+    fn damage_constraints_are_semantic_set_values() {
+        let mut constraints = DamageConstraints::new();
+        assert!(!constraints.contains(DamageConstraint::Unincreasable));
+        assert!(!constraints.contains(DamageConstraint::Unpreventable));
+
+        constraints.insert(DamageConstraint::Unincreasable);
+        constraints.insert(DamageConstraint::Unpreventable);
+
+        assert!(constraints.contains(DamageConstraint::Unincreasable));
+        assert!(constraints.contains(DamageConstraint::Unpreventable));
+    }
+
+    #[test]
+    fn grouped_damage_owns_constraints_and_additions() {
+        let damage = DamageEffect {
+            base: 50,
+            constraints: DamageConstraints::from([DamageConstraint::Unincreasable]),
+            additions: vec![DamageAddition {
+                amount: 30,
+                condition: EffectCondition::DefenderEnteredMainThisTurn,
+            }],
+        };
+
+        assert_eq!(damage.base, 50);
+        assert!(damage.constraints.contains(DamageConstraint::Unincreasable));
+        assert_eq!(damage.additions.len(), 1);
+    }
+
+    #[test]
     fn response_block_variants_construct() {
         assert_eq!(ResponseBlock::AttackSpells, ResponseBlock::AttackSpells);
     }
@@ -234,17 +391,17 @@ mod tests {
     #[test]
     fn every_effect_leaf_variant_constructs() {
         let leaves = vec![
-            EffectLeaf::DealDamage {
-                amount: 10,
-                immutable: false,
-            },
+            EffectLeaf::DealDamage(DamageEffect {
+                base: 10,
+                constraints: DamageConstraints::new(),
+                additions: vec![DamageAddition {
+                    condition: EffectCondition::SpellPlayedThisTurn,
+                    amount: 20,
+                }],
+            }),
             EffectLeaf::Heal { amount: 10 },
             EffectLeaf::MoveSummon,
             EffectLeaf::SwapPositions,
-            EffectLeaf::ConditionalBonus {
-                condition: EffectCondition::SpellPlayedThisTurn,
-                amount: 20,
-            },
             EffectLeaf::BlockResponses {
                 condition: EffectCondition::SpellPlayedThisTurn,
                 block: ResponseBlock::AttackSpells,
@@ -258,15 +415,16 @@ mod tests {
             EffectLeaf::ReadySummon,
             EffectLeaf::SwapOpposingPositions,
         ];
-        assert_eq!(leaves.len(), 14);
+        assert_eq!(leaves.len(), 13);
     }
 
     #[test]
     fn modifier_variants_construct() {
-        assert_eq!(
+        let modifiers = [
             Modifier::OpposingRetreatCostDelta(1),
-            Modifier::OpposingRetreatCostDelta(1)
-        );
+            Modifier::IncomingAttackDamageReduction(10),
+        ];
+        assert_eq!(modifiers.len(), 2);
     }
 
     #[test]

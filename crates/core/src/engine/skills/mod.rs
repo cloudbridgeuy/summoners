@@ -17,14 +17,14 @@
 //! ordinary Main Phase actions, alongside playing a Summon or a normal
 //! Retreat, none of which use the Stack either.
 
-use crate::domain::cards::{Cost, EffectLeaf, EntityId, Skill};
+use crate::domain::cards::{Cost, EffectLeaf, EffectSource, EntityId, Skill};
 use crate::domain::errors::ActionError;
 use crate::domain::events::GameEvent;
 use crate::domain::ids::{ManaType, PlayerId, Position};
 use crate::domain::state::{DurationMarker, GameState, Phase, PlayerState, SummonInstance};
 use crate::engine::apply::ActionOutcome;
-use crate::engine::effects;
 use crate::engine::payment::{self, PaymentError};
+use crate::engine::resolution;
 
 /// The Summon at `position`, if any.
 fn summon_at(player: &PlayerState, position: Position) -> Option<&SummonInstance> {
@@ -56,33 +56,6 @@ fn require_free_main_phase(state: &GameState) -> Result<(), ActionError> {
         return Err(ActionError::WrongPhase);
     }
     Ok(())
-}
-
-/// Fold `effects` over `state` through the shared leaf interpreter, in
-/// printed order, the same way `engine::resolution` runs a Spell's or an
-/// attack's effects — including `engine::resolution::apply_leaves`'s same
-/// immutable-Damage gate on `ConditionalBonus` (rules §30); no current
-/// Skill fixture pairs the two, but a Skill's effects fold through the same
-/// vocabulary a Trigger or an Attack does, so this copy stays consistent
-/// with it.
-fn apply_leaves(
-    state: &GameState,
-    controller: PlayerId,
-    targets: &[Position],
-    effects: &[EffectLeaf],
-) -> (GameState, Vec<GameEvent>) {
-    let mut state = state.clone();
-    let mut events = Vec::new();
-    let damage_is_immutable = effects::immutable_damage_in(effects);
-    for leaf in effects {
-        if damage_is_immutable && matches!(leaf, EffectLeaf::ConditionalBonus { .. }) {
-            continue;
-        }
-        let (next_state, leaf_events) = effects::apply_leaf(&state, controller, targets, leaf);
-        state = next_state;
-        events.extend(leaf_events);
-    }
-    (state, events)
 }
 
 /// Reject a `MoveSummon` or `SwapPositions` leaf's targets before any
@@ -282,7 +255,16 @@ pub(crate) fn activate_skill(
         ability,
     });
 
-    let (next, leaf_events) = apply_leaves(&next, player, &targets, &effects);
+    let (next, leaf_events) = resolution::apply_leaves(
+        &next,
+        EffectSource::Skill {
+            controller: player,
+            position,
+            ability,
+        },
+        &targets,
+        &effects,
+    );
     events.extend(leaf_events);
 
     Ok(ActionOutcome {
