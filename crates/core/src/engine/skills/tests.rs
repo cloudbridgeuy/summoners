@@ -5,7 +5,9 @@
 use super::*;
 use crate::domain::actions::GameAction;
 use crate::domain::cards::fixtures;
-use crate::domain::cards::{CardSet, Component, DamageConstraints, DamageEffect, Entity};
+use crate::domain::cards::{
+    CardSet, Component, DamageConstraints, DamageEffect, EffectTarget, Entity,
+};
 use crate::domain::events::{DamageSource, GameEvent};
 use crate::domain::ids::{BenchSlot, CardInstanceId};
 use crate::domain::state::{
@@ -70,7 +72,7 @@ fn base_state_with_cards(cards: Arc<CardSet>, def: EntityId, ready: bool) -> Gam
             window: None,
             normal_attack_used: false,
             normal_retreat_used: false,
-            spell_played_this_turn: false,
+            spell_played_this_turn: PerPlayer::new(false, false),
         },
         stack: vec![],
         stack_segment_bases: vec![],
@@ -762,7 +764,10 @@ fn activating_by_id_finds_the_same_ability_no_matter_where_it_sits_in_print_orde
                 mind: 1,
                 ..Cost::default()
             }),
-            Component::Effect(EffectLeaf::Heal { amount: 1 }),
+            Component::Effect(EffectLeaf::Heal {
+                amount: 1,
+                target: EffectTarget::Selected,
+            }),
         ],
     };
     let steady_draft = Entity {
@@ -772,7 +777,10 @@ fn activating_by_id_finds_the_same_ability_no_matter_where_it_sits_in_print_orde
                 generic: 1,
                 ..Cost::default()
             }),
-            Component::Effect(EffectLeaf::Heal { amount: 5 }),
+            Component::Effect(EffectLeaf::Heal {
+                amount: 5,
+                target: EffectTarget::Selected,
+            }),
         ],
     };
 
@@ -859,7 +867,10 @@ fn activating_an_id_the_card_does_not_print_is_an_invalid_target_end_to_end() {
     let probe = probe_id(0x02);
     let steady_draft = Entity {
         id: probe_id(0xc3),
-        components: vec![Component::Effect(EffectLeaf::Heal { amount: 5 })],
+        components: vec![Component::Effect(EffectLeaf::Heal {
+            amount: 5,
+            target: EffectTarget::Selected,
+        })],
     };
     let card = Entity {
         id: probe,

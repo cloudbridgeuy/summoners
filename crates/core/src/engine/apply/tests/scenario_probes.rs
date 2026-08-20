@@ -305,13 +305,13 @@ fn a_rooted_main_blocks_rearrange_for_the_opponents_whole_turn_then_allows_it() 
                         card_ref(102, "sow-matriarch"),
                         card_ref(103, "old-sow-of-the-barrow"),
                     ],
-                    damage: 0,
+                    damage: 30,
                     ready: true,
                 }),
                 bench: [
                     Some(ScenarioSummon {
                         chain: vec![card_ref(201, "quarry-whelp")],
-                        damage: 0,
+                        damage: 10,
                         ready: true,
                     }),
                     None,
@@ -330,11 +330,30 @@ fn a_rooted_main_blocks_rearrange_for_the_opponents_whole_turn_then_allows_it() 
             player: PlayerId::Two,
             position: Position::Main,
             ability: fixtures::skill_id("old-sow-of-the-barrow"),
-            targets: vec![Position::Main],
+            targets: vec![Position::Bench(BenchSlot::First)],
             mana_hint: None,
         },
     )
     .expect("Two's Main is Ready and Root and Renew's cost is covered");
+    assert_eq!(
+        rooted
+            .state
+            .players
+            .get(PlayerId::Two)
+            .main
+            .as_ref()
+            .expect("Two still has a Main")
+            .damage,
+        0,
+        "a source-bound self heal ignores a redirected selected target"
+    );
+    assert_eq!(
+        rooted.state.players.get(PlayerId::Two).bench[0]
+            .as_ref()
+            .expect("Two still has a first Bench Summon")
+            .damage,
+        10,
+    );
     assert!(
         !rooted
             .state

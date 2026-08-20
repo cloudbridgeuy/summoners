@@ -107,7 +107,7 @@ mod tests {
                 window: None,
                 normal_attack_used: false,
                 normal_retreat_used: false,
-                spell_played_this_turn: false,
+                spell_played_this_turn: PerPlayer::new(false, false),
             },
             stack: vec![],
             stack_segment_bases: vec![],

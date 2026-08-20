@@ -57,7 +57,7 @@ fn base_state() -> GameState {
             window: None,
             normal_attack_used: false,
             normal_retreat_used: false,
-            spell_played_this_turn: false,
+            spell_played_this_turn: PerPlayer::new(false, false),
         },
         stack: vec![],
         stack_segment_bases: vec![],
@@ -111,7 +111,10 @@ fn drain_runs_the_full_upkeep_sequence_in_order() {
     state.work = VecDeque::from(vec![
         WorkItem::ReadyAll,
         WorkItem::DrawCard,
-        WorkItem::ProduceMana(ManaSource::Player),
+        WorkItem::ProduceMana {
+            player: PlayerId::Two,
+            source: ManaSource::Player,
+        },
     ]);
 
     let (state, events) = drain(&state);
@@ -153,7 +156,10 @@ fn drain_stops_as_soon_as_produce_mana_pauses_on_a_choice() {
     state.work = VecDeque::from(vec![
         WorkItem::ReadyAll,
         WorkItem::DrawCard,
-        WorkItem::ProduceMana(ManaSource::Player),
+        WorkItem::ProduceMana {
+            player: PlayerId::Two,
+            source: ManaSource::Player,
+        },
     ]);
 
     let (state, events) = drain(&state);
@@ -180,7 +186,10 @@ fn drain_stops_immediately_once_a_draw_failure_sets_status() {
     state.work = VecDeque::from(vec![
         WorkItem::ReadyAll,
         WorkItem::DrawCard,
-        WorkItem::ProduceMana(ManaSource::Player),
+        WorkItem::ProduceMana {
+            player: PlayerId::Two,
+            source: ManaSource::Player,
+        },
     ]);
 
     let (state, events) = drain(&state);
@@ -188,7 +197,10 @@ fn drain_stops_immediately_once_a_draw_failure_sets_status() {
     assert!(!state.status.is_playing());
     assert_eq!(
         state.work,
-        VecDeque::from(vec![WorkItem::ProduceMana(ManaSource::Player)]),
+        VecDeque::from(vec![WorkItem::ProduceMana {
+            player: PlayerId::Two,
+            source: ManaSource::Player,
+        }]),
         "the loop checks status before popping the next item, so the \
          unrun item is left queued rather than executed — harmless, since \
          a finished game rejects every later action outright"
@@ -703,7 +715,7 @@ fn drain_resolves_an_attack_spell_against_the_opponents_main() {
 }
 
 #[test]
-fn drain_resolves_a_draw_spell_and_settles_the_loss_check_it_enqueues() {
+fn drain_resolves_a_successful_draw_spell_without_deferred_loss_work() {
     let mut state = base_state();
     state.turn.window = None;
     let card = CardRef {
@@ -737,6 +749,68 @@ fn drain_resolves_a_draw_spell_and_settles_the_loss_check_it_enqueues() {
     assert_eq!(state.players.get(PlayerId::Two).discard, vec![card]);
     assert!(
         state.work.is_empty(),
-        "the LossCheck the draw enqueued was drained too"
+        "a successful effect draw leaves no deferred loss work"
+    );
+}
+
+#[test]
+fn required_effect_draw_failure_stops_later_leaves_immediately() {
+    let mut state = base_state();
+    state.players.get_mut(PlayerId::Two).deck = vec![CardRef {
+        instance: CardInstanceId(20),
+        def: fixtures::id("quarry-whelp"),
+    }];
+    state
+        .players
+        .get_mut(PlayerId::Two)
+        .main
+        .as_mut()
+        .expect("main")
+        .damage = 10;
+    let source = EffectSource::Trigger {
+        controller: PlayerId::Two,
+        position: Position::Main,
+        ability: fixtures::trigger_id("spite-thorn"),
+    };
+    let leaves = vec![
+        EffectLeaf::DrawCards { amount: 2 },
+        EffectLeaf::Heal {
+            amount: 10,
+            target: crate::domain::cards::EffectTarget::Source,
+        },
+    ];
+
+    let (state, events) = apply_leaves(&state, source, &[], &leaves);
+
+    assert_eq!(
+        state.status,
+        GameStatus::Ended(crate::domain::state::GameOutcome {
+            winner: PlayerId::One,
+            reason: crate::domain::state::LossReason::EmptyDeckDraw,
+        })
+    );
+    assert_eq!(
+        events,
+        vec![
+            GameEvent::CardDrawn {
+                player: PlayerId::Two,
+                card: CardInstanceId(20),
+            },
+            GameEvent::GameEnded {
+                winner: PlayerId::One,
+                reason: crate::domain::state::LossReason::EmptyDeckDraw,
+            },
+        ]
+    );
+    assert_eq!(
+        state
+            .players
+            .get(PlayerId::Two)
+            .main
+            .as_ref()
+            .expect("main")
+            .damage,
+        10,
+        "the later heal must not resolve after the terminal draw failure"
     );
 }

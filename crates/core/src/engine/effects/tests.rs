@@ -7,7 +7,8 @@ use crate::domain::cards::{
 };
 use crate::domain::ids::{BenchSlot, CardInstanceId};
 use crate::domain::state::{
-    CardRef, GameStatus, ManaBank, PerPlayer, Phase, PlayerState, TurnState, UpgradeChain,
+    CardRef, GameStatus, ManaBank, PendingInput, PerPlayer, Phase, PlayerState, TurnState,
+    UpgradeChain,
 };
 use std::collections::VecDeque;
 
@@ -64,7 +65,7 @@ fn base_state() -> GameState {
             window: None,
             normal_attack_used: false,
             normal_retreat_used: false,
-            spell_played_this_turn: false,
+            spell_played_this_turn: PerPlayer::new(false, false),
         },
         stack: vec![],
         stack_segment_bases: vec![],
@@ -81,6 +82,35 @@ fn source(controller: PlayerId) -> EffectSource {
         card: CardInstanceId(999),
         definition: fixtures::id("ember-lance"),
     }
+}
+
+#[test]
+fn effect_position_selects_the_authored_target_kind() {
+    let skill_source = EffectSource::Skill {
+        controller: PlayerId::One,
+        position: Position::Main,
+        ability: fixtures::skill_id("quarry-scout"),
+    };
+    assert_eq!(
+        effect_position(
+            skill_source,
+            &[Position::Bench(BenchSlot::First)],
+            EffectTarget::Selected,
+        ),
+        Some(Position::Bench(BenchSlot::First))
+    );
+    assert_eq!(
+        effect_position(
+            skill_source,
+            &[Position::Bench(BenchSlot::First)],
+            EffectTarget::Source,
+        ),
+        Some(Position::Main)
+    );
+    assert_eq!(
+        effect_position(source(PlayerId::One), &[], EffectTarget::Source),
+        None
+    );
 }
 
 #[test]
@@ -203,7 +233,10 @@ fn heal_removes_damage_from_the_casters_own_main() {
         damage: 15,
         ..whelp(PlayerId::One)
     });
-    let leaf = EffectLeaf::Heal { amount: 20 };
+    let leaf = EffectLeaf::Heal {
+        amount: 20,
+        target: EffectTarget::Selected,
+    };
 
     let (state, events) = apply_leaf(&state, source(PlayerId::One), &[Position::Main], &leaf);
 
@@ -233,7 +266,10 @@ fn heal_cannot_reduce_damage_below_zero() {
         damage: 5,
         ..whelp(PlayerId::One)
     });
-    let leaf = EffectLeaf::Heal { amount: 20 };
+    let leaf = EffectLeaf::Heal {
+        amount: 20,
+        target: EffectTarget::Selected,
+    };
 
     let (state, events) = apply_leaf(&state, source(PlayerId::One), &[Position::Main], &leaf);
 
@@ -260,7 +296,10 @@ fn heal_cannot_reduce_damage_below_zero() {
 fn heal_on_an_empty_position_is_a_silent_miss() {
     let mut state = base_state();
     state.players.get_mut(PlayerId::One).main = None;
-    let leaf = EffectLeaf::Heal { amount: 20 };
+    let leaf = EffectLeaf::Heal {
+        amount: 20,
+        target: EffectTarget::Selected,
+    };
 
     let (_state, events) = apply_leaf(&state, source(PlayerId::One), &[Position::Main], &leaf);
 
@@ -268,7 +307,7 @@ fn heal_on_an_empty_position_is_a_silent_miss() {
 }
 
 #[test]
-fn draw_cards_draws_for_the_controller_and_enqueues_a_loss_check() {
+fn draw_cards_draws_for_the_controller_without_deferred_loss_work() {
     let state = base_state();
     let leaf = EffectLeaf::DrawCards { amount: 1 };
 
@@ -283,14 +322,12 @@ fn draw_cards_draws_for_the_controller_and_enqueues_a_loss_check() {
     );
     assert_eq!(state.players.get(PlayerId::Two).hand.len(), 1);
     assert_eq!(state.players.get(PlayerId::Two).deck.len(), 1);
-    assert_eq!(
-        state.work,
-        VecDeque::from(vec![WorkItem::LossCheck(PlayerId::Two)])
-    );
+    assert!(state.work.is_empty());
+    assert_eq!(state.status, GameStatus::Playing);
 }
 
 #[test]
-fn draw_cards_stops_early_once_the_deck_empties() {
+fn draw_cards_draws_available_cards_then_ends_on_shortage() {
     let mut state = base_state();
     state.players.get_mut(PlayerId::One).deck = vec![CardRef {
         instance: CardInstanceId(20),
@@ -300,13 +337,41 @@ fn draw_cards_stops_early_once_the_deck_empties() {
 
     let (state, events) = apply_leaf(&state, source(PlayerId::One), &[], &leaf);
 
-    assert_eq!(events.len(), 1, "only one card was available to draw");
+    assert_eq!(
+        events,
+        vec![
+            GameEvent::CardDrawn {
+                player: PlayerId::One,
+                card: CardInstanceId(20),
+            },
+            GameEvent::GameEnded {
+                winner: PlayerId::Two,
+                reason: crate::domain::state::LossReason::EmptyDeckDraw,
+            },
+        ]
+    );
     assert!(state.players.get(PlayerId::One).deck.is_empty());
     assert_eq!(
-        state.work,
-        VecDeque::from(vec![WorkItem::LossCheck(PlayerId::One)]),
-        "a LossCheck is still enqueued even though the request over-asked"
+        state.status,
+        GameStatus::Ended(crate::domain::state::GameOutcome {
+            winner: PlayerId::Two,
+            reason: crate::domain::state::LossReason::EmptyDeckDraw,
+        })
     );
+    assert!(state.work.is_empty());
+}
+
+#[test]
+fn drawing_exactly_the_final_card_is_successful() {
+    let mut state = base_state();
+    state.players.get_mut(PlayerId::One).deck.truncate(1);
+    let leaf = EffectLeaf::DrawCards { amount: 1 };
+
+    let (state, events) = apply_leaf(&state, source(PlayerId::One), &[], &leaf);
+
+    assert_eq!(events.len(), 1);
+    assert!(state.players.get(PlayerId::One).deck.is_empty());
+    assert_eq!(state.status, GameStatus::Playing);
 }
 
 #[test]
@@ -372,7 +437,9 @@ fn look_at_prizes_names_every_prize_still_face_down() {
 #[test]
 fn cannot_be_moved_by_opponent_attaches_the_duration_marker() {
     let state = base_state();
-    let leaf = EffectLeaf::CannotBeMovedByOpponent;
+    let leaf = EffectLeaf::CannotBeMovedByOpponent {
+        target: EffectTarget::Selected,
+    };
 
     let (state, events) = apply_leaf(&state, source(PlayerId::One), &[Position::Main], &leaf);
 
@@ -393,7 +460,9 @@ fn cannot_be_moved_by_opponent_attaches_the_duration_marker() {
 fn cannot_be_moved_by_opponent_on_an_empty_position_is_a_silent_miss() {
     let mut state = base_state();
     state.players.get_mut(PlayerId::One).main = None;
-    let leaf = EffectLeaf::CannotBeMovedByOpponent;
+    let leaf = EffectLeaf::CannotBeMovedByOpponent {
+        target: EffectTarget::Selected,
+    };
 
     let (_state, events) = apply_leaf(&state, source(PlayerId::One), &[Position::Main], &leaf);
 
@@ -678,7 +747,9 @@ fn swap_positions_against_an_empty_bench_slot_is_a_silent_miss() {
 #[test]
 fn produce_mana_leaf_banks_the_named_summons_own_printed_type() {
     let state = base_state();
-    let leaf = EffectLeaf::ProduceMana;
+    let leaf = EffectLeaf::ProduceMana {
+        target: EffectTarget::Selected,
+    };
 
     let (state, events) = apply_leaf(&state, source(PlayerId::One), &[Position::Main], &leaf);
 
@@ -694,9 +765,95 @@ fn produce_mana_leaf_banks_the_named_summons_own_printed_type() {
 }
 
 #[test]
+fn produce_mana_leaf_banks_for_non_active_controller() {
+    let state = base_state();
+    let leaf = EffectLeaf::ProduceMana {
+        target: EffectTarget::Selected,
+    };
+
+    let (state, events) = apply_leaf(&state, source(PlayerId::Two), &[Position::Main], &leaf);
+
+    assert_eq!(
+        events,
+        vec![GameEvent::ManaProduced {
+            player: PlayerId::Two,
+            source: ManaSource::Summon(Position::Main),
+            mana_type: crate::domain::ids::ManaType::Matter,
+        }]
+    );
+    assert_eq!(state.players.get(PlayerId::One).mana.matter, 0);
+    assert_eq!(state.players.get(PlayerId::Two).mana.matter, 1);
+}
+
+#[test]
+fn produce_mana_leaf_preserves_non_active_controller_in_pending_choice() {
+    let mut state = base_state();
+    state.players.get_mut(PlayerId::Two).main = Some(SummonInstance {
+        chain: UpgradeChain::new(
+            CardRef {
+                instance: CardInstanceId(31),
+                def: fixtures::id("set-path-adept"),
+            },
+            vec![],
+        ),
+        ..whelp(PlayerId::Two)
+    });
+
+    let (state, events) = apply_leaf(
+        &state,
+        source(PlayerId::Two),
+        &[Position::Main],
+        &EffectLeaf::ProduceMana {
+            target: EffectTarget::Selected,
+        },
+    );
+
+    assert!(events.is_empty());
+    assert_eq!(
+        state.pending,
+        Some(PendingInput::ManaProduction {
+            player: PlayerId::Two,
+            source: ManaSource::Summon(Position::Main),
+        })
+    );
+}
+
+#[test]
+fn source_targeted_mana_ignores_a_sibling_effects_selected_target() {
+    let mut state = base_state();
+    state.players.get_mut(PlayerId::Two).bench[0] = Some(whelp(PlayerId::Two));
+    let trigger_source = EffectSource::Trigger {
+        controller: PlayerId::Two,
+        position: Position::Bench(BenchSlot::First),
+        ability: fixtures::trigger_id("spite-thorn"),
+    };
+
+    let (state, events) = apply_leaf(
+        &state,
+        trigger_source,
+        &[Position::Main],
+        &EffectLeaf::ProduceMana {
+            target: EffectTarget::Source,
+        },
+    );
+
+    assert_eq!(
+        events,
+        vec![GameEvent::ManaProduced {
+            player: PlayerId::Two,
+            source: ManaSource::Summon(Position::Bench(BenchSlot::First)),
+            mana_type: crate::domain::ids::ManaType::Matter,
+        }]
+    );
+    assert_eq!(state.players.get(PlayerId::Two).mana.matter, 1);
+}
+
+#[test]
 fn produce_mana_leaf_with_no_target_is_a_no_op() {
     let state = base_state();
-    let leaf = EffectLeaf::ProduceMana;
+    let leaf = EffectLeaf::ProduceMana {
+        target: EffectTarget::Selected,
+    };
 
     let (next_state, events) = apply_leaf(&state, source(PlayerId::One), &[], &leaf);
 

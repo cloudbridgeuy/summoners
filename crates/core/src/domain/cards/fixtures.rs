@@ -24,7 +24,8 @@ use super::entity::{
 };
 use super::{
     CardSet, Cost, DamageAddition, DamageConstraint, DamageConstraints, DamageEffect,
-    EffectCondition, EffectLeaf, Form, Modifier, ResponseBlock, SpellTiming, TriggerEvent,
+    EffectCondition, EffectLeaf, EffectTarget, Form, Modifier, ResponseBlock, SpellTiming,
+    TriggerEvent,
 };
 use crate::domain::ids::ManaType;
 
@@ -332,7 +333,13 @@ pub(crate) fn entities() -> Vec<Entity> {
                         additions: vec![],
                     })],
                 ),
-                skill(8, Cost::default(), vec![EffectLeaf::ProduceMana]),
+                skill(
+                    8,
+                    Cost::default(),
+                    vec![EffectLeaf::ProduceMana {
+                        target: EffectTarget::Source,
+                    }],
+                ),
             ],
         ),
         // Trigger fixtures.
@@ -359,7 +366,10 @@ pub(crate) fn entities() -> Vec<Entity> {
                     9,
                     TriggerEvent::EntersMain,
                     false,
-                    vec![EffectLeaf::Heal { amount: 15 }],
+                    vec![EffectLeaf::Heal {
+                        amount: 15,
+                        target: EffectTarget::Selected,
+                    }],
                 ),
             ],
         ),
@@ -417,7 +427,10 @@ pub(crate) fn entities() -> Vec<Entity> {
                     11,
                     TriggerEvent::YourUpkeep,
                     false,
-                    vec![EffectLeaf::Heal { amount: 10 }],
+                    vec![EffectLeaf::Heal {
+                        amount: 10,
+                        target: EffectTarget::Selected,
+                    }],
                 ),
             ],
         ),
@@ -444,7 +457,10 @@ pub(crate) fn entities() -> Vec<Entity> {
                 generic: 1,
                 ..Cost::default()
             },
-            vec![EffectLeaf::Heal { amount: 20 }],
+            vec![EffectLeaf::Heal {
+                amount: 20,
+                target: EffectTarget::Selected,
+            }],
         ),
         spell(
             14,
@@ -698,7 +714,10 @@ pub(crate) fn entities() -> Vec<Entity> {
                     24,
                     TriggerEvent::YourUpkeep,
                     false,
-                    vec![EffectLeaf::Heal { amount: 10 }],
+                    vec![EffectLeaf::Heal {
+                        amount: 10,
+                        target: EffectTarget::Selected,
+                    }],
                 ),
                 skill(
                     24,
@@ -708,8 +727,13 @@ pub(crate) fn entities() -> Vec<Entity> {
                         ..Cost::default()
                     },
                     vec![
-                        EffectLeaf::Heal { amount: 30 },
-                        EffectLeaf::CannotBeMovedByOpponent,
+                        EffectLeaf::Heal {
+                            amount: 30,
+                            target: EffectTarget::Source,
+                        },
+                        EffectLeaf::CannotBeMovedByOpponent {
+                            target: EffectTarget::Source,
+                        },
                     ],
                 ),
                 attack(

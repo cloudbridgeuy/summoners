@@ -90,7 +90,7 @@ fn execute(state: &GameState, item: &WorkItem) -> (GameState, Vec<GameEvent>) {
     match item {
         WorkItem::ReadyAll => upkeep::ready_all(state),
         WorkItem::DrawCard => execute_draw(state),
-        WorkItem::ProduceMana(source) => upkeep::produce_mana(state, *source),
+        WorkItem::ProduceMana { player, source } => upkeep::produce_mana(state, *player, *source),
         WorkItem::BeginMainPhase => upkeep::begin_main_phase(state),
 
         WorkItem::DestructionCheck(position) => destruction::check(state, *position),
@@ -265,6 +265,9 @@ pub(crate) fn apply_leaves(
         let (next_state, leaf_events) = effects::apply_leaf(&state, source, targets, leaf);
         state = next_state;
         events.extend(leaf_events);
+        if !state.status.is_playing() {
+            break;
+        }
     }
     (state, events)
 }

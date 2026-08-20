@@ -239,7 +239,7 @@ pub(crate) fn condition_holds(
     condition: EffectCondition,
 ) -> bool {
     match condition {
-        EffectCondition::SpellPlayedThisTurn => state.turn.spell_played_this_turn,
+        EffectCondition::SpellPlayedThisTurn => *state.turn.spell_played_this_turn.get(controller),
         EffectCondition::DefenderEnteredMainThisTurn => targets.first().is_some_and(|&position| {
             summon_at(state.players.get(controller.opponent()), position)
                 .is_some_and(|summon| summon.entered_main_this_turn)
