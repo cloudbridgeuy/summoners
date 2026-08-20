@@ -7,9 +7,11 @@ legal choices, state transitions, resolution, triggers, destruction,
 promotion, loss checks, and observable outcomes as those features are added.
 It must not read files, call a network, use a clock, or own another I/O effect.
 
-There is no product imperative shell yet. Add a CLI, server, simulator, card
-loader, client, protocol adapter, or FFI crate only after its boundary and
-dependency set are explicit.
+`crates/cards` is the strict authored-document boundary. It parses caller-held
+bytes without file I/O, applies content policy, and converts valid definitions
+into core entities. There is no product runtime shell yet. Add a CLI, server,
+simulator, runtime file loader, client, protocol adapter, or FFI crate only
+after its boundary and dependency set are explicit.
 
 Keep gameplay concerns as modules in `summoners_core`. Do not create one crate
 per rule or concept.
@@ -17,7 +19,7 @@ per rule or concept.
 ## Code policy
 
 - Follow `~/.claude/patterns/functional-core-imperative-shell.md` for every implementation.
-- Parse raw external input into domain types at a future shell boundary; see `~/.claude/patterns/parse-dont-validate.md`.
+- Parse raw external input into domain types at its shell boundary; see `~/.claude/patterns/parse-dont-validate.md`.
 - Model closed choices and states with enums and structs; see `~/.claude/patterns/algebraic-data-types.md` and `~/.claude/patterns/make-impossible-states-impossible.md`.
 - Prefer precise signatures and private smart constructors; see `~/.claude/patterns/type-driven-development.md`.
 - Use composition and pure functions instead of trait objects unless an open extension point exists; see `~/.claude/patterns/composition-over-inheritance.md`.

@@ -5,12 +5,13 @@
 A deterministic, pure game engine exists in `crates/core`. It enforces turn
 structure, Mana, the board, Combat, the Stack, Spells, Skills, Triggered
 Abilities, destruction, Prize recovery, promotion, and loss conditions for the
-rules described below. There is no CLI, server, client, or card loader yet.
-The engine reads no file, calls no network, uses no clock, and uses no random
-source. Every entry point takes one state value and one action, and returns a
-new state value; it never mutates anything the caller still holds. This file
-is an index of stable product language from the design inputs and the engine
-that now exists, not an API contract.
+rules described below. The engine reads no file, calls no network, uses no
+clock, and uses no random source. Every entry point takes one state value and
+one action, and returns a new state value; it never mutates anything the caller
+still holds. A strict authored-card boundary parses caller-held Set bytes into
+core definitions without file I/O. There is no CLI, server, client, runtime
+file loader, Deck loader, or built-in catalog yet. This file is an index of
+stable product language, not an API contract.
 
 ## Behavior
 
@@ -47,6 +48,27 @@ managed pre-commit hook and leaves any unmanaged hook unchanged.
 - **WHEN** hook removal finds a pre-commit hook that is not the exact managed
   hook
 - **THEN** it reports that the hook is unmanaged and leaves it unchanged
+
+### Requirement: Strict authored Set loading
+
+A **Set** byte buffer uses one exact schema version and converts to core card
+definitions only after strict document and semantic parsing. Stable Set, card,
+and ability codes determine UUID-v5 identities; revision, display text, and
+document order do not determine them.
+
+#### Scenario: A valid Set is parsed
+
+- **WHEN** a caller passes the Foundations Set bytes to the Set parser
+- **THEN** it receives 20 core card definitions with their printed statistics,
+  costs, abilities, effects, modifiers, timing, persistence, and response modes
+
+#### Scenario: A Set is malformed
+
+- **WHEN** a Set contains invalid UTF-8, a missing or unsupported schema
+  version, an unknown field, an invalid stable code, an invalid semantic
+  combination, or a duplicate code
+- **THEN** parsing fails before caller-visible core conversion with a typed
+  phase, schema version when known, stable path, and cause
 
 ### Requirement: Turn structure and phase order
 
@@ -374,6 +396,8 @@ types/archetypes document for content-design intent.
   running Damage total.
 - **Prize Card:** one of two face-down comeback resources recovered after the first two Main losses.
 - **Vault:** seven match-play cards outside the 20-card Deck.
+- **Set:** one versioned authored document that owns card definitions and their
+  stable identities.
 
 ## Important relationships
 
@@ -414,9 +438,6 @@ mistake for settled:
 - Damage supports conditional additions, persistent reductions, constraints,
   and a zero clamp. It does not yet support scaling, replacement, redirection,
   or consumable shields.
-- The card set is a fixture registry held in code, not a card file loaded
-  from anywhere. Its names, stats, and text are working test data for
-  exercising every rule at least once, not a finished, published card list.
 - The design's "you may" wording on a few printed effects — returning a
   Spell from the discard pile, and the look-then-draw-then-return sequence on
   one Skill — is currently played out as an unconditional action. The engine
