@@ -14,6 +14,13 @@ use crate::{
     v1::{dto, model},
 };
 
+struct AbilityConversion<'codes, 'ids> {
+    set_code: &'codes model::StableCode,
+    card_code: &'codes model::StableCode,
+    card_index: usize,
+    seen_ids: &'ids mut HashMap<EntityId, String>,
+}
+
 pub(crate) fn convert(set: model::Set) -> Result<LoadedSet, SetLoadError> {
     let model::Set {
         code,
@@ -79,15 +86,14 @@ fn convert_card(
                 types.into_iter().map(convert_mana_type).collect(),
             )));
             components.push(Component::RetreatCost(RetreatCost(retreat)));
+            let mut context = AbilityConversion {
+                set_code,
+                card_code: &code,
+                card_index,
+                seen_ids,
+            };
             for (ability_index, ability) in abilities.into_iter().enumerate() {
-                components.push(convert_ability(
-                    set_code,
-                    &code,
-                    ability,
-                    card_index,
-                    ability_index,
-                    seen_ids,
-                )?);
+                components.push(convert_ability(ability, ability_index, &mut context)?);
             }
         }
         model::CardKind::Spell {
@@ -98,7 +104,12 @@ fn convert_card(
             components.push(Component::Tags(Tags(vec!["spell".to_string()])));
             components.push(Component::Timing(convert_timing(timing)));
             components.push(Component::Cost(convert_cost(&cost)));
-            components.extend(effects.into_iter().map(convert_effect).map(Component::Effect));
+            components.extend(
+                effects
+                    .into_iter()
+                    .map(convert_effect)
+                    .map(Component::Effect),
+            );
         }
         model::CardKind::Enchantment {
             cost,
@@ -108,7 +119,12 @@ fn convert_card(
             components.push(Component::Tags(Tags(vec!["enchantment".to_string()])));
             components.push(Component::Timing(SpellTiming::Support));
             components.push(Component::Cost(convert_cost(&cost)));
-            components.extend(effects.into_iter().map(convert_effect).map(Component::Effect));
+            components.extend(
+                effects
+                    .into_iter()
+                    .map(convert_effect)
+                    .map(Component::Effect),
+            );
             for (index, modifier) in modifiers.into_iter().enumerate() {
                 components.push(Component::Passive(convert_modifier(
                     modifier,
@@ -125,22 +141,19 @@ fn convert_card(
 }
 
 fn convert_ability(
-    set_code: &model::StableCode,
-    card_code: &model::StableCode,
     ability: model::Ability,
-    card_index: usize,
     ability_index: usize,
-    seen_ids: &mut HashMap<EntityId, String>,
+    context: &mut AbilityConversion<'_, '_>,
 ) -> Result<Component, SetLoadError> {
-    let path = format!("cards[{card_index}].abilities[{ability_index}]");
+    let path = format!("cards[{}].abilities[{ability_index}]", context.card_index);
     let id = identity::ability_id(
-        set_code,
-        card_code,
+        context.set_code,
+        context.card_code,
         ability.role(),
         &ability.code,
         &format!("{path}.code"),
     )?;
-    reject_duplicate_id(seen_ids, id, &format!("{path}.code"))?;
+    reject_duplicate_id(context.seen_ids, id, &format!("{path}.code"))?;
     let model::Ability {
         code: _,
         name,
@@ -158,9 +171,10 @@ fn convert_ability(
             id,
             components: ability_components(name, Some(cost), effects),
         })),
-        model::AbilityKind::Passive { modifier } => {
-            Ok(Component::Passive(convert_modifier(modifier, &format!("{path}.modifier"))?))
-        }
+        model::AbilityKind::Passive { modifier } => Ok(Component::Passive(convert_modifier(
+            modifier,
+            &format!("{path}.modifier"),
+        )?)),
         model::AbilityKind::Trigger {
             event,
             response,
@@ -188,7 +202,12 @@ fn ability_components(
     if let Some(cost) = cost {
         components.push(Component::Cost(convert_cost(&cost)));
     }
-    components.extend(effects.into_iter().map(convert_effect).map(Component::Effect));
+    components.extend(
+        effects
+            .into_iter()
+            .map(convert_effect)
+            .map(Component::Effect),
+    );
     components
 }
 
@@ -317,13 +336,13 @@ fn convert_damage_constraint(constraint: dto::DamageConstraint) -> DamageConstra
 }
 
 fn convert_damage_constraints(constraints: Vec<dto::DamageConstraint>) -> DamageConstraints {
-    constraints
-        .into_iter()
-        .map(convert_damage_constraint)
-        .fold(DamageConstraints::new(), |mut converted, constraint| {
+    constraints.into_iter().map(convert_damage_constraint).fold(
+        DamageConstraints::new(),
+        |mut converted, constraint| {
             converted.insert(constraint);
             converted
-        })
+        },
+    )
 }
 
 fn convert_modifier(modifier: dto::Modifier, path: &str) -> Result<Modifier, SetLoadError> {
@@ -421,7 +440,10 @@ base = 20
     fn closed_leaf_conversions_cover_every_simple_variant() {
         assert_eq!(convert_form(dto::Form::Elite), Form::Elite);
         assert_eq!(convert_mana_type(dto::ManaType::Spirit), ManaType::Spirit);
-        assert_eq!(convert_timing(dto::SpellTiming::Attack), SpellTiming::Attack);
+        assert_eq!(
+            convert_timing(dto::SpellTiming::Attack),
+            SpellTiming::Attack
+        );
         assert_eq!(
             convert_trigger_event(dto::TriggerEvent::LeavesBench),
             TriggerEvent::LeavesBench
@@ -442,6 +464,27 @@ base = 20
         assert_eq!(loaded.cards().entities().len(), 1);
         let entity = &loaded.cards().entities()[0];
         assert_eq!(entity.get::<Life>(), Some(&Life(50)));
-        assert_eq!(entity.all::<summoners_core::domain::cards::Attack>().len(), 1);
+        assert_eq!(
+            entity.all::<summoners_core::domain::cards::Attack>().len(),
+            1
+        );
+    }
+
+    #[test]
+    fn duplicate_generated_id_reports_both_paths_before_card_set_construction() {
+        let id =
+            EntityId::parse("00000000-0000-0000-0000-000000000001").expect("fixture id is valid");
+        let mut seen = HashMap::from([(id, "cards[0].code".to_string())]);
+        let error = reject_duplicate_id(&mut seen, id, "cards[1].code")
+            .expect_err("duplicate id must fail");
+        assert_eq!(error.phase, LoadPhase::Identity);
+        assert_eq!(error.path, "cards[1].code");
+        assert_eq!(
+            error.cause,
+            SetLoadCause::DuplicateGeneratedId {
+                id,
+                first_path: "cards[0].code".to_string(),
+            }
+        );
     }
 }

@@ -1,6 +1,6 @@
+mod convert;
 pub(crate) mod dto;
 pub(crate) mod model;
-mod convert;
 
 use crate::{LoadedSet, SetLoadError};
 

@@ -1,9 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use crate::{
-    LoadPhase, SemanticRule, SetLoadCause, SetLoadError, StableKeyKind,
-    v1::dto,
-};
+use crate::{LoadPhase, SemanticRule, SetLoadCause, SetLoadError, StableKeyKind, v1::dto};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct StableCode(String);
@@ -143,15 +140,26 @@ pub(crate) enum Effect {
         constraints: Vec<dto::DamageConstraint>,
         additions: Vec<DamageAddition>,
     },
-    Heal { target: OwnTarget, amount: u32 },
+    Heal {
+        target: OwnTarget,
+        amount: u32,
+    },
     MoveOwnBenchedToEmptyBench,
-    SwapPositions { side: SwapSide },
-    BlockAttackSpells { condition: dto::Condition },
+    SwapPositions {
+        side: SwapSide,
+    },
+    BlockAttackSpells {
+        condition: dto::Condition,
+    },
     ReturnSpellFromDiscard,
     LookAtPrizes,
-    DrawCards { amount: u32 },
+    DrawCards {
+        amount: u32,
+    },
     ReturnSpellToDeckTop,
-    ProduceMana { target: OwnTarget },
+    ProduceMana {
+        target: OwnTarget,
+    },
     ProtectSourceFromOpposingMovement,
     ReadyOwnSummon,
 }
@@ -268,7 +276,11 @@ fn parse_card(raw: dto::Card, code: StableCode, path: &str) -> Result<Card, SetL
             forbid_list(&modifiers, path, "modifiers")?;
             let form = required(form, path, "form")?;
             let life = required(life, path, "life")?;
-            require_positive(life, &format!("{path}.life"), SemanticRule::SummonRequiresStatistics)?;
+            require_positive(
+                life,
+                &format!("{path}.life"),
+                SemanticRule::SummonRequiresStatistics,
+            )?;
             let types = required(types, path, "types")?;
             let types = parse_mana_types(types, &format!("{path}.types"))?;
             let retreat = required(retreat, path, "retreat")?;
@@ -320,13 +332,15 @@ fn parse_card(raw: dto::Card, code: StableCode, path: &str) -> Result<Card, SetL
             forbid_list(&abilities, path, "abilities")?;
             let timing = required(timing, path, "timing")?;
             let persistence = required(persistence, path, "persistence")?;
-            if timing != dto::SpellTiming::Support
-                || persistence != dto::Persistence::Persistent
-            {
+            if timing != dto::SpellTiming::Support || persistence != dto::Persistence::Persistent {
                 return Err(rule_error(path, SemanticRule::EnchantmentShape));
             }
             let cost = required(cost, path, "cost")?;
-            let effects = parse_effects(effects, EffectContext::Enchantment, &format!("{path}.effects"))?;
+            let effects = parse_effects(
+                effects,
+                EffectContext::Enchantment,
+                &format!("{path}.effects"),
+            )?;
             let modifiers = parse_modifiers(modifiers, &format!("{path}.modifiers"))?;
             CardKind::Enchantment {
                 cost,
@@ -415,7 +429,8 @@ fn parse_ability(raw: dto::Ability, code: StableCode, path: &str) -> Result<Abil
             forbid_option(&modifier, path, "modifier")?;
             let event = required(event, path, "event")?;
             let response = required(response, path, "response")?;
-            let effects = parse_effects(effects, EffectContext::Trigger, &format!("{path}.effects"))?;
+            let effects =
+                parse_effects(effects, EffectContext::Trigger, &format!("{path}.effects"))?;
             AbilityKind::Trigger {
                 event,
                 response,
@@ -445,7 +460,11 @@ fn parse_effects(
         .collect()
 }
 
-fn parse_effect(raw: dto::Effect, context: EffectContext, path: &str) -> Result<Effect, SetLoadError> {
+fn parse_effect(
+    raw: dto::Effect,
+    context: EffectContext,
+    path: &str,
+) -> Result<Effect, SetLoadError> {
     match raw {
         dto::Effect::Damage {
             target,
@@ -453,13 +472,22 @@ fn parse_effect(raw: dto::Effect, context: EffectContext, path: &str) -> Result<
             constraints,
             additions,
         } => {
-            require_positive(base, &format!("{path}.base"), SemanticRule::AmountMustBePositive)?;
+            require_positive(
+                base,
+                &format!("{path}.base"),
+                SemanticRule::AmountMustBePositive,
+            )?;
             let target = match (context, target) {
                 (EffectContext::Attack, dto::Target::DefendingMain) => DamageTarget::DefendingMain,
                 (EffectContext::AttackSpell, dto::Target::SelectedOpposingPosition) => {
                     DamageTarget::SelectedOpposingPosition
                 }
-                _ => return Err(rule_error(format!("{path}.target"), SemanticRule::EffectTarget)),
+                _ => {
+                    return Err(rule_error(
+                        format!("{path}.target"),
+                        SemanticRule::EffectTarget,
+                    ));
+                }
             };
             reject_duplicate_constraints(&constraints, &format!("{path}.constraints"))?;
             let additions = additions
@@ -485,18 +513,32 @@ fn parse_effect(raw: dto::Effect, context: EffectContext, path: &str) -> Result<
             })
         }
         dto::Effect::Heal { target, amount } => {
-            require_positive(amount, &format!("{path}.amount"), SemanticRule::AmountMustBePositive)?;
+            require_positive(
+                amount,
+                &format!("{path}.amount"),
+                SemanticRule::AmountMustBePositive,
+            )?;
             let target = match (context, target) {
-                (EffectContext::Skill | EffectContext::Trigger, dto::Target::Source) => OwnTarget::Source,
+                (EffectContext::Skill | EffectContext::Trigger, dto::Target::Source) => {
+                    OwnTarget::Source
+                }
                 (
                     EffectContext::SupportSpell | EffectContext::Enchantment,
                     dto::Target::SelectedOwnSummon,
                 ) => OwnTarget::Selected,
-                _ => return Err(rule_error(format!("{path}.target"), SemanticRule::EffectTarget)),
+                _ => {
+                    return Err(rule_error(
+                        format!("{path}.target"),
+                        SemanticRule::EffectTarget,
+                    ));
+                }
             };
             Ok(Effect::Heal { target, amount })
         }
-        dto::Effect::MoveSummon { target, destination } => {
+        dto::Effect::MoveSummon {
+            target,
+            destination,
+        } => {
             if context == EffectContext::Skill
                 && target == dto::Target::SelectedOwnBenchedSummon
                 && destination == dto::Destination::EmptyOwnBench
@@ -508,14 +550,24 @@ fn parse_effect(raw: dto::Effect, context: EffectContext, path: &str) -> Result<
         }
         dto::Effect::SwapPositions { target } => match (context, target) {
             (EffectContext::Skill, dto::Target::OwnMainWithSelectedBench) => {
-                Ok(Effect::SwapPositions { side: SwapSide::Own })
+                Ok(Effect::SwapPositions {
+                    side: SwapSide::Own,
+                })
             }
             (EffectContext::Skill, dto::Target::OpposingMainWithSelectedBench) => {
-                Ok(Effect::SwapPositions { side: SwapSide::Opposing })
+                Ok(Effect::SwapPositions {
+                    side: SwapSide::Opposing,
+                })
             }
-            _ => Err(rule_error(format!("{path}.target"), SemanticRule::EffectTarget)),
+            _ => Err(rule_error(
+                format!("{path}.target"),
+                SemanticRule::EffectTarget,
+            )),
         },
-        dto::Effect::BlockResponses { condition, response } => {
+        dto::Effect::BlockResponses {
+            condition,
+            response,
+        } => {
             if context == EffectContext::Attack && response == dto::ResponseBlock::AttackSpells {
                 Ok(Effect::BlockAttackSpells { condition })
             } else {
@@ -526,21 +578,30 @@ fn parse_effect(raw: dto::Effect, context: EffectContext, path: &str) -> Result<
             Ok(Effect::ReturnSpellFromDiscard)
         }
         dto::Effect::LookAtPrizes if context == EffectContext::Skill => Ok(Effect::LookAtPrizes),
-        dto::Effect::DrawCards { amount } if context == EffectContext::Skill || context == EffectContext::SupportSpell => {
-            require_positive(amount, &format!("{path}.amount"), SemanticRule::AmountMustBePositive)?;
+        dto::Effect::DrawCards { amount }
+            if context == EffectContext::Skill || context == EffectContext::SupportSpell =>
+        {
+            require_positive(
+                amount,
+                &format!("{path}.amount"),
+                SemanticRule::AmountMustBePositive,
+            )?;
             Ok(Effect::DrawCards { amount })
         }
         dto::Effect::ReturnSpellToDeckTop if context == EffectContext::Skill => {
             Ok(Effect::ReturnSpellToDeckTop)
         }
         dto::Effect::ProduceMana { target } => match (context, target) {
-            (EffectContext::Skill, dto::Target::SelectedOwnSummon) => {
-                Ok(Effect::ProduceMana { target: OwnTarget::Selected })
-            }
-            (EffectContext::Trigger, dto::Target::Source) => {
-                Ok(Effect::ProduceMana { target: OwnTarget::Source })
-            }
-            _ => Err(rule_error(format!("{path}.target"), SemanticRule::EffectTarget)),
+            (EffectContext::Skill, dto::Target::SelectedOwnSummon) => Ok(Effect::ProduceMana {
+                target: OwnTarget::Selected,
+            }),
+            (EffectContext::Trigger, dto::Target::Source) => Ok(Effect::ProduceMana {
+                target: OwnTarget::Source,
+            }),
+            _ => Err(rule_error(
+                format!("{path}.target"),
+                SemanticRule::EffectTarget,
+            )),
         },
         dto::Effect::CannotBeMovedByOpponent { target, duration }
             if context == EffectContext::Skill
@@ -550,7 +611,8 @@ fn parse_effect(raw: dto::Effect, context: EffectContext, path: &str) -> Result<
             Ok(Effect::ProtectSourceFromOpposingMovement)
         }
         dto::Effect::ReadySummon { target }
-            if context == EffectContext::SupportSpell && target == dto::Target::SelectedOwnSummon =>
+            if context == EffectContext::SupportSpell
+                && target == dto::Target::SelectedOwnSummon =>
         {
             Ok(Effect::ReadyOwnSummon)
         }
@@ -558,7 +620,10 @@ fn parse_effect(raw: dto::Effect, context: EffectContext, path: &str) -> Result<
     }
 }
 
-fn parse_mana_types(raw: Vec<dto::ManaType>, path: &str) -> Result<Vec<dto::ManaType>, SetLoadError> {
+fn parse_mana_types(
+    raw: Vec<dto::ManaType>,
+    path: &str,
+) -> Result<Vec<dto::ManaType>, SetLoadError> {
     if raw.is_empty() {
         return Err(rule_error(path, SemanticRule::SummonRequiresStatistics));
     }
@@ -578,7 +643,10 @@ fn parse_mana_types(raw: Vec<dto::ManaType>, path: &str) -> Result<Vec<dto::Mana
     Ok(raw)
 }
 
-fn parse_modifiers(raw: Vec<dto::Modifier>, path: &str) -> Result<Vec<dto::Modifier>, SetLoadError> {
+fn parse_modifiers(
+    raw: Vec<dto::Modifier>,
+    path: &str,
+) -> Result<Vec<dto::Modifier>, SetLoadError> {
     raw.into_iter()
         .enumerate()
         .map(|(index, modifier)| {
@@ -593,8 +661,14 @@ fn parse_modifier(modifier: dto::Modifier, path: &str) -> Result<(), SetLoadErro
         dto::Modifier::OpposingRetreatCost { amount }
         | dto::Modifier::IncomingAttackDamageReduction { amount } => amount,
     };
-    require_positive(amount, &format!("{path}.amount"), SemanticRule::AmountMustBePositive)?;
-    if matches!(modifier, dto::Modifier::OpposingRetreatCost { .. }) && i32::try_from(amount).is_err() {
+    require_positive(
+        amount,
+        &format!("{path}.amount"),
+        SemanticRule::AmountMustBePositive,
+    )?;
+    if matches!(modifier, dto::Modifier::OpposingRetreatCost { .. })
+        && i32::try_from(amount).is_err()
+    {
         return Err(rule_error(
             format!("{path}.amount"),
             SemanticRule::ModifierAmountOutOfRange,
@@ -603,7 +677,10 @@ fn parse_modifier(modifier: dto::Modifier, path: &str) -> Result<(), SetLoadErro
     Ok(())
 }
 
-fn reject_duplicate_constraints(raw: &[dto::DamageConstraint], path: &str) -> Result<(), SetLoadError> {
+fn reject_duplicate_constraints(
+    raw: &[dto::DamageConstraint],
+    path: &str,
+) -> Result<(), SetLoadError> {
     let mut seen = HashMap::new();
     for (index, constraint) in raw.iter().copied().enumerate() {
         let value = format!("{constraint:?}");
@@ -660,7 +737,11 @@ fn required<T>(value: Option<T>, path: &str, field: &'static str) -> Result<T, S
     })
 }
 
-fn forbid_option<T>(value: &Option<T>, path: &str, field: &'static str) -> Result<(), SetLoadError> {
+fn forbid_option<T>(
+    value: &Option<T>,
+    path: &str,
+    field: &'static str,
+) -> Result<(), SetLoadError> {
     if value.is_some() {
         Err(semantic_error(
             format!("{path}.{field}"),
@@ -718,7 +799,8 @@ mod tests {
     }
 
     fn valid_summon(card_code: &str, ability_code: &str) -> String {
-        format!(r#"
+        format!(
+            r#"
 schema_version = 1
 id = "test-set"
 revision = 1
@@ -742,7 +824,8 @@ cost = []
 kind = "damage"
 target = "defending-main"
 base = 10
-"#)
+"#
+        )
     }
 
     #[test]
@@ -754,7 +837,14 @@ base = 10
 
     #[test]
     fn stable_key_parser_rejects_invalid_syntax() {
-        for value in ["", "Upper", "1-first", "trailing-", "two--hyphens", "under_score"] {
+        for value in [
+            "",
+            "Upper",
+            "1-first",
+            "trailing-",
+            "two--hyphens",
+            "under_score",
+        ] {
             let error = StableCode::parse(value.to_string(), StableKeyKind::Card, "cards[0].code")
                 .unwrap_err();
             assert_eq!(error.path, "cards[0].code");
@@ -772,8 +862,7 @@ base = 10
     #[test]
     fn set_parser_rejects_duplicate_card_codes_with_both_paths() {
         let first = valid_summon("same-card", "strike");
-        let second = first.replacen("[[cards]]", "[[cards]]", 1);
-        let card_section = second.split("[[cards]]").nth(1).unwrap();
+        let card_section = first.split("[[cards]]").nth(1).unwrap();
         let source = format!("{first}\n[[cards]]{card_section}");
         let error = parse(decode(&source)).unwrap_err();
         assert_eq!(error.path, "cards[1].code");
@@ -819,7 +908,10 @@ base = 10
             "base = 10\nconstraints = [\"unpreventable\", \"unpreventable\"]",
         );
         let error = parse(decode(&source)).unwrap_err();
-        assert_eq!(error.path, "cards[0].abilities[0].effects[0].constraints[1]");
+        assert_eq!(
+            error.path,
+            "cards[0].abilities[0].effects[0].constraints[1]"
+        );
         assert!(matches!(error.cause, SetLoadCause::DuplicateValue { .. }));
     }
 }

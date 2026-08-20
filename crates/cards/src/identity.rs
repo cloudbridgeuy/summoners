@@ -1,13 +1,12 @@
 use summoners_core::domain::cards::EntityId;
 use uuid::Uuid;
 
-use crate::{LoadPhase, SetLoadCause, SetLoadError};
 use crate::v1::model::{AbilityRole, StableCode};
+use crate::{LoadPhase, SetLoadCause, SetLoadError};
 
 /// Fixed namespace for every authored Summoners Set identity.
 const ID_NAMESPACE: Uuid = Uuid::from_bytes([
-    0x7d, 0x15, 0xee, 0x70, 0x92, 0x65, 0x4d, 0x4b, 0xa2, 0x58, 0x98, 0x3d, 0x27, 0xc5,
-    0x1f, 0x35,
+    0x7d, 0x15, 0xee, 0x70, 0x92, 0x65, 0x4d, 0x4b, 0xa2, 0x58, 0x98, 0x3d, 0x27, 0xc5, 0x1f, 0x35,
 ]);
 
 pub(crate) fn set_id(code: &StableCode) -> Result<EntityId, SetLoadError> {
@@ -105,8 +104,7 @@ mod tests {
         assert_eq!(
             ability_id(&set, &card, AbilityRole::Attack, &ability, "ability")
                 .expect("minted id is valid"),
-            EntityId::parse("cfcf8272-7949-50e3-9f4a-7da8fa987021")
-                .expect("golden id is valid")
+            EntityId::parse("cfcf8272-7949-50e3-9f4a-7da8fa987021").expect("golden id is valid")
         );
     }
 }

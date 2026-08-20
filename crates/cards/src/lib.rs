@@ -1,16 +1,14 @@
 //! Strict parsing and conversion for authored Summoners card documents.
 #![deny(clippy::unwrap_used, clippy::expect_used)]
 
-mod error;
 mod document;
+mod error;
 mod identity;
 mod v1;
 
 use std::collections::BTreeMap;
 
-pub use error::{
-    DocumentKind, LoadPhase, SemanticRule, SetLoadCause, SetLoadError, StableKeyKind,
-};
+pub use error::{DocumentKind, LoadPhase, SemanticRule, SetLoadCause, SetLoadError, StableKeyKind};
 use summoners_core::domain::cards::{CardSet, EntityId};
 
 /// One parsed Set with its converted core definitions and stable lookup data.
