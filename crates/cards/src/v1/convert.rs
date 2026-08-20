@@ -19,6 +19,12 @@ struct AbilityConversion<'codes, 'ids> {
     card_code: &'codes model::StableCode,
     card_index: usize,
     seen_ids: &'ids mut HashMap<EntityId, String>,
+    ability_ids: &'ids mut BTreeMap<(String, String), EntityId>,
+}
+
+struct IdentityRegistry {
+    seen_ids: HashMap<EntityId, String>,
+    ability_ids: BTreeMap<(String, String), EntityId>,
 }
 
 pub(crate) fn convert(set: model::Set) -> Result<LoadedSet, SetLoadError> {
@@ -29,21 +35,24 @@ pub(crate) fn convert(set: model::Set) -> Result<LoadedSet, SetLoadError> {
         cards,
     } = set;
     let set_id = identity::set_id(&code)?;
-    let mut seen_ids = HashMap::from([(set_id, "id".to_string())]);
+    let mut identities = IdentityRegistry {
+        seen_ids: HashMap::from([(set_id, "id".to_string())]),
+        ability_ids: BTreeMap::new(),
+    };
     let mut card_ids = BTreeMap::new();
     let mut entities = Vec::with_capacity(cards.len());
 
     for (card_index, card) in cards.into_iter().enumerate() {
         let code_path = format!("cards[{card_index}].code");
         let card_id = identity::card_id(&code, &card.code, &code_path)?;
-        reject_duplicate_id(&mut seen_ids, card_id, &code_path)?;
+        reject_duplicate_id(&mut identities.seen_ids, card_id, &code_path)?;
         card_ids.insert(card.code.as_str().to_string(), card_id);
         entities.push(convert_card(
             &code,
             card,
             card_id,
             card_index,
-            &mut seen_ids,
+            &mut identities,
         )?);
     }
 
@@ -54,6 +63,7 @@ pub(crate) fn convert(set: model::Set) -> Result<LoadedSet, SetLoadError> {
         name,
         cards: CardSet::new(entities),
         card_ids,
+        ability_ids: identities.ability_ids,
     })
 }
 
@@ -62,7 +72,7 @@ fn convert_card(
     card: model::Card,
     card_id: EntityId,
     card_index: usize,
-    seen_ids: &mut HashMap<EntityId, String>,
+    identities: &mut IdentityRegistry,
 ) -> Result<Entity, SetLoadError> {
     let model::Card {
         code,
@@ -90,7 +100,8 @@ fn convert_card(
                 set_code,
                 card_code: &code,
                 card_index,
-                seen_ids,
+                seen_ids: &mut identities.seen_ids,
+                ability_ids: &mut identities.ability_ids,
             };
             for (ability_index, ability) in abilities.into_iter().enumerate() {
                 components.push(convert_ability(ability, ability_index, &mut context)?);
@@ -154,6 +165,13 @@ fn convert_ability(
         &format!("{path}.code"),
     )?;
     reject_duplicate_id(context.seen_ids, id, &format!("{path}.code"))?;
+    context.ability_ids.insert(
+        (
+            context.card_code.as_str().to_string(),
+            ability.code.as_str().to_string(),
+        ),
+        id,
+    );
     let model::Ability {
         code: _,
         name,

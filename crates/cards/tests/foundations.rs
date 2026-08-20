@@ -420,9 +420,29 @@ fn card_identity_ignores_revision_display_text_and_document_order() {
     assert_eq!(original.card_id("alpha"), changed.card_id("alpha"));
     assert_eq!(original.card_id("beta"), changed.card_id("beta"));
     assert_eq!(
+        original.ability_id("alpha", "strike"),
+        changed.ability_id("alpha", "strike")
+    );
+    assert_eq!(
         card(&original, "alpha").all::<Attack>()[0].id,
         card(&changed, "alpha").all::<Attack>()[0].id
     );
+}
+
+#[test]
+fn loaded_set_retains_nested_and_passive_ability_identities() {
+    let loaded = parse_set(FOUNDATIONS).expect("Foundations must load");
+    assert!(
+        loaded
+            .ability_id("warden-of-set-paths", "closed-path-strike")
+            .is_some()
+    );
+    assert!(
+        loaded
+            .ability_id("warden-of-set-paths", "bar-the-way")
+            .is_some()
+    );
+    assert_eq!(loaded.ability_id("warden-of-set-paths", "missing"), None);
 }
 
 #[test]

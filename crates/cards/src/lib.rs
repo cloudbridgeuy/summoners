@@ -20,6 +20,7 @@ pub struct LoadedSet {
     name: String,
     cards: CardSet,
     card_ids: BTreeMap<String, EntityId>,
+    ability_ids: BTreeMap<(String, String), EntityId>,
 }
 
 impl LoadedSet {
@@ -57,6 +58,14 @@ impl LoadedSet {
     #[must_use]
     pub fn card_id(&self, code: &str) -> Option<EntityId> {
         self.card_ids.get(code).copied()
+    }
+
+    /// Resolve one ability's stable code inside a card in this Set.
+    #[must_use]
+    pub fn ability_id(&self, card_code: &str, ability_code: &str) -> Option<EntityId> {
+        self.ability_ids
+            .get(&(card_code.to_string(), ability_code.to_string()))
+            .copied()
     }
 }
 
