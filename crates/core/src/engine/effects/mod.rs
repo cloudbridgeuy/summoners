@@ -24,14 +24,16 @@
 //! than changing board state, so `engine::stack::cast_spell` reads its
 //! condition and block directly instead of this interpreter.
 
-use crate::domain::cards::{CardKind, EffectCondition, EffectLeaf, family};
-use crate::domain::events::GameEvent;
+use crate::domain::cards::{
+    CardKind, EffectCondition, EffectLeaf, EffectSource, EffectTarget, family,
+};
+use crate::domain::events::{BattlefieldTarget, DamageContext, GameEvent};
 use crate::domain::ids::{CardInstanceId, PlayerId, Position};
 use crate::domain::state::{
     DurationMarker, GameState, ManaSource, MovementStep, PlayerState, Readiness, SummonInstance,
     WorkItem,
 };
-use crate::engine::upkeep;
+use crate::engine::{damage, loss, upkeep};
 
 /// Apply one printed `EffectLeaf`, controlled by `controller` — the
 /// attacking or casting player — against `targets`. `DealDamage` reads its
@@ -39,34 +41,40 @@ use crate::engine::upkeep;
 /// `WorkItem::DestructionCheck` for a real hit (rules §23, §29–30);
 /// `Heal` reads its target off `controller`'s own board and cannot reduce
 /// Damage below zero (rules §22); `DrawCards` draws for `controller`
-/// directly, ignoring `targets`, and always enqueues a
-/// `WorkItem::LossCheck` (rules §2, §10 step 2, §58 — an empty Deck on a
-/// forced draw is an immediate loss). `WorkItem::DestructionCheck` and
-/// `WorkItem::LossCheck` are documented no-ops elsewhere in the engine
-/// today; this interpreter only enqueues them. `MoveSummon` and
+/// directly, ignoring `targets`, and ends the game immediately when the
+/// full request cannot be drawn (rules §2, §10 step 2, §58).
+/// `WorkItem::DestructionCheck` is documented elsewhere in the engine;
+/// this interpreter only enqueues it. `MoveSummon` and
 /// `SwapPositions` read and write `controller`'s own board and enqueue
 /// `WorkItem::MovementTrigger`s (rules §28); `ProduceMana` and `ReadySummon`
 /// are documented on their own functions below.
 pub(crate) fn apply_leaf(
     state: &GameState,
-    controller: PlayerId,
+    source: EffectSource,
     targets: &[Position],
     leaf: &EffectLeaf,
 ) -> (GameState, Vec<GameEvent>) {
+    let controller = source.controller();
     match leaf {
-        EffectLeaf::DealDamage { amount, .. } => deal_damage(state, controller, targets, *amount),
-        EffectLeaf::Heal { amount } => heal(state, controller, targets, *amount),
+        EffectLeaf::DealDamage(effect) => deal_damage(state, source, targets, effect),
+        EffectLeaf::Heal { amount, target } => heal(
+            state,
+            controller,
+            effect_position(source, targets, *target),
+            *amount,
+        ),
         EffectLeaf::DrawCards { amount } => draw_cards(state, controller, *amount),
         EffectLeaf::MoveSummon => move_summon(state, controller, targets),
         EffectLeaf::SwapPositions => swap_positions(state, controller, targets),
-        EffectLeaf::ProduceMana => produce_mana_leaf(state, controller, targets),
+        EffectLeaf::ProduceMana { target } => {
+            produce_mana_leaf(state, controller, effect_position(source, targets, *target))
+        }
         EffectLeaf::ReadySummon => ready_summon(state, controller, targets),
-        EffectLeaf::ConditionalBonus { condition, amount } => {
-            conditional_bonus(state, controller, targets, *condition, *amount)
-        }
-        EffectLeaf::CannotBeMovedByOpponent => {
-            cannot_be_moved_by_opponent(state, controller, targets)
-        }
+        EffectLeaf::CannotBeMovedByOpponent { target } => cannot_be_moved_by_opponent(
+            state,
+            controller,
+            effect_position(source, targets, *target),
+        ),
         EffectLeaf::ReturnSpellFromDiscard => return_spell_from_discard(state, controller),
         EffectLeaf::ReturnSpellToDeckTop => return_spell_to_deck_top(state, controller),
         EffectLeaf::SwapOpposingPositions => swap_opposing_positions(state, controller, targets),
@@ -79,35 +87,21 @@ pub(crate) fn apply_leaf(
     }
 }
 
-/// Whether `leaves` includes a `DealDamage` marked immutable — the Old
-/// Sow's `Root and Renew`-adjacent Attack text, "her attack damage can be
-/// neither increased nor prevented" (rules §30). `engine::resolution::
-/// apply_leaves` and `engine::skills`'s own copy each compute this once per
-/// resolved leaves list and skip any `ConditionalBonus` leaf in the same
-/// list when it is true — that leaf is the only "increase" this crate's
-/// vocabulary has, since it is the only leaf that adds more Damage to a
-/// target `DealDamage` already named. "Prevented" needs no matching guard:
-/// no leaf in this crate ever reduces an opponent's already-accumulated
-/// Damage once it lands — `heal` below only ever reads `controller`'s own
-/// board, never an opponent's — so there is no code path left that could
-/// violate it. `deal_damage_applies_its_full_amount_regardless_of_immutability`
-/// in this module's tests pins that half down directly.
-pub(crate) fn immutable_damage_in(leaves: &[EffectLeaf]) -> bool {
-    leaves.iter().any(|leaf| {
-        matches!(
-            leaf,
-            EffectLeaf::DealDamage {
-                immutable: true,
-                ..
-            }
-        )
-    })
+fn effect_position(
+    source: EffectSource,
+    selected: &[Position],
+    target: EffectTarget,
+) -> Option<Position> {
+    match target {
+        EffectTarget::Selected => selected.first().copied(),
+        EffectTarget::Source => source.position(),
+    }
 }
 
 /// Whether `condition` currently holds for `controller`'s effect, read
 /// against `targets` where the condition needs a defender (rules §30 for
-/// `DefenderEnteredMainThisTurn`; the turn-global flag directly for
-/// `SpellPlayedThisTurn`). Shared by `conditional_bonus` and
+/// `DefenderEnteredMainThisTurn`; the controller's turn fact for
+/// `SpellPlayedThisTurn`). Shared by Damage additions and
 /// `engine::stack::cast_spell`'s `BlockResponses` gate, so both read the
 /// same rule the same way.
 pub(crate) fn condition_holds(
@@ -116,43 +110,20 @@ pub(crate) fn condition_holds(
     targets: &[Position],
     condition: EffectCondition,
 ) -> bool {
-    match condition {
-        EffectCondition::SpellPlayedThisTurn => state.turn.spell_played_this_turn,
-        EffectCondition::DefenderEnteredMainThisTurn => targets.first().is_some_and(|&position| {
-            summon_at(state.players.get(controller.opponent()), position)
-                .is_some_and(|summon| summon.turn.main_entry.is_some())
-        }),
-    }
-}
-
-/// Deal `amount` bonus Damage to `targets` the same way `DealDamage` would,
-/// but only when `condition` holds — the Warden's `Rearrange`-adjacent
-/// Attack bonus and the Griefsinger's Spell-turn bonus (rules §30). A false
-/// condition is a silent no-op: no event, no extra `DestructionCheck`.
-fn conditional_bonus(
-    state: &GameState,
-    controller: PlayerId,
-    targets: &[Position],
-    condition: EffectCondition,
-    amount: u32,
-) -> (GameState, Vec<GameEvent>) {
-    if !condition_holds(state, controller, targets, condition) {
-        return (state.clone(), Vec::new());
-    }
-    deal_damage(state, controller, targets, amount)
+    damage::condition_holds(state, controller, targets, condition)
 }
 
 /// Attach `DurationMarker::CannotBeMovedByOpponent` to `controller`'s own
-/// Summon at `targets[0]` — the Old Sow's `Root and Renew` (rules §44). No
-/// target, or an empty target Position, is a miss. The marker expires in
+/// resolved effect position. No target, or an empty target Position, is a
+/// miss. The marker expires in
 /// `engine::turn::handover`, only for the player whose Summon carries it,
 /// the turn after it was set.
 fn cannot_be_moved_by_opponent(
     state: &GameState,
     controller: PlayerId,
-    targets: &[Position],
+    position: Option<Position>,
 ) -> (GameState, Vec<GameEvent>) {
-    let Some(&position) = targets.first() else {
+    let Some(position) = position else {
         return (state.clone(), Vec::new());
     };
 
@@ -326,46 +297,39 @@ fn swap_opposing_positions(
 /// no `DestructionCheck`.
 fn deal_damage(
     state: &GameState,
-    controller: PlayerId,
+    source: EffectSource,
     targets: &[Position],
-    amount: u32,
+    effect: &crate::domain::cards::DamageEffect,
 ) -> (GameState, Vec<GameEvent>) {
     let Some(&position) = targets.first() else {
         return (state.clone(), Vec::new());
     };
-
-    let mut state = state.clone();
-    let defender = controller.opponent();
-    let Some(summon) = summon_at_mut(state.players.get_mut(defender), position) else {
-        return (state, Vec::new());
-    };
-
-    let before = summon.damage;
-    let after = before.saturating_add(amount);
-    summon.damage = after;
-    state.work.push_back(WorkItem::DestructionCheck(position));
-
-    (
-        state,
-        vec![GameEvent::DamageApplied {
+    let context = DamageContext {
+        source: source.into(),
+        target: BattlefieldTarget {
+            controller: source.controller().opponent(),
             position,
-            before,
-            after,
-        }],
-    )
+        },
+    };
+    let intent = damage::DamageIntent {
+        context,
+        effect: effect.clone(),
+    };
+    let resolution = damage::evaluate(state, &intent);
+    damage::commit(state, &resolution)
 }
 
 /// Remove up to `amount` accumulated Damage from whichever Summon occupies
-/// `controller`'s own first target Position right now, never below zero
-/// (rules §22). No target, or an empty target Position, is a miss: nothing
-/// to heal, no event.
+/// `controller`'s resolved effect position, never below zero (rules §22).
+/// No target, or an empty target Position, is a miss: nothing to heal, no
+/// event.
 fn heal(
     state: &GameState,
     controller: PlayerId,
-    targets: &[Position],
+    position: Option<Position>,
     amount: u32,
 ) -> (GameState, Vec<GameEvent>) {
-    let Some(&position) = targets.first() else {
+    let Some(position) = position else {
         return (state.clone(), Vec::new());
     };
 
@@ -386,13 +350,13 @@ fn heal(
     )
 }
 
-/// Draw up to `amount` cards for `controller`, stopping early if the Deck
-/// empties, and always enqueue a `WorkItem::LossCheck` for `controller`
-/// afterward — even a zero-card draw still names the check the design's
-/// resolution loop expects to see after a draw.
+/// Draw up to `amount` cards for `controller`. If fewer than `amount` are
+/// available, draw all available cards first, then end the game for the
+/// failed required draw. Drawing exactly the final available card succeeds.
 fn draw_cards(state: &GameState, controller: PlayerId, amount: u32) -> (GameState, Vec<GameEvent>) {
     let mut state = state.clone();
     let mut events = Vec::new();
+    let available = state.players.get(controller).deck.len();
 
     for _ in 0..amount {
         let player_state = state.players.get_mut(controller);
@@ -407,9 +371,13 @@ fn draw_cards(state: &GameState, controller: PlayerId, amount: u32) -> (GameStat
         });
     }
 
-    state.work.push_back(WorkItem::LossCheck(controller));
-
-    (state, events)
+    if usize::try_from(amount).map_or(true, |required| required > available) {
+        let (state, loss_events) = loss::draw_failure(&state, controller);
+        events.extend(loss_events);
+        (state, events)
+    } else {
+        (state, events)
+    }
 }
 
 /// Relocate `controller`'s own Summon from `targets[0]` to the empty Bench
@@ -534,21 +502,22 @@ fn swap_positions(
     )
 }
 
-/// Produce Mana from one Summon's own printed Types — `targets[0]` names its
-/// position — rather than `controller`'s player-wide anchor (rules §11–12,
+/// Produce Mana from one Summon's own printed Types. The resolved effect
+/// position can come from the selected target or the `EffectSource`, rather
+/// than `controller`'s player-wide anchor (rules §11–12,
 /// `ManaSource::Summon`). Delegates entirely to `engine::upkeep::produce_mana`
-/// so a Skill-driven production pauses on the same
+/// so an effect-driven production pauses on the same
 /// `PendingInput::ManaProduction` a multi-type Summon's natural production
 /// would. No target is a no-op: nothing names which Summon produces.
 fn produce_mana_leaf(
     state: &GameState,
-    _controller: PlayerId,
-    targets: &[Position],
+    controller: PlayerId,
+    position: Option<Position>,
 ) -> (GameState, Vec<GameEvent>) {
-    let Some(&position) = targets.first() else {
+    let Some(position) = position else {
         return (state.clone(), Vec::new());
     };
-    upkeep::produce_mana(state, ManaSource::Summon(position))
+    upkeep::produce_mana(state, controller, ManaSource::Summon(position))
 }
 
 /// Turn Ready the Summon at `controller`'s own `targets[0]` (rules §53). No
@@ -583,14 +552,6 @@ fn summon_at_mut(player: &mut PlayerState, position: Position) -> Option<&mut Su
     match position {
         Position::Main => player.main.as_mut(),
         Position::Bench(slot) => player.bench[slot.index()].as_mut(),
-    }
-}
-
-/// The Summon at `position`, by reference, if any.
-fn summon_at(player: &PlayerState, position: Position) -> Option<&SummonInstance> {
-    match position {
-        Position::Main => player.main.as_ref(),
-        Position::Bench(slot) => player.bench[slot.index()].as_ref(),
     }
 }
 

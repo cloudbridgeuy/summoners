@@ -1,0 +1,533 @@
+schema_version = 1
+id = "foundations"
+revision = 1
+name = "Foundations"
+
+[[cards]]
+code = "warden-initiate"
+name = "Warden Initiate"
+text = "Free attack: deal 10 Damage."
+kind = "summon"
+form = "base"
+life = 50
+types = ["matter"]
+retreat = 2
+
+[[cards.abilities]]
+code = "steady-strike"
+kind = "attack"
+cost = []
+
+[[cards.abilities.effects]]
+kind = "damage"
+target = "defending-main"
+base = 10
+
+[[cards]]
+code = "warden-pathkeeper"
+name = "Warden Pathkeeper"
+text = "1 Generic attack: deal 20 Damage."
+kind = "summon"
+form = "enhanced"
+life = 100
+types = ["matter", "mind"]
+retreat = 2
+
+[[cards.abilities]]
+code = "path-strike"
+kind = "attack"
+cost = ["generic"]
+
+[[cards.abilities.effects]]
+kind = "damage"
+target = "defending-main"
+base = 20
+
+[[cards]]
+code = "warden-of-set-paths"
+name = "Warden of Set Paths"
+text = "Rearrange the opposing formation, increase opposing Retreat costs, and punish a defender that entered Main this turn."
+kind = "summon"
+form = "elite"
+life = 150
+types = ["matter", "mind"]
+retreat = 3
+
+[[cards.abilities]]
+code = "rearrange"
+kind = "skill"
+cost = ["matter", "mind"]
+
+[[cards.abilities.effects]]
+kind = "swap-positions"
+target = "opposing-main-with-selected-bench"
+
+[[cards.abilities]]
+code = "bar-the-way"
+kind = "passive"
+modifier = { kind = "opposing-retreat-cost", amount = 1 }
+
+[[cards.abilities]]
+code = "closed-path-strike"
+kind = "attack"
+cost = ["matter", "generic", "generic"]
+
+[[cards.abilities.effects]]
+kind = "damage"
+target = "defending-main"
+base = 50
+
+[[cards.abilities.effects.additions]]
+amount = 30
+condition = { kind = "defender-entered-main-this-turn", player = "controller" }
+
+[[cards]]
+code = "quarry-scout"
+name = "Quarry Scout"
+text = "Move one own Benched Summon to an empty Bench position. Free attack: deal 10 Damage."
+kind = "summon"
+form = "base"
+life = 30
+types = ["matter"]
+retreat = 1
+
+[[cards.abilities]]
+code = "scout-the-bench"
+kind = "skill"
+cost = ["generic"]
+
+[[cards.abilities.effects]]
+kind = "move-summon"
+target = "selected-own-benched-summon"
+destination = "empty-own-bench"
+
+[[cards.abilities]]
+code = "quarry-strike"
+kind = "attack"
+cost = []
+
+[[cards.abilities.effects]]
+kind = "damage"
+target = "defending-main"
+base = 10
+
+[[cards]]
+code = "quarry-warden-guard"
+name = "Quarry Warden-Guard"
+text = "Exchange your Main with a chosen Bench Summon. After this Summon leaves Main, heal 10 Damage from it."
+kind = "summon"
+form = "base"
+life = 40
+types = ["matter"]
+retreat = 1
+
+[[cards.abilities]]
+code = "guard-exchange"
+kind = "skill"
+cost = []
+
+[[cards.abilities.effects]]
+kind = "swap-positions"
+target = "own-main-with-selected-bench"
+
+[[cards.abilities]]
+code = "leave-main-mend"
+kind = "trigger"
+event = "leaves-main"
+response = "immediate"
+
+[[cards.abilities.effects]]
+kind = "heal"
+target = "source"
+amount = 10
+
+[[cards.abilities]]
+code = "guard-strike"
+kind = "attack"
+cost = []
+
+[[cards.abilities.effects]]
+kind = "damage"
+target = "defending-main"
+base = 10
+
+[[cards]]
+code = "quarry-well-tender"
+name = "Quarry Well-Tender"
+text = "A chosen own Summon produces Mana. After this Summon leaves a Bench position, it produces Mana."
+kind = "summon"
+form = "base"
+life = 40
+types = ["matter", "mind"]
+retreat = 1
+
+[[cards.abilities]]
+code = "tend-the-well"
+kind = "skill"
+cost = []
+
+[[cards.abilities.effects]]
+kind = "produce-mana"
+target = "selected-own-summon"
+
+[[cards.abilities]]
+code = "leave-bench-produce"
+kind = "trigger"
+event = "leaves-bench"
+response = "immediate"
+
+[[cards.abilities.effects]]
+kind = "produce-mana"
+target = "source"
+
+[[cards.abilities]]
+code = "tender-strike"
+kind = "attack"
+cost = []
+
+[[cards.abilities.effects]]
+kind = "damage"
+target = "defending-main"
+base = 10
+
+[[cards]]
+code = "set-path-adept"
+name = "Set-Path Adept"
+text = "Deal 20 Damage, plus 20 if you played a Spell this turn. While true, Attack Spells cannot answer this attack."
+kind = "summon"
+form = "base"
+life = 50
+types = ["matter", "mind"]
+retreat = 2
+
+[[cards.abilities]]
+code = "spell-fed-strike"
+kind = "attack"
+cost = ["mind"]
+
+[[cards.abilities.effects]]
+kind = "damage"
+target = "defending-main"
+base = 20
+
+[[cards.abilities.effects.additions]]
+amount = 20
+condition = { kind = "spell-played-this-turn", player = "controller" }
+
+[[cards.abilities.effects]]
+kind = "block-responses"
+condition = { kind = "spell-played-this-turn", player = "controller" }
+response = "attack-spells"
+
+[[cards]]
+code = "ember-lance"
+name = "Ember Lance"
+text = "Deal 10 Damage to a chosen opposing battlefield position."
+kind = "spell"
+timing = "attack"
+persistence = "discard"
+cost = ["generic"]
+
+[[cards.effects]]
+kind = "damage"
+target = "selected-opposing-position"
+base = 10
+
+[[cards]]
+code = "scrying-glass"
+name = "Scrying Glass"
+text = "Draw one card."
+kind = "spell"
+timing = "support"
+persistence = "discard"
+cost = ["generic"]
+
+[[cards.effects]]
+kind = "draw-cards"
+amount = 1
+
+[[cards]]
+code = "second-wind"
+name = "Second Wind"
+text = "Ready one own Summon."
+kind = "spell"
+timing = "support"
+persistence = "discard"
+cost = ["generic"]
+
+[[cards.effects]]
+kind = "ready-summon"
+target = "selected-own-summon"
+
+[[cards]]
+code = "standing-ward"
+name = "Standing Ward"
+text = "Heal 10 Damage from one own Summon, then reduce each opposing attack's total Damage by 10 while this remains in play."
+kind = "enchantment"
+timing = "support"
+persistence = "persistent"
+cost = ["generic"]
+modifiers = [{ kind = "incoming-attack-damage-reduction", amount = 10 }]
+
+[[cards.effects]]
+kind = "heal"
+target = "selected-own-summon"
+amount = 10
+
+[[cards]]
+code = "sow-piglet"
+name = "Sow Piglet"
+text = "Free attack: deal 10 Damage."
+kind = "summon"
+form = "base"
+life = 50
+types = ["spirit"]
+retreat = 2
+
+[[cards.abilities]]
+code = "piglet-strike"
+kind = "attack"
+cost = []
+
+[[cards.abilities.effects]]
+kind = "damage"
+target = "defending-main"
+base = 10
+
+[[cards]]
+code = "sow-matriarch"
+name = "Sow Matriarch"
+text = "1 Generic attack: deal 20 Damage."
+kind = "summon"
+form = "enhanced"
+life = 110
+types = ["matter", "spirit"]
+retreat = 3
+
+[[cards.abilities]]
+code = "matriarch-strike"
+kind = "attack"
+cost = ["generic"]
+
+[[cards.abilities.effects]]
+kind = "damage"
+target = "defending-main"
+base = 20
+
+[[cards]]
+code = "old-sow-of-the-barrow"
+name = "Old Sow of the Barrow"
+text = "Heal at Upkeep, heal and resist opposing movement with a Skill, and deal 70 unpreventable and unincreasable Damage."
+kind = "summon"
+form = "elite"
+life = 170
+types = ["matter", "spirit"]
+retreat = 4
+
+[[cards.abilities]]
+code = "upkeep-mend"
+kind = "trigger"
+event = "your-upkeep"
+response = "immediate"
+
+[[cards.abilities.effects]]
+kind = "heal"
+target = "source"
+amount = 10
+
+[[cards.abilities]]
+code = "barrow-bulwark"
+kind = "skill"
+cost = ["matter", "spirit"]
+
+[[cards.abilities.effects]]
+kind = "heal"
+target = "source"
+amount = 30
+
+[[cards.abilities.effects]]
+kind = "cannot-be-moved-by-opponent"
+target = "source"
+duration = "until-your-next-turn"
+
+[[cards.abilities]]
+code = "ancient-charge"
+kind = "attack"
+cost = ["matter", "spirit", "generic", "generic"]
+
+[[cards.abilities.effects]]
+kind = "damage"
+target = "defending-main"
+base = 70
+constraints = ["unpreventable", "unincreasable"]
+
+[[cards]]
+code = "hearth-warden"
+name = "Hearth Warden"
+text = "After this Summon enters Main, heal 15 Damage from it. Free attack: deal 10 Damage."
+kind = "summon"
+form = "base"
+life = 60
+types = ["spirit"]
+retreat = 1
+
+[[cards.abilities]]
+code = "enter-main-mend"
+kind = "trigger"
+event = "enters-main"
+response = "immediate"
+
+[[cards.abilities.effects]]
+kind = "heal"
+target = "source"
+amount = 15
+
+[[cards.abilities]]
+code = "hearth-strike"
+kind = "attack"
+cost = []
+
+[[cards.abilities.effects]]
+kind = "damage"
+target = "defending-main"
+base = 10
+
+[[cards]]
+code = "dawn-tender"
+name = "Dawn Tender"
+text = "At your Upkeep, heal 10 Damage from it. Free attack: deal 10 Damage."
+kind = "summon"
+form = "base"
+life = 40
+types = ["spirit"]
+retreat = 1
+
+[[cards.abilities]]
+code = "dawn-mend"
+kind = "trigger"
+event = "your-upkeep"
+response = "immediate"
+
+[[cards.abilities.effects]]
+kind = "heal"
+target = "source"
+amount = 10
+
+[[cards.abilities]]
+code = "dawn-strike"
+kind = "attack"
+cost = []
+
+[[cards.abilities.effects]]
+kind = "damage"
+target = "defending-main"
+base = 10
+
+[[cards]]
+code = "barrow-grazer"
+name = "Barrow Grazer"
+text = "After this Summon enters a Bench position, heal 10 Damage from it. Free attack: deal 10 Damage."
+kind = "summon"
+form = "base"
+life = 60
+types = ["matter"]
+retreat = 2
+
+[[cards.abilities]]
+code = "enter-bench-mend"
+kind = "trigger"
+event = "enters-bench"
+response = "immediate"
+
+[[cards.abilities.effects]]
+kind = "heal"
+target = "source"
+amount = 10
+
+[[cards.abilities]]
+code = "grazer-strike"
+kind = "attack"
+cost = []
+
+[[cards.abilities.effects]]
+kind = "damage"
+target = "defending-main"
+base = 10
+
+[[cards]]
+code = "ash-shepherd"
+name = "Ash Shepherd"
+text = "Respondable trigger: after any Summon is destroyed, return the first Spell in your discard pile to your hand."
+kind = "summon"
+form = "base"
+life = 40
+types = ["spirit"]
+retreat = 1
+
+[[cards.abilities]]
+code = "gather-from-ashes"
+kind = "trigger"
+event = "any-summon-destroyed"
+response = "respondable"
+
+[[cards.abilities.effects]]
+kind = "return-spell-from-discard"
+
+[[cards.abilities]]
+code = "shepherd-strike"
+kind = "attack"
+cost = []
+
+[[cards.abilities.effects]]
+kind = "damage"
+target = "defending-main"
+base = 10
+
+[[cards]]
+code = "barrow-seer"
+name = "Barrow Seer"
+text = "View your Prize Cards, draw one card, then put the first Spell in your hand on top of your Deck."
+kind = "summon"
+form = "base"
+life = 40
+types = ["spirit"]
+retreat = 1
+
+[[cards.abilities]]
+code = "barrow-vision"
+kind = "skill"
+cost = ["spirit", "generic"]
+
+[[cards.abilities.effects]]
+kind = "look-at-prizes"
+
+[[cards.abilities.effects]]
+kind = "draw-cards"
+amount = 1
+
+[[cards.abilities.effects]]
+kind = "return-spell-to-deck-top"
+
+[[cards.abilities]]
+code = "seer-strike"
+kind = "attack"
+cost = []
+
+[[cards.abilities.effects]]
+kind = "damage"
+target = "defending-main"
+base = 10
+
+[[cards]]
+code = "renewing-balm"
+name = "Renewing Balm"
+text = "Heal 20 Damage from one own Summon."
+kind = "spell"
+timing = "support"
+persistence = "discard"
+cost = ["generic"]
+
+[[cards.effects]]
+kind = "heal"
+target = "selected-own-summon"
+amount = 20

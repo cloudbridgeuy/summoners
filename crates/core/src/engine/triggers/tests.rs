@@ -3,7 +3,7 @@
 #![allow(clippy::expect_used)]
 
 use super::*;
-use crate::domain::cards::{CardSet, Component, fixtures};
+use crate::domain::cards::{CardSet, Component, EffectTarget, fixtures};
 use crate::domain::ids::{BenchSlot, CardInstanceId, Position};
 use crate::domain::state::{
     CardRef, GameStatus, ManaBank, PerPlayer, Phase, PlayerState, Readiness, StackWindow,
@@ -75,7 +75,7 @@ fn base_state() -> GameState {
             window: None,
             normal_attack_used: false,
             normal_retreat_used: false,
-            spell_played_this_turn: false,
+            spell_played_this_turn: PerPlayer::new(false, false),
         },
         stack: vec![],
         stack_segment_bases: vec![],
@@ -260,13 +260,19 @@ fn movement_trigger_queues_several_matching_abilities_in_authored_order() {
         probe_id(0x61),
         TriggerEvent::EntersMain,
         false,
-        vec![EffectLeaf::Heal { amount: 1 }],
+        vec![EffectLeaf::Heal {
+            amount: 1,
+            target: EffectTarget::Selected,
+        }],
     );
     let second = trigger_entity(
         probe_id(0x62),
         TriggerEvent::EntersMain,
         false,
-        vec![EffectLeaf::Heal { amount: 2 }],
+        vec![EffectLeaf::Heal {
+            amount: 2,
+            target: EffectTarget::Selected,
+        }],
     );
     let card = Entity {
         id: probe,
@@ -378,12 +384,14 @@ fn fire_queued_opens_a_respondable_window_for_the_opponent_of_the_controller() {
         vec![StackItem::Trigger {
             controller: PlayerId::Two,
             source: Position::Main,
+            ability: fixtures::trigger_id("spite-thorn"),
             event: TriggerEvent::AnySummonDestroyed,
             targets: vec![Position::Main],
-            effects: vec![EffectLeaf::DealDamage {
-                amount: 15,
-                immutable: false,
-            }],
+            effects: vec![EffectLeaf::DealDamage(crate::domain::cards::DamageEffect {
+                base: 15,
+                constraints: crate::domain::cards::DamageConstraints::new(),
+                additions: vec![]
+            })],
         }]
     );
     assert_eq!(
@@ -495,17 +503,21 @@ fn implicit_targets_heal_the_trigger_source_and_damage_the_opposing_main() {
     assert_eq!(
         implicit_targets(
             Position::Bench(BenchSlot::First),
-            &[EffectLeaf::Heal { amount: 5 }]
+            &[EffectLeaf::Heal {
+                amount: 5,
+                target: EffectTarget::Selected,
+            }]
         ),
         vec![Position::Bench(BenchSlot::First)]
     );
     assert_eq!(
         implicit_targets(
             Position::Bench(BenchSlot::First),
-            &[EffectLeaf::DealDamage {
-                amount: 5,
-                immutable: false
-            }]
+            &[EffectLeaf::DealDamage(crate::domain::cards::DamageEffect {
+                base: 5,
+                constraints: crate::domain::cards::DamageConstraints::new(),
+                additions: vec![]
+            })]
         ),
         vec![Position::Main]
     );
@@ -569,7 +581,10 @@ fn ability_at_reads_the_named_abilitys_respondability_and_effects_and_answers_no
         probe_id(0x35),
         TriggerEvent::AnySummonDestroyed,
         true,
-        vec![EffectLeaf::Heal { amount: 7 }],
+        vec![EffectLeaf::Heal {
+            amount: 7,
+            target: EffectTarget::Selected,
+        }],
     );
     let card = Entity {
         id: probe,
@@ -581,7 +596,13 @@ fn ability_at_reads_the_named_abilitys_respondability_and_effects_and_answers_no
 
     assert_eq!(
         ability_at(&state, PlayerId::One, Position::Main, printed.id),
-        Some((true, vec![EffectLeaf::Heal { amount: 7 }]))
+        Some((
+            true,
+            vec![EffectLeaf::Heal {
+                amount: 7,
+                target: EffectTarget::Selected,
+            }],
+        ))
     );
     assert_eq!(
         ability_at(&state, PlayerId::One, Position::Main, probe_id(0xff)),
@@ -631,10 +652,13 @@ fn spite_thorn_and_dawn_tenders_triggers_read_their_printed_event_respondability
     assert!(its_trigger.get::<Respondable>().is_some());
     assert_eq!(
         its_trigger.all::<EffectLeaf>(),
-        vec![&EffectLeaf::DealDamage {
-            amount: 15,
-            immutable: false,
-        }]
+        vec![&EffectLeaf::DealDamage(
+            crate::domain::cards::DamageEffect {
+                base: 15,
+                constraints: crate::domain::cards::DamageConstraints::new(),
+                additions: vec![]
+            }
+        )]
     );
 
     let dawn_tender = cards
@@ -650,7 +674,10 @@ fn spite_thorn_and_dawn_tenders_triggers_read_their_printed_event_respondability
     assert!(its_trigger.get::<Respondable>().is_none());
     assert_eq!(
         its_trigger.all::<EffectLeaf>(),
-        vec![&EffectLeaf::Heal { amount: 10 }]
+        vec![&EffectLeaf::Heal {
+            amount: 10,
+            target: EffectTarget::Selected,
+        }]
     );
 }
 
@@ -669,19 +696,28 @@ fn a_card_printing_three_triggers_on_one_event_fires_all_three_in_authored_order
         probe_id(0x41),
         TriggerEvent::AnySummonDestroyed,
         false,
-        vec![EffectLeaf::Heal { amount: 1 }],
+        vec![EffectLeaf::Heal {
+            amount: 1,
+            target: EffectTarget::Selected,
+        }],
     );
     let second = trigger_entity(
         probe_id(0x42),
         TriggerEvent::AnySummonDestroyed,
         false,
-        vec![EffectLeaf::Heal { amount: 2 }],
+        vec![EffectLeaf::Heal {
+            amount: 2,
+            target: EffectTarget::Selected,
+        }],
     );
     let third = trigger_entity(
         probe_id(0x43),
         TriggerEvent::AnySummonDestroyed,
         false,
-        vec![EffectLeaf::Heal { amount: 3 }],
+        vec![EffectLeaf::Heal {
+            amount: 3,
+            target: EffectTarget::Selected,
+        }],
     );
     let card = Entity {
         id: probe,
@@ -761,19 +797,28 @@ fn when_the_second_of_three_matching_triggers_is_respondable_the_third_still_fir
         probe_id(0x51),
         TriggerEvent::AnySummonDestroyed,
         false,
-        vec![EffectLeaf::Heal { amount: 1 }],
+        vec![EffectLeaf::Heal {
+            amount: 1,
+            target: EffectTarget::Selected,
+        }],
     );
     let second = trigger_entity(
         probe_id(0x52),
         TriggerEvent::AnySummonDestroyed,
         true,
-        vec![EffectLeaf::Heal { amount: 2 }],
+        vec![EffectLeaf::Heal {
+            amount: 2,
+            target: EffectTarget::Selected,
+        }],
     );
     let third = trigger_entity(
         probe_id(0x53),
         TriggerEvent::AnySummonDestroyed,
         false,
-        vec![EffectLeaf::Heal { amount: 3 }],
+        vec![EffectLeaf::Heal {
+            amount: 3,
+            target: EffectTarget::Selected,
+        }],
     );
     let card = Entity {
         id: probe,
@@ -852,9 +897,13 @@ fn when_the_second_of_three_matching_triggers_is_respondable_the_third_still_fir
                 item: StackItem::Trigger {
                     controller: PlayerId::One,
                     source: Position::Main,
+                    ability: second.id,
                     event: TriggerEvent::AnySummonDestroyed,
                     targets: vec![Position::Main],
-                    effects: vec![EffectLeaf::Heal { amount: 2 }],
+                    effects: vec![EffectLeaf::Heal {
+                        amount: 2,
+                        target: EffectTarget::Selected,
+                    }],
                 },
             },
             GameEvent::Healed {

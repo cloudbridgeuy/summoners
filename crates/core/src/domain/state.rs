@@ -150,7 +150,7 @@ pub struct PlayerState {
 
 /// A homogeneous pair, one value per player. Every read or write goes
 /// through `PlayerId`, so a caller can never mix up the seats.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PerPlayer<T> {
     pub one: T,
     pub two: T,
@@ -213,10 +213,10 @@ pub struct TurnState {
     pub window: Option<StackWindow>,
     pub normal_attack_used: bool,
     pub normal_retreat_used: bool,
-    /// Set for the rest of the turn once any Spell is cast. Read by a
-    /// conditional attack bonus that checks whether its controller played a
-    /// Spell this turn; cleared when the turn ends.
-    pub spell_played_this_turn: bool,
+    /// Set independently for each player once that player casts a Spell.
+    /// Read relative to an effect's controller and cleared when the turn
+    /// ends.
+    pub spell_played_this_turn: PerPlayer<bool>,
 }
 
 /// Where a Mana-production choice comes from: the player's own natural
@@ -305,6 +305,7 @@ pub enum StackItem {
     Trigger {
         controller: PlayerId,
         source: Position,
+        ability: EntityId,
         event: TriggerEvent,
         targets: Vec<Position>,
         effects: Vec<EffectLeaf>,
@@ -354,12 +355,15 @@ pub enum WorkItem {
     /// Rules §10: draw one card; an empty deck is checked via `LossCheck`.
     DrawCard,
     /// Rules §10–12: generate Mana from this source; may set `pending`.
-    ProduceMana(ManaSource),
+    ProduceMana {
+        player: PlayerId,
+        source: ManaSource,
+    },
     /// Rules §9: once every other Upkeep step has drained, the turn moves
     /// forward into the Main Phase on its own — phases only move forward,
     /// so nothing else ever leaves `Phase::Upkeep`. Queued last by
     /// `engine::turn::handover`, after `ReadyAll`, any `YourUpkeep`
-    /// triggers, `DrawCard`, and `ProduceMana(ManaSource::Player)`, so it
+    /// triggers, `DrawCard`, and player-wide Mana production, so it
     /// always lands after a `ManaProduction` pause and its answer too — the
     /// drain loop resumes the same queue where it left off once `pending`
     /// clears.
@@ -392,8 +396,8 @@ pub struct GameState {
     /// double pass drains only down to it, then it pops and the drain that
     /// was interrupted resumes below it. Empty outside a mid-drain segment;
     /// a `Vec` because a trigger can itself land while another segment is
-    /// still open, nesting one base above the last. No behavior reads or
-    /// writes this yet — it is storage only.
+    /// still open, nesting one base above the last. Stack resolution and
+    /// response legality read the current base to exclude outer items.
     pub stack_segment_bases: Vec<usize>,
     pub work: VecDeque<WorkItem>,
     pub pending: Option<PendingInput>,
@@ -469,7 +473,7 @@ mod tests {
                 window: None,
                 normal_attack_used: false,
                 normal_retreat_used: false,
-                spell_played_this_turn: false,
+                spell_played_this_turn: PerPlayer::new(false, false),
             },
             stack: vec![],
             stack_segment_bases: vec![],
@@ -600,7 +604,7 @@ mod tests {
             window: Some(window),
             normal_attack_used: false,
             normal_retreat_used: false,
-            spell_played_this_turn: false,
+            spell_played_this_turn: PerPlayer::new(false, false),
         };
         assert_eq!(turn.phase, Phase::Upkeep);
         assert_eq!(turn.window, Some(window));
@@ -700,6 +704,7 @@ mod tests {
             StackItem::Trigger {
                 controller: PlayerId::One,
                 source: Position::Main,
+                ability: fixtures::trigger_id("spite-thorn"),
                 event: TriggerEvent::AnySummonDestroyed,
                 targets: vec![Position::Main],
                 effects: vec![],
@@ -738,7 +743,10 @@ mod tests {
             WorkItem::LossCheck(PlayerId::One),
             WorkItem::ReadyAll,
             WorkItem::DrawCard,
-            WorkItem::ProduceMana(ManaSource::Player),
+            WorkItem::ProduceMana {
+                player: PlayerId::One,
+                source: ManaSource::Player,
+            },
         ];
         assert_eq!(items.len(), 12);
     }

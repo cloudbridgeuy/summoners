@@ -269,7 +269,7 @@ fn demo_declare_pass_pass_resolves_the_attack_through_apply() {
     .expect("the attacker holds Priority second");
 
     assert_eq!(
-        resolved.events,
+        compact_damage_events(&resolved.events),
         vec![
             GameEvent::PriorityPassed {
                 player: PlayerId::One
@@ -280,11 +280,7 @@ fn demo_declare_pass_pass_resolves_the_attack_through_apply() {
                     target: Position::Main,
                 }
             },
-            GameEvent::DamageApplied {
-                position: Position::Main,
-                before: 0,
-                after: 10,
-            },
+            legacy_damage(Position::Main, 0, 10),
         ],
         "the double pass both closes the window and drains the Attack \
          it left on top of the Stack, in that order"
@@ -346,7 +342,7 @@ fn demo_a_lethal_attack_destroys_recovers_a_prize_and_promotes_through_apply() {
     .expect("the attacker holds Priority second");
 
     assert_eq!(
-        resolved.events,
+        compact_damage_events(&resolved.events),
         vec![
             GameEvent::PriorityPassed {
                 player: PlayerId::One
@@ -357,11 +353,7 @@ fn demo_a_lethal_attack_destroys_recovers_a_prize_and_promotes_through_apply() {
                     target: Position::Main,
                 }
             },
-            GameEvent::DamageApplied {
-                position: Position::Main,
-                before: 30,
-                after: 40,
-            },
+            legacy_damage(Position::Main, 30, 40),
             GameEvent::SummonDestroyed {
                 position: Position::Main,
                 owner: PlayerId::Two,
@@ -521,7 +513,7 @@ fn demo_cast_pass_pass_resolves_a_support_spell_and_discards_it_through_apply() 
     .expect("the caster holds Priority second");
 
     assert_eq!(
-        resolved.events,
+        compact_damage_events(&resolved.events),
         vec![
             GameEvent::PriorityPassed {
                 player: PlayerId::One
@@ -640,7 +632,7 @@ fn demo_an_attack_spell_cast_in_response_resolves_before_the_attack_through_appl
     .expect("the defender holds Priority second");
 
     assert_eq!(
-        resolved.events,
+        compact_damage_events(&resolved.events),
         vec![
             GameEvent::PriorityPassed {
                 player: PlayerId::Two
@@ -652,22 +644,14 @@ fn demo_an_attack_spell_cast_in_response_resolves_before_the_attack_through_appl
                     targets: vec![Position::Main],
                 },
             },
-            GameEvent::DamageApplied {
-                position: Position::Main,
-                before: 0,
-                after: 10,
-            },
+            legacy_damage(Position::Main, 0, 10),
             GameEvent::StackItemResolved {
                 item: StackItem::Attack {
                     attacker: PlayerId::One,
                     target: Position::Main,
                 },
             },
-            GameEvent::DamageApplied {
-                position: Position::Main,
-                before: 0,
-                after: 10,
-            },
+            legacy_damage(Position::Main, 0, 10),
         ],
         "the Attack Spell resolves before the attack it responded to"
     );
@@ -740,7 +724,7 @@ fn demo_a_draw_spell_emits_card_drawn_through_apply() {
     .expect("the caster holds Priority second");
 
     assert_eq!(
-        resolved.events,
+        compact_damage_events(&resolved.events),
         vec![
             GameEvent::PriorityPassed {
                 player: PlayerId::One

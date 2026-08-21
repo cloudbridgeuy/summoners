@@ -126,7 +126,7 @@ fn demo_a_respondable_destruction_trigger_opens_a_mid_drain_window_and_resumes_t
     .expect("the attacker passes second, closing the window and draining the Attack");
 
     assert_eq!(
-        resolved.events,
+        compact_damage_events(&resolved.events),
         vec![
             GameEvent::PriorityPassed {
                 player: PlayerId::One
@@ -137,11 +137,7 @@ fn demo_a_respondable_destruction_trigger_opens_a_mid_drain_window_and_resumes_t
                     target: Position::Main,
                 },
             },
-            GameEvent::DamageApplied {
-                position: Position::Main,
-                before: 30,
-                after: 40,
-            },
+            legacy_damage(Position::Main, 30, 40),
             GameEvent::SummonDestroyed {
                 position: Position::Main,
                 owner: PlayerId::Two,
@@ -162,12 +158,16 @@ fn demo_a_respondable_destruction_trigger_opens_a_mid_drain_window_and_resumes_t
         vec![StackItem::Trigger {
             controller: PlayerId::One,
             source: Position::Bench(BenchSlot::First),
+            ability: fixtures::trigger_id("spite-thorn"),
             event: crate::domain::cards::TriggerEvent::AnySummonDestroyed,
             targets: vec![Position::Main],
-            effects: vec![crate::domain::cards::EffectLeaf::DealDamage {
-                amount: 15,
-                immutable: false,
-            }],
+            effects: vec![crate::domain::cards::EffectLeaf::DealDamage(
+                crate::domain::cards::DamageEffect {
+                    base: 15,
+                    constraints: crate::domain::cards::DamageConstraints::new(),
+                    additions: vec![]
+                }
+            )],
         }],
         "the respondable trigger's Stack index becomes a new segment base"
     );
@@ -206,12 +206,16 @@ fn demo_a_respondable_destruction_trigger_opens_a_mid_drain_window_and_resumes_t
                 item: StackItem::Trigger {
                     controller: PlayerId::One,
                     source: Position::Bench(BenchSlot::First),
+                    ability: fixtures::trigger_id("spite-thorn"),
                     event: crate::domain::cards::TriggerEvent::AnySummonDestroyed,
                     targets: vec![Position::Main],
-                    effects: vec![crate::domain::cards::EffectLeaf::DealDamage {
-                        amount: 15,
-                        immutable: false,
-                    }],
+                    effects: vec![crate::domain::cards::EffectLeaf::DealDamage(
+                        crate::domain::cards::DamageEffect {
+                            base: 15,
+                            constraints: crate::domain::cards::DamageConstraints::new(),
+                            additions: vec![]
+                        }
+                    )],
                 },
             },
             GameEvent::SummonPromoted {

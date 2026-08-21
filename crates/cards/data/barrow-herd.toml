@@ -1,0 +1,45 @@
+schema_version = 1
+id = "barrow-herd"
+name = "Barrow Herd"
+starter = "foundations/sow-piglet"
+requires = [{ set = "foundations", revision = 1 }]
+
+[[cards]]
+card = "foundations/sow-matriarch"
+quantity = 2
+
+[[cards]]
+card = "foundations/old-sow-of-the-barrow"
+quantity = 2
+
+[[cards]]
+card = "foundations/hearth-warden"
+quantity = 2
+
+[[cards]]
+card = "foundations/dawn-tender"
+quantity = 2
+
+[[cards]]
+card = "foundations/barrow-grazer"
+quantity = 2
+
+[[cards]]
+card = "foundations/ash-shepherd"
+quantity = 2
+
+[[cards]]
+card = "foundations/barrow-seer"
+quantity = 2
+
+[[cards]]
+card = "foundations/renewing-balm"
+quantity = 2
+
+[[cards]]
+card = "foundations/ember-lance"
+quantity = 2
+
+[[cards]]
+card = "foundations/standing-ward"
+quantity = 2

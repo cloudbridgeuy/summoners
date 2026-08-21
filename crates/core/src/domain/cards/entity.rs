@@ -349,6 +349,7 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
 
     use super::*;
+    use crate::domain::cards::EffectTarget;
 
     fn id(byte: u8) -> EntityId {
         EntityId([byte; 16])
@@ -489,7 +490,10 @@ mod tests {
                     generic: 1,
                     ..Cost::default()
                 }),
-                Component::Effect(EffectLeaf::Heal { amount: 5 }),
+                Component::Effect(EffectLeaf::Heal {
+                    amount: 5,
+                    target: EffectTarget::Selected,
+                }),
                 Component::Effect(EffectLeaf::DrawCards { amount: 1 }),
             ],
         };
@@ -509,7 +513,10 @@ mod tests {
         assert_eq!(
             skill.all::<EffectLeaf>(),
             vec![
-                &EffectLeaf::Heal { amount: 5 },
+                &EffectLeaf::Heal {
+                    amount: 5,
+                    target: EffectTarget::Selected,
+                },
                 &EffectLeaf::DrawCards { amount: 1 },
             ]
         );
@@ -520,14 +527,20 @@ mod tests {
         let entity = Entity {
             id: id(1),
             components: vec![
-                Component::Effect(EffectLeaf::Heal { amount: 5 }),
+                Component::Effect(EffectLeaf::Heal {
+                    amount: 5,
+                    target: EffectTarget::Selected,
+                }),
                 Component::Effect(EffectLeaf::DrawCards { amount: 1 }),
             ],
         };
         assert_eq!(
             entity.all::<EffectLeaf>(),
             vec![
-                &EffectLeaf::Heal { amount: 5 },
+                &EffectLeaf::Heal {
+                    amount: 5,
+                    target: EffectTarget::Selected,
+                },
                 &EffectLeaf::DrawCards { amount: 1 },
             ]
         );

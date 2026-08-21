@@ -52,7 +52,7 @@ fn base_state() -> GameState {
             window: None,
             normal_attack_used: false,
             normal_retreat_used: false,
-            spell_played_this_turn: false,
+            spell_played_this_turn: PerPlayer::new(false, false),
         },
         stack: vec![],
         stack_segment_bases: vec![],
@@ -266,7 +266,7 @@ fn cast_spell_a_support_spell_pays_cost_pushes_the_stack_and_opens_a_window_for_
             prior_pass: false,
         })
     );
-    assert!(outcome.state.turn.spell_played_this_turn);
+    assert!(*outcome.state.turn.spell_played_this_turn.get(PlayerId::One));
     assert_eq!(
         outcome.events,
         vec![
@@ -605,6 +605,65 @@ fn window_after_play_never_names_the_acting_player_as_holder() {
 }
 
 #[test]
+fn support_spell_above_attack_does_not_hide_response_block() {
+    let mut state = base_state();
+    state.players.get_mut(PlayerId::One).main = Some(summon(PlayerId::One, "griefsinger"));
+    *state.turn.spell_played_this_turn.get_mut(PlayerId::One) = true;
+    state.stack = vec![
+        StackItem::Attack {
+            attacker: PlayerId::One,
+            target: Position::Main,
+        },
+        StackItem::Spell {
+            caster: PlayerId::Two,
+            card: CardRef {
+                instance: CardInstanceId(77),
+                def: fixtures::id("renewing-balm"),
+            },
+            targets: vec![Position::Main],
+        },
+    ];
+
+    assert!(attack_responses_blocked(&state));
+}
+
+#[test]
+fn attack_below_current_segment_does_not_block_responses() {
+    let mut state = base_state();
+    state.players.get_mut(PlayerId::One).main = Some(summon(PlayerId::One, "griefsinger"));
+    *state.turn.spell_played_this_turn.get_mut(PlayerId::One) = true;
+    state.stack = vec![
+        StackItem::Attack {
+            attacker: PlayerId::One,
+            target: Position::Main,
+        },
+        StackItem::Trigger {
+            controller: PlayerId::Two,
+            source: Position::Main,
+            ability: fixtures::trigger_id("spite-thorn"),
+            event: crate::domain::cards::TriggerEvent::AnySummonDestroyed,
+            targets: vec![Position::Main],
+            effects: vec![],
+        },
+    ];
+    state.stack_segment_bases = vec![1];
+
+    assert!(!attack_responses_blocked(&state));
+}
+
+#[test]
+fn malformed_segment_base_cannot_panic_or_find_an_attack() {
+    let mut state = base_state();
+    state.stack.push(StackItem::Attack {
+        attacker: PlayerId::One,
+        target: Position::Main,
+    });
+    state.stack_segment_bases = vec![state.stack.len() + 1];
+
+    assert!(!attack_responses_blocked(&state));
+}
+
+#[test]
 fn an_intervening_played_effect_clears_prior_pass_so_only_the_final_two_passes_are_consecutive() {
     // Rules §33's worked example: the defender passes, the attacker
     // plays an effect through the real §32 bookkeeping instead of
@@ -683,7 +742,10 @@ fn a_double_pass_with_an_empty_stack_hands_the_turn_over_immediately() {
         VecDeque::from(vec![
             WorkItem::ReadyAll,
             WorkItem::DrawCard,
-            WorkItem::ProduceMana(crate::domain::state::ManaSource::Player),
+            WorkItem::ProduceMana {
+                player: PlayerId::Two,
+                source: crate::domain::state::ManaSource::Player,
+            },
             WorkItem::BeginMainPhase,
         ])
     );
@@ -739,10 +801,13 @@ fn quarry_brutes_printed_attack_carries_its_cost_and_effects() {
     );
     assert_eq!(
         attack.all::<EffectLeaf>(),
-        vec![&EffectLeaf::DealDamage {
-            amount: 20,
-            immutable: false,
-        }]
+        vec![&EffectLeaf::DealDamage(
+            crate::domain::cards::DamageEffect {
+                base: 20,
+                constraints: crate::domain::cards::DamageConstraints::new(),
+                additions: vec![]
+            }
+        )]
     );
 }
 

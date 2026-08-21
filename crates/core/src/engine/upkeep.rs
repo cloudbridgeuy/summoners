@@ -14,7 +14,7 @@
 
 use crate::domain::cards::{CardSet, ManaTypes};
 use crate::domain::events::GameEvent;
-use crate::domain::ids::{BenchSlot, ManaType, Position};
+use crate::domain::ids::{BenchSlot, ManaType, PlayerId, Position};
 use crate::domain::state::{
     GameState, ManaSource, PendingInput, Phase, PlayerState, Readiness, SummonInstance,
     SummonTurnRecord,
@@ -93,10 +93,8 @@ pub(crate) fn anchor_types(cards: &CardSet, player_state: &PlayerState) -> Vec<M
 }
 
 /// The Mana Types printed on the one Summon at `position`, or none if that
-/// position is empty. Used when a `WorkItem::ProduceMana(ManaSource::Summon(_))`
-/// names one Summon's own production rather than the player's natural
-/// production — no caller enqueues that path yet, so this exists for the
-/// type to have a total, non-panicking implementation.
+/// position is empty. Summon-source production uses this instead of the
+/// player's natural production anchor.
 fn summon_types(cards: &CardSet, player_state: &PlayerState, position: Position) -> Vec<ManaType> {
     let summon = match position {
         Position::Main => player_state.main.as_ref(),
@@ -226,15 +224,18 @@ pub(crate) fn draw_card(state: &GameState) -> (GameState, Vec<GameEvent>, DrawOu
     )
 }
 
-/// Rules §10 step 3, §11–12, decision 12: generate Mana for the active
-/// player from `source`. A single available Type produces without pausing;
+/// Rules §10 step 3, §11–12, decision 12: generate Mana for `player` from
+/// `source`. A single available Type produces without pausing;
 /// several Types pause on `PendingInput::ManaProduction` for
 /// `ChooseManaType` to answer; no available Type (an empty anchor) produces
 /// nothing and is a documented no-op rather than an error, since a
 /// `WorkItem` executor cannot reject.
-pub(crate) fn produce_mana(state: &GameState, source: ManaSource) -> (GameState, Vec<GameEvent>) {
+pub(crate) fn produce_mana(
+    state: &GameState,
+    player: PlayerId,
+    source: ManaSource,
+) -> (GameState, Vec<GameEvent>) {
     let mut state = state.clone();
-    let player = state.turn.active_player;
     let available = available_types(&state.cards, state.players.get(player), source);
 
     match available.as_slice() {
@@ -262,7 +263,7 @@ pub(crate) fn produce_mana(state: &GameState, source: ManaSource) -> (GameState,
 /// drained, the turn moves forward into the Main Phase on its own — phases
 /// only move forward, so nothing else ever advances out of `Phase::Upkeep`.
 /// `engine::turn::handover` queues this last, after `ReadyAll`, any
-/// `YourUpkeep` triggers, `DrawCard`, and `ProduceMana(ManaSource::Player)`,
+/// `YourUpkeep` triggers, `DrawCard`, and player-wide Mana production,
 /// so it always runs once every one of those has finished — including a
 /// `ManaProduction` pause and its answer, since the drain loop resumes this
 /// same queue exactly where it paused once `pending` clears. A plain state
@@ -347,7 +348,7 @@ mod tests {
                 window: None,
                 normal_attack_used: false,
                 normal_retreat_used: false,
-                spell_played_this_turn: false,
+                spell_played_this_turn: PerPlayer::new(false, false),
             },
             stack: vec![],
             stack_segment_bases: vec![],
@@ -489,7 +490,7 @@ mod tests {
     fn produce_mana_auto_produces_when_exactly_one_type_is_anchored() {
         let state = base_state();
 
-        let (state, events) = produce_mana(&state, ManaSource::Player);
+        let (state, events) = produce_mana(&state, PlayerId::One, ManaSource::Player);
 
         assert_eq!(state.pending, None);
         assert_eq!(state.players.get(PlayerId::One).mana.matter, 1);
@@ -508,7 +509,7 @@ mod tests {
         let mut state = base_state();
         state.players.get_mut(PlayerId::One).main = Some(adept(PlayerId::One));
 
-        let (state, events) = produce_mana(&state, ManaSource::Player);
+        let (state, events) = produce_mana(&state, PlayerId::One, ManaSource::Player);
 
         assert_eq!(
             state.pending,
@@ -527,7 +528,7 @@ mod tests {
         state.players.get_mut(PlayerId::One).main = None;
         state.players.get_mut(PlayerId::One).bench[0] = None;
 
-        let (state, events) = produce_mana(&state, ManaSource::Player);
+        let (state, events) = produce_mana(&state, PlayerId::One, ManaSource::Player);
 
         assert!(events.is_empty());
         assert_eq!(state.pending, None);

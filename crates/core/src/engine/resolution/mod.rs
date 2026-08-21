@@ -9,7 +9,7 @@
 //! the segment base the trigger just pushed — exactly where they are until
 //! that window closes.
 
-use crate::domain::cards::{Attack, CardSet, EffectLeaf, EntityId, Persistent};
+use crate::domain::cards::{Attack, CardSet, EffectLeaf, EffectSource, EntityId, Persistent};
 use crate::domain::events::GameEvent;
 use crate::domain::ids::{PlayerId, Position};
 use crate::domain::state::{CardRef, GameState, StackItem, WorkItem};
@@ -90,7 +90,7 @@ fn execute(state: &GameState, item: &WorkItem) -> (GameState, Vec<GameEvent>) {
     match item {
         WorkItem::ReadyAll => upkeep::ready_all(state),
         WorkItem::DrawCard => execute_draw(state),
-        WorkItem::ProduceMana(source) => upkeep::produce_mana(state, *source),
+        WorkItem::ProduceMana { player, source } => upkeep::produce_mana(state, *player, *source),
         WorkItem::BeginMainPhase => upkeep::begin_main_phase(state),
 
         WorkItem::DestructionCheck(position) => destruction::check(state, *position),
@@ -157,11 +157,18 @@ fn resolve_top_stack_item(state: &GameState) -> (GameState, Vec<GameEvent>) {
         }
         StackItem::Trigger {
             controller,
+            source,
+            ability,
             targets,
             effects,
             ..
         } => {
-            let (next_state, leaf_events) = apply_leaves(&state, controller, &targets, &effects);
+            let source = EffectSource::Trigger {
+                controller,
+                position: source,
+                ability,
+            };
+            let (next_state, leaf_events) = apply_leaves(&state, source, &targets, &effects);
             state = next_state;
             events.extend(leaf_events);
         }
@@ -188,11 +195,18 @@ fn resolve_attack(
     attacker: PlayerId,
     target: Position,
 ) -> (GameState, Vec<GameEvent>) {
+    let Some((ability, effects)) = attacker_effects(state, attacker) else {
+        return (state.clone(), Vec::new());
+    };
     apply_leaves(
         state,
-        attacker,
+        EffectSource::Attack {
+            controller: attacker,
+            position: Position::Main,
+            ability,
+        },
         &[target],
-        &attacker_effects(state, attacker),
+        &effects,
     )
 }
 
@@ -212,7 +226,11 @@ fn resolve_spell(
 ) -> (GameState, Vec<GameEvent>) {
     let (mut state, events) = apply_leaves(
         state,
-        caster,
+        EffectSource::Spell {
+            controller: caster,
+            card: card.instance,
+            definition: card.def,
+        },
         targets,
         &spell_effects(&state.cards, card.def),
     );
@@ -233,28 +251,23 @@ fn resolve_spell(
 /// its state and events forward. `pub(crate)` so `engine::triggers` can
 /// resolve an immediate trigger's effects through the same single
 /// interpreter path as an attack, a Spell, and a respondable trigger's own
-/// Stack item. Rules §30: when `leaves` names an immutable `DealDamage`
-/// (the Old Sow's `Root and Renew`-adjacent Attack text), any
-/// `ConditionalBonus` in the same list is skipped outright rather than
-/// resolved and left to find its condition false — the one "increase" this
-/// crate's vocabulary has never runs against Damage the printed text says
-/// cannot be increased.
+/// Stack item. The source stays attached through every leaf so grouped
+/// Damage can attribute and evaluate its own adjustments.
 pub(crate) fn apply_leaves(
     state: &GameState,
-    controller: PlayerId,
+    source: EffectSource,
     targets: &[Position],
     leaves: &[EffectLeaf],
 ) -> (GameState, Vec<GameEvent>) {
     let mut state = state.clone();
     let mut events = Vec::new();
-    let damage_is_immutable = effects::immutable_damage_in(leaves);
     for leaf in leaves {
-        if damage_is_immutable && matches!(leaf, EffectLeaf::ConditionalBonus { .. }) {
-            continue;
-        }
-        let (next_state, leaf_events) = effects::apply_leaf(&state, controller, targets, leaf);
+        let (next_state, leaf_events) = effects::apply_leaf(&state, source, targets, leaf);
         state = next_state;
         events.extend(leaf_events);
+        if !state.status.is_playing() {
+            break;
+        }
     }
     (state, events)
 }
@@ -263,17 +276,16 @@ pub(crate) fn apply_leaves(
 /// entity `Component::Attack` wraps — not off the card itself. No `Attack`
 /// component at all, the same as an unresolvable card, answers with no
 /// effects.
-fn attacker_effects(state: &GameState, attacker: PlayerId) -> Vec<EffectLeaf> {
+fn attacker_effects(state: &GameState, attacker: PlayerId) -> Option<(EntityId, Vec<EffectLeaf>)> {
     let Some(main_summon) = &state.players.get(attacker).main else {
-        return Vec::new();
+        return None;
     };
-    let Some(entity) = state.cards.get(main_summon.chain.top().def) else {
-        return Vec::new();
-    };
-    let Some(attack) = entity.get::<Attack>() else {
-        return Vec::new();
-    };
-    attack.all::<EffectLeaf>().into_iter().cloned().collect()
+    let entity = state.cards.get(main_summon.chain.top().def)?;
+    let attack = entity.get::<Attack>()?;
+    Some((
+        attack.id,
+        attack.all::<EffectLeaf>().into_iter().cloned().collect(),
+    ))
 }
 
 /// A Spell's or an Enchantment's printed effects, read straight off the

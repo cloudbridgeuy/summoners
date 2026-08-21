@@ -5,12 +5,13 @@
 A deterministic, pure game engine exists in `crates/core`. It enforces turn
 structure, Mana, the board, Combat, the Stack, Spells, Skills, Triggered
 Abilities, destruction, Prize recovery, promotion, and loss conditions for the
-rules described below. There is no CLI, server, client, or card loader yet.
-The engine reads no file, calls no network, uses no clock, and uses no random
-source. Every entry point takes one state value and one action, and returns a
-new state value; it never mutates anything the caller still holds. This file
-is an index of stable product language from the design inputs and the engine
-that now exists, not an API contract.
+rules described below. The engine reads no file, calls no network, uses no
+clock, and uses no random source. Every entry point takes one state value and
+one action, and returns a new state value; it never mutates anything the caller
+still holds. A strict authored-card boundary parses caller-held Set bytes into
+core definitions without file I/O. There is no CLI, server, client, runtime
+file loader, Deck loader, or built-in catalog yet. This file is an index of
+stable product language, not an API contract.
 
 ## Behavior
 
@@ -48,6 +49,66 @@ managed pre-commit hook and leaves any unmanaged hook unchanged.
   hook
 - **THEN** it reports that the hook is unmanaged and leaves it unchanged
 
+### Requirement: Strict authored Set loading
+
+A **Set** byte buffer uses one exact schema version and converts to core card
+definitions only after strict document and semantic parsing. Stable Set, card,
+and ability codes determine UUID-v5 identities; revision, display text, and
+document order do not determine them.
+
+#### Scenario: A valid Set is parsed
+
+- **WHEN** a caller passes the Foundations Set bytes to the Set parser
+- **THEN** it receives 20 core card definitions with their printed statistics,
+  costs, abilities, effects, modifiers, timing, persistence, and response modes
+
+#### Scenario: A Set is malformed
+
+- **WHEN** a Set contains invalid UTF-8, a missing or unsupported schema
+  version, an unknown field, an invalid stable code, an invalid semantic
+  combination, or a duplicate code
+- **THEN** parsing fails before caller-visible core conversion with a typed
+  phase, schema version when known, stable path, and cause
+
+#### Scenario: A positional effect keeps its authored selector
+
+- **WHEN** a Set effect selects an own Summon or refers to its battlefield
+  source
+- **THEN** its core effect leaf keeps the matching Selected or Source target
+- **AND** a Spell or Enchantment cannot use Source because it has no
+  battlefield position
+
+### Requirement: Strict Deck loading and one built-in catalog
+
+A Deck byte buffer declares exact Set revisions and qualified stable card
+references. The card boundary resolves one separate Base Starter and an
+expanded 20-card body. It rejects unknown schema data, unavailable or wrong
+Set revisions, unresolved references, duplicate Set requirements, a Starter
+in the body, a non-Base Starter, a wrong body total, and more than two copies
+of one definition. The embedded Foundations Set and both Decks use this same
+public byte path once, and all callers share the cached catalog and core card
+pool.
+
+#### Scenario: A valid Deck is resolved
+
+- **WHEN** a caller passes either built-in Deck byte buffer and the Foundations
+  library to the Deck parser
+- **THEN** it receives the correct separate Base Starter and 20 body cards
+- **AND** the body contains ten definitions with two copies of each
+
+#### Scenario: A Deck is malformed or cannot resolve
+
+- **WHEN** a Deck has malformed schema data, an invalid stable reference, a
+  missing or wrong Set revision, an unresolved card, or an illegal construction
+- **THEN** parsing fails with a typed document kind, phase, schema version,
+  stable path, and cause
+
+#### Scenario: The built-in catalog is requested more than once
+
+- **WHEN** callers request the built-in catalog and its core card pool again
+- **THEN** each caller receives the same cached catalog allocation and core
+  card-pool allocation
+
 ### Requirement: Turn structure and phase order
 
 A turn moves through Upkeep, Main Phase, and Combat, and phases only move
@@ -82,7 +143,9 @@ for that choice when it is. The second player's one-use Coin converts to one
 Mana of a Type their board already produces, and is then removed from the
 game (rules §7). Paying a cost spends typed components from their matching
 pool first; a Generic component is paid from a named pool or, without one,
-from the largest remaining pool (rules §11–12, §50).
+from the largest remaining pool (rules §11–12, §50). Mana produced by an
+effect belongs to that effect's controller, even when another player is
+active, and a required Mana Type choice remains assigned to that controller.
 
 #### Scenario: A dual-type board pauses for a Mana Type choice
 
@@ -95,6 +158,12 @@ from the largest remaining pool (rules §11–12, §50).
 - **WHEN** the second player converts their Coin for a Type their board
   produces
 - **THEN** the Coin leaves the game, and converting again is rejected
+
+#### Scenario: A non-active player's effect produces Mana
+
+- **WHEN** a Trigger controlled by the non-active player produces Mana
+- **THEN** the Mana is banked for that Trigger's controller, and any Mana
+  Type choice waits for that same player
 
 ### Requirement: Playing, upgrading, and retreating Summons
 
@@ -150,7 +219,10 @@ cost, puts the card on the Stack, and opens a Priority window. A resolved
 Spell moves to its caster's discard pile; a resolved Enchantment instead
 remains in play until something removes it (rules §44, §56). A card's own
 printed Attack effect can block Attack Spell responses to it under a stated
-condition.
+condition. Each player has independent Spell-play history for the current
+turn. A response block reads the nearest unresolved Attack in the current
+Stack segment, even when Support Spells sit above it, and never reads an
+outer or completed Attack.
 
 #### Scenario: A Support Spell heals through the Stack
 
@@ -165,12 +237,60 @@ condition.
 - **THEN** it stays in play rather than discarding, and it is still in play
   after a full turn hands off to the opponent
 
+#### Scenario: Spell history and response blocks stay local
+
+- **WHEN** one player casts a Support Spell above a protected Attack
+- **THEN** only that caster's Spell-play condition becomes true, and the
+  protected Attack remains visible within its current Stack segment
+
+### Requirement: Source-aware Damage resolution
+
+Each Damage effect groups its base amount, conditional additions, and semantic
+constraints. The engine evaluates one immutable Damage intent in the fixed
+order Addition, Persistent Reduction, Clamp, and Commit. It then changes the
+target's Damage once and queues destruction work. Every calculation emits an
+ordered, flat event trace whose lines repeat the exact source and target.
+Sources distinguish an Attack, Spell card instance, Skill ability, and Trigger
+ability.
+
+Standing Ward reduces an opposing Attack's combined Damage by 10 for each Ward
+in play. It does not reduce Spell, Skill, or Trigger Damage. `Unpreventable`
+skips each Ward reduction, and `Unincreasable` skips each conditional addition.
+A reduction cannot make the running total less than zero.
+
+#### Scenario: Conditional Damage passes through two Wards
+
+- **WHEN** a true conditional addition combines with an Attack's base Damage
+  while the defender controls two Standing Wards
+- **THEN** the addition applies first, each Ward reduces the combined total in
+  play order, the total clamps at zero or more, and one final Damage amount is
+  committed to the target
+
+#### Scenario: A constraint skips each blocked adjustment
+
+- **WHEN** an unpreventable Attack meets two Standing Wards
+- **THEN** the event trace contains one skipped persistent-reduction line for
+  each Ward and the full Attack Damage is committed
+
+- **WHEN** an unincreasable Damage effect has a true conditional addition
+- **THEN** the event trace contains a skipped addition line and commits the
+  base Damage without that addition
+
+#### Scenario: Damage events identify their complete calculation
+
+- **WHEN** Damage resolves from an Attack, Spell, Skill, or Trigger
+- **THEN** its calculation events identify the exact source, the target, each
+  applied or skipped operation, its origin and stage, the running input and
+  output or skip constraint, and the final before-and-after values
+
 ### Requirement: Skills
 
 Activating a Skill requires the Summon to be Ready. Activation checks
 Readiness, pays the cost, exhausts the Summon, then resolves the Skill's
 effect, always in that order (rules §15). No currently printed Skill uses the
-Stack, so every Skill resolves immediately (rules §43).
+Stack, so every Skill resolves immediately (rules §43). An effect authored
+to act on its source uses the activating or triggering Summon's position and
+cannot be redirected through an action's selected target.
 
 #### Scenario: Exhaustion happens before the Skill's effect
 
@@ -185,6 +305,12 @@ Stack, so every Skill resolves immediately (rules §43).
 - **THEN** an opposing Skill that would move it is rejected for the whole of
   the opponent's next turn, and becomes legal again only once the
   controller's following turn begins
+
+#### Scenario: A self effect ignores a redirected selected target
+
+- **WHEN** a source-targeted heal and movement protection resolves with a
+  different friendly Summon in the selected-target list
+- **THEN** both effects apply to the source Summon
 
 ### Requirement: Triggered abilities
 
@@ -241,7 +367,10 @@ The game ends the moment any losing condition is met: a third Main loss, no
 Bench Summon available to promote into an empty Main, or an attempted draw
 from an empty Deck (rules §2, §10, §24, §58). A third Main loss ends the game
 even if another losing condition is pending at the very same moment, and once
-the game has ended every later action is rejected.
+the game has ended every later action is rejected. When an effect requires
+more cards than remain in the Deck, the player draws every available card in
+order, then loses before any later effect leaf resolves. Drawing exactly the
+final available card succeeds and does not cause an early loss.
 
 #### Scenario: A third Main loss ends the game outright
 
@@ -255,6 +384,17 @@ the game has ended every later action is rejected.
 - **WHEN** a player must draw from an empty Deck during Upkeep
 - **THEN** the game ends immediately, and that Upkeep's Mana production never
   runs
+
+#### Scenario: A required multi-card effect draw cannot complete
+
+- **WHEN** an effect requires more cards than remain in the player's Deck
+- **THEN** every available card is drawn and reported first, the player then
+  loses for draw failure, and no later effect leaf resolves
+
+#### Scenario: A required draw takes the final available card
+
+- **WHEN** an effect requires exactly the number of cards left in the Deck
+- **THEN** the draw succeeds and emptying the Deck alone does not end the game
 
 ## Sources
 
@@ -288,8 +428,15 @@ types/archetypes document for content-design intent.
 - **Enchantment:** a card played from hand like a Spell, but it remains in play after resolving instead of discarding.
 - **Priority:** the exclusive right to add one legal Spell to the Stack or pass.
 - **Stack:** the last-in, first-out sequence of attacks and respondable effects.
+- **Damage:** a resolved amount added to one Summon's existing Damage. Its
+  calculation retains the printed source and battlefield target.
+- **Damage constraint:** semantic text such as `Unpreventable` or
+  `Unincreasable` that skips the matching adjustment without changing the
+  running Damage total.
 - **Prize Card:** one of two face-down comeback resources recovered after the first two Main losses.
 - **Vault:** seven match-play cards outside the 20-card Deck.
+- **Set:** one versioned authored document that owns card definitions and their
+  stable identities.
 
 ## Important relationships
 
@@ -327,14 +474,9 @@ rules without a new decision.
 The engine itself leaves further ground open that a reader should not
 mistake for settled:
 
-- No effect in the engine prevents Damage from landing at all. A card whose
-  printed Attack is marked unpreventable and unincreasable is unchangeable
-  once dealt — nothing can add to it after the fact — but that "unpreventable"
-  half of its text currently describes a state the engine can already never
-  violate, not a prevention effect it actively defeats.
-- The card set is a fixture registry held in code, not a card file loaded
-  from anywhere. Its names, stats, and text are working test data for
-  exercising every rule at least once, not a finished, published card list.
+- Damage supports conditional additions, persistent reductions, constraints,
+  and a zero clamp. It does not yet support scaling, replacement, redirection,
+  or consumable shields.
 - The design's "you may" wording on a few printed effects — returning a
   Spell from the discard pile, and the look-then-draw-then-return sequence on
   one Skill — is currently played out as an unconditional action. The engine

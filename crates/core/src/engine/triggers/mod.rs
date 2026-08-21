@@ -23,7 +23,9 @@
 //! directly: firing more than one inline would have nowhere to remember an
 //! untried remainder if the first of several opened a Priority window.
 
-use crate::domain::cards::{EffectLeaf, Entity, EntityId, Respondable, Trigger, TriggerEvent};
+use crate::domain::cards::{
+    EffectLeaf, EffectSource, Entity, EntityId, Respondable, Trigger, TriggerEvent,
+};
 use crate::domain::events::GameEvent;
 use crate::domain::ids::PlayerId;
 use crate::domain::ids::Position;
@@ -187,7 +189,7 @@ pub(crate) fn discover_back(
 fn implicit_targets(position: Position, effects: &[EffectLeaf]) -> Vec<Position> {
     if effects
         .iter()
-        .any(|leaf| matches!(leaf, EffectLeaf::DealDamage { .. }))
+        .any(|leaf| matches!(leaf, EffectLeaf::DealDamage(_)))
     {
         vec![Position::Main]
     } else {
@@ -236,14 +238,23 @@ fn fire(
         state.stack.push(StackItem::Trigger {
             controller: player,
             source: position,
+            ability,
             event,
             targets,
             effects,
         });
         state.turn.window = Some(stack::window_after_play(player));
     } else {
-        let (next_state, leaf_events) =
-            resolution::apply_leaves(&state, player, &targets, &effects);
+        let (next_state, leaf_events) = resolution::apply_leaves(
+            &state,
+            EffectSource::Trigger {
+                controller: player,
+                position,
+                ability,
+            },
+            &targets,
+            &effects,
+        );
         state = next_state;
         events.extend(leaf_events);
     }
