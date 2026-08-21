@@ -14,8 +14,8 @@ use summoners_core::{
         },
         ids::{BenchSlot, PlayerId, Position},
         state::{
-            GameOutcome, GameStatus, LossReason, ManaSource, PendingInput, Phase, StackItem,
-            StackWindow,
+            GameOutcome, GameStatus, LossReason, ManaSource, PendingInput, Phase, Readiness,
+            StackItem, StackWindow,
         },
     },
     engine::apply::apply,
@@ -49,14 +49,14 @@ fn destruction_chain_resolves_choices_triggers_healing_and_third_main_loss() {
     let mut one = player(ScenarioSummon {
         chain: vec![warden_initiate],
         damage: 0,
-        ready: true,
+        readiness: Readiness::Ready,
     });
     one.deck = one_draws;
 
     let mut two = player(ScenarioSummon {
         chain: vec![sow_piglet],
         damage: 40,
-        ready: true,
+        readiness: Readiness::Ready,
     });
     two.deck = two_draws;
     two.prizes = vec![recovered_prize];
@@ -65,19 +65,19 @@ fn destruction_chain_resolves_choices_triggers_healing_and_third_main_loss() {
         Some(ScenarioSummon {
             chain: vec![ash_shepherd],
             damage: 30,
-            ready: true,
+            readiness: Readiness::Ready,
         }),
         Some(ScenarioSummon {
             chain: vec![first_hearth],
             // Promotion fires the printed 15-point heal before the next
             // attack. The result is exactly 50 Damage on 60 Life.
             damage: 65,
-            ready: true,
+            readiness: Readiness::Ready,
         }),
         Some(ScenarioSummon {
             chain: vec![second_hearth],
             damage: 15,
-            ready: true,
+            readiness: Readiness::Ready,
         }),
     ];
 
@@ -375,7 +375,7 @@ fn destruction_chain_resolves_choices_triggers_healing_and_third_main_loss() {
         .expect("Hearth Warden fills Main");
     assert_eq!(first_healed.chain.top(), first_hearth);
     assert_eq!(first_healed.damage, 50);
-    assert!(first_healed.entered_main_this_turn);
+    assert!(first_healed.turn.main_entry.is_some());
     assert_eq!(first_promoted.state.players.two.main_losses, 1);
     assert_eq!(first_promoted.state.pending, None);
     assert_eq!(first_promoted.state.status, GameStatus::Playing);

@@ -17,7 +17,7 @@ use crate::domain::state::{
 use std::collections::VecDeque;
 use std::sync::Arc;
 
-fn summon_with_def(owner: PlayerId, def: EntityId, ready: bool) -> SummonInstance {
+fn summon_with_def(owner: PlayerId, def: EntityId, readiness: Readiness) -> SummonInstance {
     SummonInstance {
         chain: UpgradeChain::new(
             CardRef {
@@ -27,18 +27,16 @@ fn summon_with_def(owner: PlayerId, def: EntityId, ready: bool) -> SummonInstanc
             vec![],
         ),
         damage: 0,
-        ready,
+        readiness,
         owner,
         controller: owner,
         duration_markers: vec![],
-        played_this_turn: false,
-        upgraded_this_turn: false,
-        entered_main_this_turn: false,
+        turn: crate::domain::state::SummonTurnRecord::fresh(),
     }
 }
 
-fn summon(owner: PlayerId, def: &'static str, ready: bool) -> SummonInstance {
-    summon_with_def(owner, fixtures::id(def), ready)
+fn summon(owner: PlayerId, def: &'static str, readiness: Readiness) -> SummonInstance {
+    summon_with_def(owner, fixtures::id(def), readiness)
 }
 
 fn empty_player_with_main(main: SummonInstance) -> PlayerState {
@@ -51,21 +49,21 @@ fn empty_player_with_main(main: SummonInstance) -> PlayerState {
         discard: vec![],
         mana: ManaBank::default(),
         main_losses: 0,
-        has_coin: false,
         enchantments: vec![],
     }
 }
 
-fn empty_player(owner: PlayerId, def: &'static str, ready: bool) -> PlayerState {
-    empty_player_with_main(summon(owner, def, ready))
+fn empty_player(owner: PlayerId, def: &'static str, readiness: Readiness) -> PlayerState {
+    empty_player_with_main(summon(owner, def, readiness))
 }
 
-fn base_state_with_cards(cards: Arc<CardSet>, def: EntityId, ready: bool) -> GameState {
+fn base_state_with_cards(cards: Arc<CardSet>, def: EntityId, readiness: Readiness) -> GameState {
     GameState {
         players: PerPlayer::new(
-            empty_player_with_main(summon_with_def(PlayerId::One, def, ready)),
-            empty_player(PlayerId::Two, "quarry-whelp", true),
+            empty_player_with_main(summon_with_def(PlayerId::One, def, readiness)),
+            empty_player(PlayerId::Two, "quarry-whelp", Readiness::Ready),
         ),
+        coin: None,
         turn: TurnState {
             active_player: PlayerId::One,
             phase: Phase::Main,
@@ -83,8 +81,8 @@ fn base_state_with_cards(cards: Arc<CardSet>, def: EntityId, ready: bool) -> Gam
     }
 }
 
-fn base_state(def: &'static str, ready: bool) -> GameState {
-    base_state_with_cards(fixtures::card_set(), fixtures::id(def), ready)
+fn base_state(def: &'static str, readiness: Readiness) -> GameState {
+    base_state_with_cards(fixtures::card_set(), fixtures::id(def), readiness)
 }
 
 /// An id no fixture card in `fixtures::entities()` uses.
@@ -117,7 +115,7 @@ fn damage_skill_retains_its_exact_source_and_ignores_wards() {
         id: card_id,
         components: vec![Component::Skill(skill)],
     };
-    let mut state = base_state_with_cards(cards_with(vec![card]), card_id, true);
+    let mut state = base_state_with_cards(cards_with(vec![card]), card_id, Readiness::Ready);
     state.players.get_mut(PlayerId::Two).enchantments = vec![
         CardRef {
             instance: CardInstanceId(90),
@@ -192,7 +190,7 @@ fn quarry_scouts_skill_prints_a_generic_cost_and_a_move_summon_effect() {
 
 #[test]
 fn an_exhausted_summon_rejects_activation() {
-    let mut state = base_state("quarry-scout", false);
+    let mut state = base_state("quarry-scout", Readiness::Exhausted);
     state.players.get_mut(PlayerId::One).mana.matter = 1;
 
     let result = activate_skill(
@@ -211,7 +209,7 @@ fn an_exhausted_summon_rejects_activation() {
 
 #[test]
 fn a_missing_summon_rejects_activation() {
-    let mut state = base_state("quarry-scout", true);
+    let mut state = base_state("quarry-scout", Readiness::Ready);
     state.players.get_mut(PlayerId::One).main = None;
 
     let result = activate_skill(
@@ -234,7 +232,7 @@ fn an_unknown_ability_id_is_an_invalid_target() {
     // data: it rejects with `InvalidTarget`, the same as any other action
     // naming a target the game does not recognize as legal — it never
     // reaches for `demand` or breaks the game.
-    let state = base_state("quarry-scout", true);
+    let state = base_state("quarry-scout", Readiness::Ready);
 
     let result = activate_skill(
         &state,
@@ -252,7 +250,7 @@ fn an_unknown_ability_id_is_an_invalid_target() {
 
 #[test]
 fn a_summon_with_no_skill_nodes_is_an_invalid_target() {
-    let state = base_state("quarry-whelp", true);
+    let state = base_state("quarry-whelp", Readiness::Ready);
 
     let result = activate_skill(
         &state,
@@ -278,9 +276,9 @@ fn exhaustion_happens_before_the_skills_effects_resolve() {
     // after the move, the mutation would land on the now-empty
     // originating slot and silently miss, leaving the moved Summon
     // still Ready.
-    let mut state = base_state("quarry-whelp", true);
+    let mut state = base_state("quarry-whelp", Readiness::Ready);
     state.players.get_mut(PlayerId::One).bench[0] =
-        Some(summon(PlayerId::One, "quarry-scout", true));
+        Some(summon(PlayerId::One, "quarry-scout", Readiness::Ready));
     state.players.get_mut(PlayerId::One).mana.matter = 1;
 
     let outcome = activate_skill(
@@ -301,8 +299,9 @@ fn exhaustion_happens_before_the_skills_effects_resolve() {
     let moved = outcome.state.players.get(PlayerId::One).bench[1]
         .as_ref()
         .expect("the Scout relocated to the second Bench slot");
-    assert!(
-        !moved.ready,
+    assert_eq!(
+        moved.readiness,
+        Readiness::Exhausted,
         "exhaustion applied to the original slot before the move ran"
     );
     assert!(outcome.state.players.get(PlayerId::One).bench[0].is_none());
@@ -312,11 +311,11 @@ fn exhaustion_happens_before_the_skills_effects_resolve() {
 
 #[test]
 fn move_summon_onto_an_occupied_bench_slot_is_rejected_before_payment() {
-    let mut state = base_state("quarry-whelp", true);
+    let mut state = base_state("quarry-whelp", Readiness::Ready);
     state.players.get_mut(PlayerId::One).bench[0] =
-        Some(summon(PlayerId::One, "quarry-scout", true));
+        Some(summon(PlayerId::One, "quarry-scout", Readiness::Ready));
     state.players.get_mut(PlayerId::One).bench[1] =
-        Some(summon(PlayerId::One, "quarry-whelp", true));
+        Some(summon(PlayerId::One, "quarry-whelp", Readiness::Ready));
     state.players.get_mut(PlayerId::One).mana.matter = 1;
 
     let result = activate_skill(
@@ -338,9 +337,9 @@ fn move_summon_onto_an_occupied_bench_slot_is_rejected_before_payment() {
 
 #[test]
 fn move_summon_from_an_empty_bench_slot_is_rejected() {
-    let mut state = base_state("quarry-whelp", true);
+    let mut state = base_state("quarry-whelp", Readiness::Ready);
     state.players.get_mut(PlayerId::One).bench[0] =
-        Some(summon(PlayerId::One, "quarry-scout", true));
+        Some(summon(PlayerId::One, "quarry-scout", Readiness::Ready));
     state.players.get_mut(PlayerId::One).mana.matter = 1;
 
     let result = activate_skill(
@@ -362,7 +361,7 @@ fn move_summon_from_an_empty_bench_slot_is_rejected() {
 
 #[test]
 fn swap_positions_against_an_empty_bench_slot_is_rejected() {
-    let state = base_state("quarry-warden-guard", true);
+    let state = base_state("quarry-warden-guard", Readiness::Ready);
 
     let result = activate_skill(
         &state,
@@ -382,9 +381,9 @@ fn swap_positions_against_an_empty_bench_slot_is_rejected() {
 
 #[test]
 fn activate_skill_pays_a_nonzero_cost_before_skill_activated_and_the_move_leaf_emits_no_event() {
-    let mut state = base_state("quarry-whelp", true);
+    let mut state = base_state("quarry-whelp", Readiness::Ready);
     state.players.get_mut(PlayerId::One).bench[0] =
-        Some(summon(PlayerId::One, "quarry-scout", true));
+        Some(summon(PlayerId::One, "quarry-scout", Readiness::Ready));
     state.players.get_mut(PlayerId::One).mana.matter = 1;
 
     let outcome = activate_skill(
@@ -436,8 +435,8 @@ fn activate_skill_pays_a_nonzero_cost_before_skill_activated_and_the_move_leaf_e
 }
 
 #[test]
-fn activate_skill_with_a_free_cost_skips_mana_deducted_and_emits_the_leafs_event() {
-    let state = base_state("quarry-well-tender", true);
+fn activate_skill_with_a_free_cost_skips_mana_deducted_and_emits_the_leaves_event() {
+    let state = base_state("quarry-well-tender", Readiness::Ready);
 
     let outcome = activate_skill(
         &state,
@@ -470,9 +469,9 @@ fn activate_skill_with_a_free_cost_skips_mana_deducted_and_emits_the_leafs_event
 
 #[test]
 fn activate_skill_reports_a_mana_shortfall() {
-    let mut state = base_state("quarry-whelp", true);
+    let mut state = base_state("quarry-whelp", Readiness::Ready);
     state.players.get_mut(PlayerId::One).bench[0] =
-        Some(summon(PlayerId::One, "quarry-scout", true));
+        Some(summon(PlayerId::One, "quarry-scout", Readiness::Ready));
 
     let result = activate_skill(
         &state,
@@ -496,9 +495,9 @@ fn activate_skill_rejects_a_hint_naming_an_empty_pool() {
     // The binding mana_hint rule: a hint naming an empty pool rejects
     // with InvalidManaHint rather than falling back to another pool,
     // the same as `declare_attack` and `cast_spell`.
-    let mut state = base_state("quarry-whelp", true);
+    let mut state = base_state("quarry-whelp", Readiness::Ready);
     state.players.get_mut(PlayerId::One).bench[0] =
-        Some(summon(PlayerId::One, "quarry-scout", true));
+        Some(summon(PlayerId::One, "quarry-scout", Readiness::Ready));
     state.players.get_mut(PlayerId::One).mana.matter = 1;
 
     let result = activate_skill(
@@ -526,7 +525,7 @@ fn apply_activates_a_ready_summons_skill_pays_exhausts_and_resolves_its_effects_
     // `apply` entry point — its cost is paid, it becomes Exhausted,
     // `SkillActivated` is emitted, and its effect resolves (rules
     // §15, §43).
-    let state = base_state("quarry-well-tender", true);
+    let state = base_state("quarry-well-tender", Readiness::Ready);
 
     let outcome = crate::engine::apply::apply(
         &state,
@@ -555,22 +554,23 @@ fn apply_activates_a_ready_summons_skill_pays_exhausts_and_resolves_its_effects_
             },
         ]
     );
-    assert!(
-        !outcome
+    assert_eq!(
+        outcome
             .state
             .players
             .get(PlayerId::One)
             .main
             .as_ref()
             .expect("main")
-            .ready
+            .readiness,
+        Readiness::Exhausted
     );
     assert_eq!(outcome.state.players.get(PlayerId::One).mana.matter, 1);
 }
 
 #[test]
 fn apply_rejects_activation_from_an_exhausted_summon() {
-    let state = base_state("quarry-well-tender", false);
+    let state = base_state("quarry-well-tender", Readiness::Exhausted);
 
     let result = crate::engine::apply::apply(
         &state,
@@ -591,7 +591,7 @@ fn apply_lets_the_ready_effect_spell_reenable_a_skill_activation() {
     // Rules §53: "If a Summon activates a Skill, becomes Exhausted,
     // and is later Readied by an effect, it may activate another
     // Skill." Second Wind is this crate's Ready-effect Spell fixture.
-    let mut state = base_state("quarry-well-tender", false);
+    let mut state = base_state("quarry-well-tender", Readiness::Exhausted);
     state.players.get_mut(PlayerId::One).hand = vec![CardRef {
         instance: CardInstanceId(50),
         def: fixtures::id("second-wind"),
@@ -625,7 +625,7 @@ fn apply_lets_the_ready_effect_spell_reenable_a_skill_activation() {
     )
     .expect("One's second consecutive pass closes the window and resolves the Spell");
 
-    assert!(
+    assert_eq!(
         caster_pass
             .state
             .players
@@ -633,7 +633,8 @@ fn apply_lets_the_ready_effect_spell_reenable_a_skill_activation() {
             .main
             .as_ref()
             .expect("main")
-            .ready,
+            .readiness,
+        Readiness::Ready,
         "Second Wind's ReadySummon leaf turned the Exhausted Summon Ready again"
     );
 
@@ -649,15 +650,16 @@ fn apply_lets_the_ready_effect_spell_reenable_a_skill_activation() {
     )
     .expect("rules §53: a Summon Readied by an effect may activate another Skill");
 
-    assert!(
-        !reactivation
+    assert_eq!(
+        reactivation
             .state
             .players
             .get(PlayerId::One)
             .main
             .as_ref()
             .expect("main")
-            .ready
+            .readiness,
+        Readiness::Exhausted
     );
 }
 
@@ -674,7 +676,7 @@ fn apply_activates_a_swap_positions_skill_and_fires_the_four_movement_triggers_e
     // enqueues (`engine::effects::swap_positions`) reach the real
     // `engine::triggers::movement_trigger` handler through `apply`
     // exactly as `engine::board::retreat` does.
-    let mut state = base_state("quarry-warden-guard", true);
+    let mut state = base_state("quarry-warden-guard", Readiness::Ready);
     state.players.get_mut(PlayerId::One).bench[0] = Some(SummonInstance {
         chain: UpgradeChain::new(
             CardRef {
@@ -684,7 +686,7 @@ fn apply_activates_a_swap_positions_skill_and_fires_the_four_movement_triggers_e
             vec![],
         ),
         damage: 20,
-        ..summon(PlayerId::One, "hearth-warden", true)
+        ..summon(PlayerId::One, "hearth-warden", Readiness::Ready)
     });
 
     let outcome = crate::engine::apply::apply(
@@ -733,12 +735,13 @@ fn apply_activates_a_swap_positions_skill_and_fires_the_four_movement_triggers_e
         .as_ref()
         .expect("Hearth Warden landed on Main");
     assert_eq!(healed.damage, 5);
-    assert!(healed.entered_main_this_turn);
-    assert!(
-        !outcome.state.players.get(PlayerId::One).bench[0]
+    assert!(healed.turn.main_entry.is_some());
+    assert_eq!(
+        outcome.state.players.get(PlayerId::One).bench[0]
             .as_ref()
             .expect("Quarry Warden-Guard landed on the Bench")
-            .ready,
+            .readiness,
+        Readiness::Exhausted,
         "the activating Summon itself stays Exhausted after its own Skill resolves"
     );
 }
@@ -800,10 +803,10 @@ fn activating_by_id_finds_the_same_ability_no_matter_where_it_sits_in_print_orde
     };
 
     let activate = |card: Entity| {
-        let mut state = base_state_with_cards(cards_with(vec![card]), probe, true);
+        let mut state = base_state_with_cards(cards_with(vec![card]), probe, Readiness::Ready);
         state.players.get_mut(PlayerId::One).main = Some(SummonInstance {
             damage: 5,
-            ..summon_with_def(PlayerId::One, probe, true)
+            ..summon_with_def(PlayerId::One, probe, Readiness::Ready)
         });
         state.players.get_mut(PlayerId::One).mana.matter = 1;
 
@@ -846,15 +849,16 @@ fn activating_by_id_finds_the_same_ability_no_matter_where_it_sits_in_print_orde
             },
         ]
     );
-    assert!(
-        !printed_second
+    assert_eq!(
+        printed_second
             .state
             .players
             .get(PlayerId::One)
             .main
             .as_ref()
             .expect("main")
-            .ready,
+            .readiness,
+        Readiness::Exhausted,
         "activating Steady Draft exhausts the Summon regardless of print order"
     );
 }
@@ -876,7 +880,7 @@ fn activating_an_id_the_card_does_not_print_is_an_invalid_target_end_to_end() {
         id: probe,
         components: vec![Component::Skill(steady_draft)],
     };
-    let state = base_state_with_cards(cards_with(vec![card]), probe, true);
+    let state = base_state_with_cards(cards_with(vec![card]), probe, Readiness::Ready);
 
     let result = crate::engine::apply::apply(
         &state,

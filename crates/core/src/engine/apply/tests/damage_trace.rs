@@ -27,13 +27,11 @@ fn set_main(state: &mut GameState, player: PlayerId, instance: u32, card: &'stat
     state.players.get_mut(player).main = Some(SummonInstance {
         chain: UpgradeChain::new(card_ref(instance, card), vec![]),
         damage: 0,
-        ready: true,
+        readiness: Readiness::Ready,
         owner: player,
         controller: player,
         duration_markers: vec![],
-        played_this_turn: false,
-        upgraded_this_turn: false,
-        entered_main_this_turn: false,
+        turn: crate::domain::state::SummonTurnRecord::fresh(),
     });
 }
 
@@ -187,7 +185,8 @@ fn conditional_attack_combines_before_two_ordered_ward_reductions() {
         .main
         .as_mut()
         .expect("main")
-        .entered_main_this_turn = true;
+        .turn
+        .main_entry = Some(crate::domain::state::EnteredMain);
     state.players.get_mut(PlayerId::One).mana.matter = 3;
     add_two_wards(&mut state, PlayerId::Two);
     let ability = attack_ability(&state, PlayerId::One);
@@ -393,7 +392,8 @@ fn unincreasable_attack_skips_a_true_addition_through_apply() {
         .main
         .as_mut()
         .expect("main")
-        .entered_main_this_turn = true;
+        .turn
+        .main_entry = Some(crate::domain::state::EnteredMain);
     let ability = attack_ability(&state, PlayerId::One);
     let context = attack_context(ability);
 

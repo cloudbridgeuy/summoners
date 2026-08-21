@@ -5,7 +5,7 @@ use summoners_core::{
     domain::{
         errors::InvalidScenario,
         ids::{CardInstanceId, PlayerId},
-        state::{CardRef, GameState, ManaBank, PerPlayer},
+        state::{CardRef, Coin, GameState, ManaBank, PerPlayer, Readiness},
     },
     scenario::{Scenario, ScenarioPlayer, ScenarioSummon, from_scenario},
 };
@@ -77,7 +77,11 @@ impl<'library> PhysicalCards<'library> {
         ScenarioSummon {
             chain: self.many(chain),
             damage,
-            ready,
+            readiness: if ready {
+                Readiness::Ready
+            } else {
+                Readiness::Exhausted
+            },
         }
     }
 }
@@ -90,7 +94,6 @@ pub fn player(main: ScenarioSummon) -> ScenarioPlayer {
         discard: vec![],
         mana: ManaBank::default(),
         main_losses: 0,
-        has_coin: false,
         main: Some(main),
         bench: [None, None, None],
     }
@@ -102,11 +105,22 @@ pub fn state(
     two: ScenarioPlayer,
     active_player: PlayerId,
 ) -> Result<GameState, InvalidScenario> {
+    state_with_coin(catalog, one, two, active_player, None)
+}
+
+pub fn state_with_coin(
+    catalog: &BuiltInCatalog,
+    one: ScenarioPlayer,
+    two: ScenarioPlayer,
+    active_player: PlayerId,
+    coin: Option<Coin>,
+) -> Result<GameState, InvalidScenario> {
     from_scenario(
         catalog.library().core_cards(),
         &Scenario {
             players: PerPlayer::new(one, two),
             active_player,
+            coin,
         },
     )
 }

@@ -73,13 +73,11 @@ mod tests {
                 vec![],
             ),
             damage: 0,
-            ready: true,
+            readiness: crate::domain::state::Readiness::Ready,
             owner,
             controller: owner,
             duration_markers: vec![],
-            played_this_turn: false,
-            upgraded_this_turn: false,
-            entered_main_this_turn: false,
+            turn: crate::domain::state::SummonTurnRecord::fresh(),
         }
     }
 
@@ -93,7 +91,6 @@ mod tests {
             discard: vec![],
             mana: ManaBank::default(),
             main_losses: 0,
-            has_coin: false,
             enchantments: vec![],
         }
     }
@@ -101,6 +98,7 @@ mod tests {
     fn base_state() -> GameState {
         GameState {
             players: PerPlayer::new(player_state(PlayerId::One), player_state(PlayerId::Two)),
+            coin: None,
             turn: TurnState {
                 active_player: PlayerId::Two,
                 phase: Phase::Upkeep,

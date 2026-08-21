@@ -5,7 +5,7 @@ mod support;
 use std::sync::Arc;
 
 use summoners_cards::built_in_catalog;
-use summoners_core::domain::ids::PlayerId;
+use summoners_core::domain::{ids::PlayerId, state::Readiness};
 
 use support::{PhysicalCards, player, state};
 
@@ -37,7 +37,12 @@ fn state_helper_uses_scenario_and_preserves_the_library_arc() {
         Some(5)
     );
     assert_eq!(
-        state.players.two.main.as_ref().map(|summon| summon.ready),
-        Some(false)
+        state
+            .players
+            .two
+            .main
+            .as_ref()
+            .map(|summon| summon.readiness),
+        Some(Readiness::Exhausted)
     );
 }

@@ -6,7 +6,7 @@ use crate::domain::cards::fixtures;
 use crate::domain::ids::{CardInstanceId, PlayerId, Position};
 use crate::domain::state::{
     CardRef, GameStatus, ManaBank, ManaSource, MovementStep, PendingInput, PerPlayer, Phase,
-    PlayerState, SummonInstance, TurnState, UpgradeChain,
+    PlayerState, Readiness, SummonInstance, TurnState, UpgradeChain,
 };
 use std::collections::VecDeque;
 
@@ -20,13 +20,11 @@ fn whelp(owner: PlayerId) -> SummonInstance {
             vec![],
         ),
         damage: 0,
-        ready: false,
+        readiness: Readiness::Exhausted,
         owner,
         controller: owner,
         duration_markers: vec![],
-        played_this_turn: false,
-        upgraded_this_turn: false,
-        entered_main_this_turn: false,
+        turn: crate::domain::state::SummonTurnRecord::fresh(),
     }
 }
 
@@ -43,7 +41,6 @@ fn player_state(owner: PlayerId) -> PlayerState {
         discard: vec![],
         mana: ManaBank::default(),
         main_losses: 0,
-        has_coin: false,
         enchantments: vec![],
     }
 }
@@ -51,6 +48,7 @@ fn player_state(owner: PlayerId) -> PlayerState {
 fn base_state() -> GameState {
     GameState {
         players: PerPlayer::new(player_state(PlayerId::One), player_state(PlayerId::Two)),
+        coin: None,
         turn: TurnState {
             active_player: PlayerId::Two,
             phase: Phase::Upkeep,
@@ -261,7 +259,7 @@ fn drain_leaves_a_broken_game_untouched_even_with_queued_work() {
 #[test]
 fn drain_is_a_silent_no_op_for_a_movement_or_ability_trigger_with_no_matching_card() {
     // Quarry Whelp prints no Trigger ability, so both items find nothing
-    // to fire; `LeavingMain` also does not touch `entered_main_this_turn`
+    // to fire; `LeavingMain` also does not touch the Main-entry record
     // (only `EnteringMain` does).
     let mut state = base_state();
     state.work = VecDeque::from(vec![
@@ -327,7 +325,7 @@ fn drain_fires_an_entering_main_trigger_and_sets_the_entered_flag() {
         .as_ref()
         .expect("main");
     assert_eq!(healed.damage, 5);
-    assert!(healed.entered_main_this_turn);
+    assert!(healed.turn.main_entry.is_some());
 }
 
 #[test]

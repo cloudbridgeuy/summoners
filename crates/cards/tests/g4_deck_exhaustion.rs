@@ -14,7 +14,7 @@ use summoners_core::{
         ids::{ManaType, PlayerId, Position},
         state::{
             CardRef, GameOutcome, GameState, GameStatus, LossReason, ManaBank, ManaSource, Phase,
-            StackItem, StackWindow, WorkItem,
+            Readiness, StackItem, StackWindow, WorkItem,
         },
     },
     engine::apply::apply,
@@ -74,7 +74,7 @@ fn seeded_g4() -> G4 {
     let mut one = player(summoners_core::scenario::ScenarioSummon {
         chain: vec![one_starter],
         damage: 0,
-        ready: true,
+        readiness: Readiness::Ready,
     });
     one.deck = vec![one_upkeep_draw, one_effect_draw];
     one.hand = vec![scrying_glass];
@@ -83,7 +83,7 @@ fn seeded_g4() -> G4 {
     let mut two = player(summoners_core::scenario::ScenarioSummon {
         chain: vec![seer],
         damage: 0,
-        ready: true,
+        readiness: Readiness::Ready,
     });
     two.deck = vec![two_skill_draw];
     two.hand = vec![returned_spell, retained_spell];
@@ -181,7 +181,10 @@ fn g4_effect_draws_empty_the_deck_before_the_next_upkeep_draw_ends_the_game() {
     );
     assert_eq!(g4.state.status, GameStatus::Playing);
     assert!(g4.state.pending.is_none());
-    assert!(!g4.state.players.two.main.as_ref().expect("Seer").ready);
+    assert_eq!(
+        g4.state.players.two.main.as_ref().expect("Seer").readiness,
+        Readiness::Exhausted
+    );
 
     let stable = g4.state.clone();
     assert_eq!(

@@ -15,7 +15,9 @@ use summoners_core::{
             DamageStage, GameEvent,
         },
         ids::{BenchSlot, ManaType, PlayerId, Position},
-        state::{CardRef, DurationMarker, GameState, ManaBank, ManaSource, Phase, StackItem},
+        state::{
+            CardRef, DurationMarker, GameState, ManaBank, ManaSource, Phase, Readiness, StackItem,
+        },
     },
     engine::apply::apply,
     scenario::ScenarioSummon,
@@ -61,7 +63,7 @@ fn chain(cards: impl IntoIterator<Item = CardRef>, damage: u32) -> ScenarioSummo
     ScenarioSummon {
         chain: cards.into_iter().collect(),
         damage,
-        ready: true,
+        readiness: Readiness::Ready,
     }
 }
 

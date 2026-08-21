@@ -6,8 +6,8 @@ use super::*;
 use crate::domain::cards::{CardSet, Component, EffectTarget, fixtures};
 use crate::domain::ids::{BenchSlot, CardInstanceId, Position};
 use crate::domain::state::{
-    CardRef, GameStatus, ManaBank, PerPlayer, Phase, PlayerState, StackWindow, TurnState,
-    UpgradeChain,
+    CardRef, GameStatus, ManaBank, PerPlayer, Phase, PlayerState, Readiness, StackWindow,
+    TurnState, UpgradeChain,
 };
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -23,13 +23,11 @@ fn summon_of(def: &'static str, owner: PlayerId) -> SummonInstance {
     SummonInstance {
         chain: UpgradeChain::new(card(def), vec![]),
         damage: 0,
-        ready: true,
+        readiness: Readiness::Ready,
         owner,
         controller: owner,
         duration_markers: vec![],
-        played_this_turn: false,
-        upgraded_this_turn: false,
-        entered_main_this_turn: false,
+        turn: crate::domain::state::SummonTurnRecord::fresh(),
     }
 }
 
@@ -45,13 +43,11 @@ fn summon_with_def(def: EntityId, owner: PlayerId) -> SummonInstance {
             vec![],
         ),
         damage: 0,
-        ready: true,
+        readiness: Readiness::Ready,
         owner,
         controller: owner,
         duration_markers: vec![],
-        played_this_turn: false,
-        upgraded_this_turn: false,
-        entered_main_this_turn: false,
+        turn: crate::domain::state::SummonTurnRecord::fresh(),
     }
 }
 
@@ -65,7 +61,6 @@ fn player_state(owner: PlayerId) -> PlayerState {
         discard: vec![],
         mana: ManaBank::default(),
         main_losses: 0,
-        has_coin: false,
         enchantments: vec![],
     }
 }
@@ -73,6 +68,7 @@ fn player_state(owner: PlayerId) -> PlayerState {
 fn base_state() -> GameState {
     GameState {
         players: PerPlayer::new(player_state(PlayerId::One), player_state(PlayerId::Two)),
+        coin: None,
         turn: TurnState {
             active_player: PlayerId::One,
             phase: Phase::Main,
@@ -181,7 +177,9 @@ fn movement_trigger_queues_an_immediate_heal_ability_that_drain_then_fires_on_en
             .main
             .as_ref()
             .expect("main")
-            .entered_main_this_turn
+            .turn
+            .main_entry
+            .is_some()
     );
 
     let (state, drained_events) = resolution::drain(&queued_state);
@@ -244,7 +242,9 @@ fn movement_trigger_still_sets_entered_main_with_no_matching_trigger_ability() {
             .main
             .as_ref()
             .expect("main")
-            .entered_main_this_turn
+            .turn
+            .main_entry
+            .is_some()
     );
 }
 

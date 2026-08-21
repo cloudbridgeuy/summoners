@@ -6,7 +6,7 @@ use crate::domain::cards::fixtures;
 use crate::domain::cards::{Entity, EntityId};
 use crate::domain::ids::CardInstanceId;
 use crate::domain::state::{
-    CardRef, GameOutcome, GameStatus, LossReason, ManaBank, PerPlayer, Phase, TurnState,
+    CardRef, GameOutcome, GameStatus, LossReason, ManaBank, PerPlayer, Phase, Readiness, TurnState,
     UpgradeChain,
 };
 use std::collections::VecDeque;
@@ -22,13 +22,11 @@ fn summon(owner: PlayerId) -> SummonInstance {
             vec![],
         ),
         damage: 0,
-        ready: true,
+        readiness: Readiness::Ready,
         owner,
         controller: owner,
         duration_markers: vec![],
-        played_this_turn: false,
-        upgraded_this_turn: false,
-        entered_main_this_turn: false,
+        turn: crate::domain::state::SummonTurnRecord::fresh(),
     }
 }
 
@@ -42,7 +40,6 @@ fn player_state(owner: PlayerId) -> PlayerState {
         discard: vec![],
         mana: ManaBank::default(),
         main_losses: 0,
-        has_coin: false,
         enchantments: vec![],
     }
 }
@@ -50,6 +47,7 @@ fn player_state(owner: PlayerId) -> PlayerState {
 fn base_state() -> GameState {
     GameState {
         players: PerPlayer::new(player_state(PlayerId::One), player_state(PlayerId::Two)),
+        coin: None,
         turn: TurnState {
             active_player: PlayerId::One,
             phase: Phase::Main,
@@ -178,7 +176,7 @@ fn state_with_life_less_main(player: PlayerId) -> GameState {
 }
 
 #[test]
-fn life_of_breaks_when_the_entitys_card_prints_no_life() {
+fn life_of_breaks_when_the_entity_card_prints_no_life() {
     let state = state_with_life_less_main(PlayerId::Two);
     let summon = state
         .players
@@ -511,7 +509,7 @@ fn answer_promotion_moves_the_chosen_slot_to_main_and_preserves_ready() {
     let mut state = base_state();
     state.players.get_mut(PlayerId::Two).main = None;
     let mut resting = summon(PlayerId::Two);
-    resting.ready = false;
+    resting.readiness = Readiness::Exhausted;
     state.players.get_mut(PlayerId::Two).bench = [None, Some(resting), None];
     state.pending = Some(PendingInput::Promotion {
         player: PlayerId::Two,
@@ -534,8 +532,9 @@ fn answer_promotion_moves_the_chosen_slot_to_main_and_preserves_ready() {
         .main
         .as_ref()
         .expect("promotion filled Main");
-    assert!(
-        !promoted.ready,
+    assert_eq!(
+        promoted.readiness,
+        Readiness::Exhausted,
         "Promotion is a movement, not a new arrival"
     );
     assert_eq!(outcome.state.players.get(PlayerId::Two).bench[1], None);
@@ -548,7 +547,7 @@ fn answer_promotion_moves_the_chosen_slot_to_main_and_preserves_ready() {
     );
 
     // `answer_promotion` itself only moves the Summon (rules §24 step
-    // 4); `entered_main_this_turn` is set later, when the queued
+    // 4); the Main-entry record is set later, when the queued
     // `ResolveMovementConsequences` step (already sitting in `work`
     // above, exactly as it would be mid-destruction-chain) enqueues an
     // `EnteringMain` trigger and draining runs it through
@@ -560,7 +559,7 @@ fn answer_promotion_moves_the_chosen_slot_to_main_and_preserves_ready() {
         .main
         .as_ref()
         .expect("promotion still filled Main after drain");
-    assert!(drained_promoted.entered_main_this_turn);
+    assert!(drained_promoted.turn.main_entry.is_some());
 }
 
 #[test]

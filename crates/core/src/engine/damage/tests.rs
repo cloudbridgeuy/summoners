@@ -5,7 +5,7 @@ use crate::domain::cards::{Attack, DamageAddition, DamageConstraints, EntityId, 
 use crate::domain::events::{BattlefieldTarget, DamageSource};
 use crate::domain::ids::CardInstanceId;
 use crate::domain::state::{
-    CardRef, GameStatus, ManaBank, PerPlayer, Phase, TurnState, UpgradeChain,
+    CardRef, GameStatus, ManaBank, PerPlayer, Phase, Readiness, TurnState, UpgradeChain,
 };
 use std::collections::VecDeque;
 
@@ -19,13 +19,11 @@ fn summon(owner: PlayerId) -> SummonInstance {
             vec![],
         ),
         damage: 0,
-        ready: true,
+        readiness: Readiness::Ready,
         owner,
         controller: owner,
         duration_markers: vec![],
-        played_this_turn: false,
-        upgraded_this_turn: false,
-        entered_main_this_turn: false,
+        turn: crate::domain::state::SummonTurnRecord::fresh(),
     }
 }
 
@@ -39,7 +37,6 @@ fn player(owner: PlayerId) -> PlayerState {
         discard: vec![],
         mana: ManaBank::default(),
         main_losses: 0,
-        has_coin: false,
         enchantments: vec![],
     }
 }
@@ -47,6 +44,7 @@ fn player(owner: PlayerId) -> PlayerState {
 fn state() -> GameState {
     GameState {
         players: PerPlayer::new(player(PlayerId::One), player(PlayerId::Two)),
+        coin: None,
         turn: TurnState {
             active_player: PlayerId::One,
             phase: Phase::Main,
@@ -319,7 +317,8 @@ fn condition_holds_reads_each_supported_condition() {
         .main
         .as_mut()
         .expect("main")
-        .entered_main_this_turn = true;
+        .turn
+        .main_entry = Some(crate::domain::state::EnteredMain);
     assert!(condition_holds(
         &state,
         PlayerId::One,

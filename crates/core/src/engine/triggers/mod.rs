@@ -29,7 +29,9 @@ use crate::domain::cards::{
 use crate::domain::events::GameEvent;
 use crate::domain::ids::PlayerId;
 use crate::domain::ids::Position;
-use crate::domain::state::{GameState, MovementStep, StackItem, SummonInstance, WorkItem};
+use crate::domain::state::{
+    EnteredMain, GameState, MovementStep, StackItem, SummonInstance, WorkItem,
+};
 use crate::engine::{destruction, resolution, stack};
 
 /// The `TriggerEvent` a movement step fires (rules §28, §36).
@@ -275,7 +277,7 @@ pub(crate) fn movement_trigger(
         && position == Position::Main
         && let Some(summon) = state.players.get_mut(player).main.as_mut()
     {
-        summon.entered_main_this_turn = true;
+        summon.turn.main_entry = Some(EnteredMain);
     }
 
     let event = movement_event(step);

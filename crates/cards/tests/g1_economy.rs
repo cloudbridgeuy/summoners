@@ -13,15 +13,15 @@ use summoners_core::{
         },
         ids::{BenchSlot, ManaType, PlayerId, Position},
         state::{
-            GameOutcome, GameStatus, LossReason, ManaBank, ManaSource, PendingInput, Phase,
-            StackItem, StackWindow,
+            Coin, GameOutcome, GameStatus, LossReason, ManaBank, ManaSource, PendingInput, Phase,
+            Readiness, StackItem, StackWindow, UpgradeActivity,
         },
     },
     engine::apply::apply,
     scenario::ScenarioSummon,
 };
 
-use support::{PhysicalCards, player, state};
+use support::{PhysicalCards, player, state_with_coin};
 
 #[test]
 fn g1_economy_and_development_reaches_no_promotion_loss_through_public_actions() {
@@ -46,20 +46,19 @@ fn g1_economy_and_development_reaches_no_promotion_loss_through_public_actions()
     let mut one = player(ScenarioSummon {
         chain: vec![barrow_starter],
         damage: 40,
-        ready: true,
+        readiness: Readiness::Ready,
     });
     one.deck = barrow_draws;
 
     let mut two = player(ScenarioSummon {
         chain: vec![set_paths_starter],
         damage: 0,
-        ready: true,
+        readiness: Readiness::Ready,
     });
     two.deck = set_paths_draws;
     two.hand = vec![well_tender, quarry_scout, second_wind, pathkeeper];
-    two.has_coin = true;
-
-    let mut game = state(&catalog, one, two, PlayerId::Two).expect("the G1 state is valid");
+    let mut game = state_with_coin(&catalog, one, two, PlayerId::Two, Some(Coin))
+        .expect("the G1 state is valid");
     assert_eq!(catalog.set_paths().body().len(), 20);
     assert_eq!(catalog.barrow_herd().body().len(), 20);
 
@@ -86,7 +85,7 @@ fn g1_economy_and_development_reaches_no_promotion_loss_through_public_actions()
             spirit: 0,
         }
     );
-    assert!(!coin.state.players.two.has_coin);
+    assert!(coin.state.coin.is_none());
     game = coin.state;
 
     let tender_played = apply(
@@ -109,7 +108,10 @@ fn g1_economy_and_development_reaches_no_promotion_loss_through_public_actions()
     assert!(
         tender_played.state.players.two.bench[0]
             .as_ref()
-            .is_some_and(|summon| !summon.ready && summon.played_this_turn)
+            .is_some_and(|summon| {
+                summon.readiness == Readiness::Exhausted
+                    && summon.turn.upgrade == UpgradeActivity::PlayedThisTurn
+            })
     );
     game = tender_played.state;
 
@@ -312,7 +314,7 @@ fn g1_economy_and_development_reaches_no_promotion_loss_through_public_actions()
     assert!(
         tender_activated.state.players.two.bench[0]
             .as_ref()
-            .is_some_and(|summon| !summon.ready)
+            .is_some_and(|summon| summon.readiness == Readiness::Exhausted)
     );
 
     let chose_tender_matter = apply(
@@ -405,7 +407,7 @@ fn g1_economy_and_development_reaches_no_promotion_loss_through_public_actions()
     assert!(
         wind_resolved.state.players.two.bench[0]
             .as_ref()
-            .is_some_and(|summon| summon.ready)
+            .is_some_and(|summon| summon.readiness == Readiness::Ready)
     );
     game = wind_resolved.state;
 
@@ -491,7 +493,7 @@ fn g1_economy_and_development_reaches_no_promotion_loss_through_public_actions()
     assert!(
         scout_moved.state.players.two.bench[2]
             .as_ref()
-            .is_some_and(|summon| !summon.ready)
+            .is_some_and(|summon| summon.readiness == Readiness::Exhausted)
     );
     game = scout_moved.state;
 
@@ -615,8 +617,11 @@ fn g1_economy_and_development_reaches_no_promotion_loss_through_public_actions()
         .expect("the upgraded Main remains in play");
     assert_eq!(upgraded_main.chain.base(), set_paths_starter);
     assert_eq!(upgraded_main.chain.top(), pathkeeper);
-    assert!(upgraded_main.upgraded_this_turn);
-    assert!(!upgraded_main.ready);
+    assert_eq!(
+        upgraded_main.turn.upgrade,
+        UpgradeActivity::UpgradedThisTurn
+    );
+    assert_eq!(upgraded_main.readiness, Readiness::Exhausted);
 
     let tender_leave_bench_trigger = upgraded
         .state
@@ -707,7 +712,7 @@ fn g1_economy_and_development_reaches_no_promotion_loss_through_public_actions()
             .two
             .main
             .as_ref()
-            .is_some_and(|summon| summon.entered_main_this_turn)
+            .is_some_and(|summon| summon.turn.main_entry.is_some())
     );
 
     let tender_attack = retreat_mana
