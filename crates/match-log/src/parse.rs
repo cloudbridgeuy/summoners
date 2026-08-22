@@ -1,0 +1,1 @@
+//! Strict complete-transcript parsing.

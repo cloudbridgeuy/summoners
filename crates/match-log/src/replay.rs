@@ -1,0 +1,1 @@
+//! Transcript replay boundary.

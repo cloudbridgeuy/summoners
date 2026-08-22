@@ -6,8 +6,12 @@
 #![deny(clippy::unwrap_used, clippy::expect_used)]
 
 pub mod codec;
+pub mod compare;
 pub mod error;
+pub mod parse;
 pub mod record;
+pub mod replay;
+pub mod schema;
 pub mod state;
 pub mod wire;
 
