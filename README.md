@@ -12,7 +12,8 @@ unavailable.
 - `crates/core`: the dependency-free deterministic rules and state-transition library.
 - `crates/cards`: strict authored Set and Deck loading with built-in content.
 - `crates/cceroby`: local museum image search CLI and form with public-domain
-  Art Institute of Chicago results and a 24-hour metadata cache.
+  Art Institute of Chicago results, locally proxied artwork previews, exact
+  attribution, a 24-hour metadata cache, and a 30-day image cache.
 - `xtask`: repository lint and Git hook automation.
 
 ## Design inputs

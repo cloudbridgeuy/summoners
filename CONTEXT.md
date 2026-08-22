@@ -25,10 +25,14 @@ server options before it starts a loopback-only server on an operating-system
 assigned port. The local page keeps valid query and filter values in its form.
 The Art Institute of Chicago search keeps only records that the response marks
 as public domain, and it shows normalized result cards. Metadata responses stay
-in the user cache for 24 hours. Provider slots that do not have a connection
-return an unavailable notice, and a connected-provider failure returns one
-failure notice without stopping the page. A corrupt metadata cache entry
-degrades to a cache miss instead of stopping the search.
+in the user cache for 24 hours. Card and preview image bytes stay in a separate
+user cache for 30 days. Cards use local image and detail routes that accept only
+a known source and object ID. The detail route reconstructs trusted provider
+metadata and shows a local-proxy preview, normalized metadata, the accepted
+license, and the ready-to-print attribution. Provider slots that do not have a
+connection return an unavailable notice, and a connected-provider failure
+returns one failure notice without stopping the page. A corrupt metadata or
+thumbnail cache entry degrades to a cache miss instead of stopping the search.
 
 #### Scenario: A valid local search starts
 
@@ -43,9 +47,39 @@ degrades to a cache miss instead of stopping the search.
 
 - **WHEN** the Art Institute of Chicago returns matching public-domain records
 - **THEN** the page shows the loaded result count
-- **AND** each accepted record has a placeholder image area, title,
-  institution, and public-domain license badge
+- **AND** each accepted record has a locally proxied thumbnail, detail link,
+  title, institution, and public-domain license badge
 - **AND** a record that is not public domain does not appear
+
+#### Scenario: A user opens one artwork
+
+- **WHEN** the user follows a result card's detail link
+- **THEN** the server reconstructs the artwork from its known source and object
+  ID through the provider and metadata cache
+- **AND** the page shows a full local-proxy preview, title, institution, source
+  ID, accepted license, source object, and ready-to-print attribution
+- **AND** creator, date, and culture or region appear when available
+- **AND** the Back link returns to the accumulated search results
+
+#### Scenario: An artwork route receives untrusted input
+
+- **WHEN** a thumbnail, preview, or detail request has an unknown source,
+  malformed object ID, duplicate field, unrecognized field, or remote URL
+- **THEN** the server rejects the request with a short error
+- **AND** it does not fetch the browser-provided remote URL
+
+#### Scenario: A thumbnail is still fresh
+
+- **WHEN** the local proxy requests the same provider-derived image less than
+  30 days after a successful image response
+- **THEN** it uses the cached image bytes without a second image request
+
+#### Scenario: A thumbnail cache entry is corrupt or expired
+
+- **WHEN** a thumbnail cache entry is malformed or reaches its 30-day boundary
+- **THEN** the proxy treats the entry as a cache miss and removes it on a
+  best-effort basis
+- **AND** the provider image request can continue
 
 #### Scenario: Search form values change
 

@@ -5,6 +5,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used)]
 
 pub mod app;
+pub mod artwork;
 pub mod cache;
 pub mod core;
 pub mod http;

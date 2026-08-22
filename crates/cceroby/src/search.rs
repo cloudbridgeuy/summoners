@@ -5,16 +5,19 @@ use std::time::SystemTime;
 
 use color_eyre::eyre::{Result, WrapErr};
 use futures::future::join_all;
+use thiserror::Error;
 use tokio::net::TcpListener;
 use tokio::sync::broadcast;
 
+use crate::artwork::ArtworkKey;
 use crate::cache::Cache;
 use crate::core::{
     ProviderOutcome, ProviderPage, SearchQuery, SearchSeed, SearchSession, merge_page,
 };
 use crate::http::HttpClient;
 use crate::providers::{
-    HttpRequest, Provider, ProviderCandidate, ProviderConfigError, ProviderEntry, ProviderSet,
+    DisplayImageSize, DisplayMediaType, HttpRequest, Provider, ProviderCandidate,
+    ProviderConfigError, ProviderEntry, ProviderSet,
 };
 use crate::rate_limit::RateLimiters;
 use crate::server::{self, AppState};
@@ -63,6 +66,66 @@ impl SearchServices {
             .into_iter()
             .map(|entry| self.search_one(entry, query, now));
         join_all(searches).await
+    }
+
+    /// Reconstruct one trusted artwork from its provider and metadata cache.
+    pub async fn load_artwork(
+        &self,
+        key: &ArtworkKey,
+    ) -> std::result::Result<crate::core::Artwork, ArtworkLoadError> {
+        let ProviderEntry::Available(provider) = self.providers.get(key.source()) else {
+            return Err(ArtworkLoadError::SourceUnavailable);
+        };
+        let request = provider
+            .artwork_request(key)
+            .map_err(|_| ArtworkLoadError::ArtworkUnavailable)?;
+        let bytes = self
+            .get_metadata(provider, &request, SystemTime::now())
+            .await
+            .map_err(|_| ArtworkLoadError::ArtworkUnavailable)?;
+        provider
+            .parse_artwork_response(&bytes)
+            .map_err(|_| ArtworkLoadError::ArtworkUnavailable)
+    }
+
+    /// Load one provider-derived display image through the thumbnail byte cache.
+    pub async fn load_display_image(
+        &self,
+        key: &ArtworkKey,
+        size: DisplayImageSize,
+    ) -> std::result::Result<DisplayImage, ArtworkLoadError> {
+        let artwork = self.load_artwork(key).await?;
+        let ProviderEntry::Available(provider) = self.providers.get(key.source()) else {
+            return Err(ArtworkLoadError::SourceUnavailable);
+        };
+        let display_request = provider
+            .display_image_request(&artwork, size)
+            .map_err(|_| ArtworkLoadError::ImageUnavailable)?;
+        let now = SystemTime::now();
+        if let Some(cached) = self
+            .cache
+            .read_thumbnail(display_request.request().canonical(), now)
+        {
+            return Ok(DisplayImage {
+                bytes: cached.bytes,
+                media_type: cached.media_type,
+            });
+        }
+        self.rate_limiters.acquire(provider).await;
+        let bytes = self
+            .http
+            .execute(display_request.request())
+            .await
+            .map_err(|_| ArtworkLoadError::ImageUnavailable)?;
+        let fetched_at = SystemTime::now();
+        let media_type = display_request.media_type();
+        let _ = self.cache.write_thumbnail(
+            display_request.request().canonical(),
+            media_type,
+            &bytes,
+            fetched_at,
+        );
+        Ok(DisplayImage { bytes, media_type })
     }
 
     async fn search_one(
@@ -129,6 +192,24 @@ impl SearchServices {
             .write_metadata(provider.kind(), request.canonical(), &bytes, now);
         Ok(bytes)
     }
+}
+
+/// Provider image bytes paired with a browser-safe media type.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DisplayImage {
+    pub bytes: Vec<u8>,
+    pub media_type: DisplayMediaType,
+}
+
+/// A short artwork load failure that contains no transport data.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum ArtworkLoadError {
+    #[error("the artwork source is not available")]
+    SourceUnavailable,
+    #[error("the artwork is not available")]
+    ArtworkUnavailable,
+    #[error("the artwork image is not available")]
+    ImageUnavailable,
 }
 
 /// Bind a loopback-only listener on a free operating-system assigned port.
@@ -260,6 +341,43 @@ mod tests {
                 provider_credit: None,
                 object_url: "https://example.test/object/1".into(),
             })
+        }
+
+        fn artwork_request(&self, _key: &ArtworkKey) -> Result<HttpRequest, ProviderError> {
+            Ok(HttpRequest::get(
+                self.endpoint.join("object/1").expect("object URL is valid"),
+            ))
+        }
+
+        fn parse_artwork_response(&self, bytes: &[u8]) -> Result<Artwork, ProviderError> {
+            self.parse_artwork(
+                &ProviderCandidate {
+                    raw: serde_json::json!({ "id": "1" }),
+                    context: None,
+                },
+                Some(bytes),
+            )
+            .map_err(|_| ProviderError::MalformedResponse)
+        }
+
+        fn display_image_request(
+            &self,
+            artwork: &Artwork,
+            size: DisplayImageSize,
+        ) -> Result<crate::providers::DisplayImageRequest, ProviderError> {
+            let raw = match size {
+                DisplayImageSize::Card => &artwork.image_urls.thumbnail,
+                DisplayImageSize::Preview => &artwork.image_urls.display,
+            };
+            Url::parse(raw)
+                .map(HttpRequest::get)
+                .map(|request| {
+                    crate::providers::DisplayImageRequest::new(
+                        request,
+                        crate::providers::DisplayMediaType::Jpeg,
+                    )
+                })
+                .map_err(|_| ProviderError::InvalidImageRequest)
         }
     }
 

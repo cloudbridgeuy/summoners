@@ -139,9 +139,11 @@ mod tests {
 
     use url::Url;
 
+    use crate::artwork::ArtworkKey;
     use crate::core::{Artwork, SearchQuery};
     use crate::providers::{
-        ArtworkDropReason, HttpRequest, ProviderCandidate, ProviderError, ProviderSearchPage,
+        ArtworkDropReason, DisplayImageRequest, DisplayImageSize, HttpRequest, ProviderCandidate,
+        ProviderError, ProviderSearchPage,
     };
 
     use super::*;
@@ -174,6 +176,22 @@ mod tests {
             _object_bytes: Option<&[u8]>,
         ) -> Result<Artwork, ArtworkDropReason> {
             Err(ArtworkDropReason::MissingSourceId)
+        }
+
+        fn artwork_request(&self, _key: &ArtworkKey) -> Result<HttpRequest, ProviderError> {
+            Err(ProviderError::ArtworkUnavailable)
+        }
+
+        fn parse_artwork_response(&self, _bytes: &[u8]) -> Result<Artwork, ProviderError> {
+            Err(ProviderError::ArtworkUnavailable)
+        }
+
+        fn display_image_request(
+            &self,
+            _artwork: &Artwork,
+            _size: DisplayImageSize,
+        ) -> Result<DisplayImageRequest, ProviderError> {
+            Err(ProviderError::InvalidImageRequest)
         }
     }
 

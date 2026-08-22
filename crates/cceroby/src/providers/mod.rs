@@ -7,6 +7,7 @@ use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use thiserror::Error;
 use url::Url;
 
+use crate::artwork::ArtworkKey;
 use crate::core::{Artwork, ProviderNotice, SearchQuery, SourceKind};
 
 pub mod aic;
@@ -85,6 +86,59 @@ pub struct TokenBucketPolicy {
     refill_interval: Duration,
 }
 
+/// One provider-owned display image purpose.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DisplayImageSize {
+    Card,
+    Preview,
+}
+
+/// One browser-safe display image media type selected by a provider.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DisplayMediaType {
+    Jpeg,
+    Png,
+    Webp,
+}
+
+impl DisplayMediaType {
+    #[must_use]
+    pub const fn content_type(self) -> &'static str {
+        match self {
+            Self::Jpeg => "image/jpeg",
+            Self::Png => "image/png",
+            Self::Webp => "image/webp",
+        }
+    }
+}
+
+/// One provider-derived image request and its expected response type.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DisplayImageRequest {
+    request: HttpRequest,
+    media_type: DisplayMediaType,
+}
+
+impl DisplayImageRequest {
+    #[must_use]
+    pub fn new(request: HttpRequest, media_type: DisplayMediaType) -> Self {
+        Self {
+            request,
+            media_type,
+        }
+    }
+
+    #[must_use]
+    pub fn request(&self) -> &HttpRequest {
+        &self.request
+    }
+
+    #[must_use]
+    pub const fn media_type(&self) -> DisplayMediaType {
+        self.media_type
+    }
+}
+
 impl TokenBucketPolicy {
     #[must_use]
     pub const fn new(capacity: NonZeroU32, refill_interval: Duration) -> Self {
@@ -120,6 +174,13 @@ pub trait Provider: Send + Sync {
         candidate: &ProviderCandidate,
         object_bytes: Option<&[u8]>,
     ) -> Result<Artwork, ArtworkDropReason>;
+    fn artwork_request(&self, key: &ArtworkKey) -> Result<HttpRequest, ProviderError>;
+    fn parse_artwork_response(&self, bytes: &[u8]) -> Result<Artwork, ProviderError>;
+    fn display_image_request(
+        &self,
+        artwork: &Artwork,
+        size: DisplayImageSize,
+    ) -> Result<DisplayImageRequest, ProviderError>;
 
     fn object_request(&self, _candidate: &ProviderCandidate) -> Option<HttpRequest> {
         None
@@ -147,6 +208,10 @@ pub enum ProviderError {
     MalformedResponse,
     #[error("the provider response has no image service")]
     MissingImageService,
+    #[error("the provider artwork is not available")]
+    ArtworkUnavailable,
+    #[error("the provider image request is invalid")]
+    InvalidImageRequest,
 }
 
 /// Built-in provider configuration cannot be constructed.
@@ -311,6 +376,22 @@ mod tests {
         let policy = TokenBucketPolicy::new(NonZeroU32::MIN, Duration::from_millis(250));
         assert_eq!(policy.capacity(), NonZeroU32::MIN);
         assert_eq!(policy.refill_interval(), Duration::from_millis(250));
+    }
+
+    #[test]
+    fn display_media_types_have_stable_http_content_types() {
+        assert_eq!(DisplayMediaType::Jpeg.content_type(), "image/jpeg");
+        assert_eq!(DisplayMediaType::Png.content_type(), "image/png");
+        assert_eq!(DisplayMediaType::Webp.content_type(), "image/webp");
+    }
+
+    #[test]
+    fn display_image_request_keeps_provider_request_and_media_type() {
+        let request =
+            HttpRequest::get(Url::parse("https://example.test/image.jpg").expect("URL is valid"));
+        let display = DisplayImageRequest::new(request.clone(), DisplayMediaType::Jpeg);
+        assert_eq!(display.request(), &request);
+        assert_eq!(display.media_type(), DisplayMediaType::Jpeg);
     }
 
     #[test]
