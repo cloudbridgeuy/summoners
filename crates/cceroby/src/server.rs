@@ -1,5 +1,6 @@
 //! HTTP and shared-state shell for the local search page.
 
+use std::net::SocketAddr;
 use std::sync::Arc;
 
 use axum::Router;
@@ -25,8 +26,23 @@ pub struct AppState {
     session: Arc<RwLock<SearchSession>>,
     services: SearchServices,
     output: OutputDirectory,
+    authority: ListenerAuthority,
     search_gate: Arc<Mutex<()>>,
     shutdown: broadcast::Sender<()>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ListenerAuthority {
+    host: String,
+    origin: String,
+}
+
+impl ListenerAuthority {
+    fn from_address(address: SocketAddr) -> Self {
+        let host = address.to_string();
+        let origin = format!("http://{host}");
+        Self { host, origin }
+    }
 }
 
 impl AppState {
@@ -35,12 +51,14 @@ impl AppState {
         session: SearchSession,
         services: SearchServices,
         output: OutputDirectory,
+        authority: SocketAddr,
         shutdown: broadcast::Sender<()>,
     ) -> Self {
         Self {
             session: Arc::new(RwLock::new(session)),
             services,
             output,
+            authority: ListenerAuthority::from_address(authority),
             search_gate: Arc::new(Mutex::new(())),
             shutdown,
         }
@@ -159,7 +177,7 @@ async fn detail(State(state): State<AppState>, RawQuery(raw_query): RawQuery) ->
 }
 
 async fn download(State(state): State<AppState>, headers: HeaderMap, body: Bytes) -> Response {
-    if !is_same_origin(&headers) {
+    if !is_same_origin(&state.authority, &headers) {
         return (StatusCode::FORBIDDEN, DownloadError::Validation.to_string()).into_response();
     }
     if headers
@@ -208,7 +226,7 @@ async fn download(State(state): State<AppState>, headers: HeaderMap, body: Bytes
 }
 
 #[must_use]
-fn is_same_origin(headers: &HeaderMap) -> bool {
+fn is_same_origin(authority: &ListenerAuthority, headers: &HeaderMap) -> bool {
     let Some(host) = headers
         .get(header::HOST)
         .and_then(|value| value.to_str().ok())
@@ -221,7 +239,7 @@ fn is_same_origin(headers: &HeaderMap) -> bool {
     else {
         return false;
     };
-    origin.strip_prefix("http://") == Some(host)
+    host == authority.host && origin == authority.origin
 }
 
 fn parse_artwork_query(raw_query: Option<&str>) -> Result<ArtworkKey, ArtworkRouteError> {
@@ -466,6 +484,7 @@ mod tests {
                 RateLimiters::new(),
             ),
             OutputDirectory::from_verified_path(output.path().to_path_buf()),
+            SocketAddr::from(([127, 0, 0, 1], 45_123)),
             shutdown,
         );
         MockHarness {
@@ -493,6 +512,7 @@ mod tests {
                 RateLimiters::new(),
             ),
             OutputDirectory::from_verified_path(std::env::temp_dir()),
+            SocketAddr::from(([127, 0, 0, 1], 45_123)),
             shutdown,
         )
     }
@@ -611,34 +631,6 @@ mod tests {
         assert_eq!(hex_value(b'F'), Some(15));
         assert_eq!(hex_value(b'g'), None);
         assert_eq!(hex_value(b'/'), None);
-    }
-
-    #[test]
-    fn same_origin_requires_the_exact_http_origin_and_host() {
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            header::HOST,
-            "127.0.0.1:45123".parse().expect("host is valid"),
-        );
-        headers.insert(
-            header::ORIGIN,
-            "http://127.0.0.1:45123".parse().expect("origin is valid"),
-        );
-        assert!(is_same_origin(&headers));
-
-        for origin in [
-            "https://127.0.0.1:45123",
-            "http://127.0.0.1:45124",
-            "https://evil.test",
-            "null",
-        ] {
-            headers.insert(header::ORIGIN, origin.parse().expect("origin is valid"));
-            assert!(!is_same_origin(&headers), "{origin}");
-        }
-        headers.remove(header::ORIGIN);
-        assert!(!is_same_origin(&headers));
-        headers.remove(header::HOST);
-        assert!(!is_same_origin(&headers));
     }
 
     #[test]

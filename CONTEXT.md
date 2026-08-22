@@ -35,11 +35,11 @@ connection return an unavailable notice, and a connected-provider failure
 returns one failure notice without stopping the page. A corrupt metadata or
 thumbnail cache entry degrades to a cache miss instead of stopping the search.
 The detail page accepts an editable safe file name and free-form tags. A
-same-origin download strictly parses the complete form before provider I/O and
-reconstructs all policy and remote-request data from the provider,
-keeps native JPEG scan data, converts TIFF input once, embeds attribution and
-tags as standard XMP, and atomically writes one JPEG in the selected output
-directory.
+download requires the Host and Origin to match the exact authority assigned to
+the loopback listener. It strictly parses the complete form before provider I/O
+and reconstructs all policy and remote-request data from the provider, keeps
+native JPEG scan data, converts TIFF input once, embeds attribution and tags as
+standard XMP, and atomically writes one JPEG in the selected output directory.
 
 #### Scenario: A valid local search starts
 
@@ -114,8 +114,10 @@ directory.
   path, remote URL, license, or attribution value
 - **THEN** the server rejects the untrusted input or shows a short typed error
 - **AND** browser data cannot select a remote request or output path
-- **WHEN** the form has malformed percent or UTF-8 encoding, or its Origin does
-  not exactly match the local Host
+- **WHEN** the form has malformed percent or UTF-8 encoding, or its Host and
+  Origin do not exactly match the authority assigned to the loopback listener
+- **OR WHEN** a hostile Host and Origin match each other but not that assigned
+  authority
 - **THEN** the server rejects it before provider or storage I/O
 
 #### Scenario: A thumbnail is still fresh

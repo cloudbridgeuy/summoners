@@ -156,6 +156,7 @@ async fn first_search_fetches_and_second_search_uses_metadata_cache() {
         SearchSession::new(query),
         services,
         output_directory(cache_root.path()),
+        std::net::SocketAddr::from(([127, 0, 0, 1], 45_123)),
         shutdown,
     ));
 
@@ -184,6 +185,7 @@ async fn provider_failure_becomes_one_notice_and_keeps_the_page_alive() {
         SearchSession::new(aic_query()),
         services(endpoint, &cache_root),
         output_directory(cache_root.path()),
+        std::net::SocketAddr::from(([127, 0, 0, 1], 45_123)),
         shutdown,
     ));
     let html = response_html(app, "/?query=mask&aic=true").await;

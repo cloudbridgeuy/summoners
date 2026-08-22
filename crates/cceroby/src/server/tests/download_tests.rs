@@ -1,5 +1,54 @@
 use super::*;
 
+#[test]
+fn trusted_authority_accepts_the_exact_http_origin_and_host() {
+    let authority = ListenerAuthority::from_address(SocketAddr::from(([127, 0, 0, 1], 45_123)));
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        header::HOST,
+        "127.0.0.1:45123".parse().expect("host is valid"),
+    );
+    headers.insert(
+        header::ORIGIN,
+        "http://127.0.0.1:45123".parse().expect("origin is valid"),
+    );
+    assert!(is_same_origin(&authority, &headers));
+}
+
+#[test]
+fn trusted_authority_rejects_missing_mismatched_and_matching_hostile_headers() {
+    let authority = ListenerAuthority::from_address(SocketAddr::from(([127, 0, 0, 1], 45_123)));
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        header::HOST,
+        "127.0.0.1:45123".parse().expect("host is valid"),
+    );
+
+    for origin in [
+        "https://127.0.0.1:45123",
+        "http://127.0.0.1:45124",
+        "https://evil.test",
+        "null",
+    ] {
+        headers.insert(header::ORIGIN, origin.parse().expect("origin is valid"));
+        assert!(!is_same_origin(&authority, &headers), "{origin}");
+    }
+    headers.remove(header::ORIGIN);
+    assert!(!is_same_origin(&authority, &headers));
+    headers.remove(header::HOST);
+    assert!(!is_same_origin(&authority, &headers));
+
+    headers.insert(
+        header::HOST,
+        "evil.test:45123".parse().expect("host is valid"),
+    );
+    headers.insert(
+        header::ORIGIN,
+        "http://evil.test:45123".parse().expect("origin is valid"),
+    );
+    assert!(!is_same_origin(&authority, &headers));
+}
+
 #[tokio::test]
 async fn download_handler_rejects_all_browser_controlled_trust_fields_before_io() {
     let harness = mock_harness().await;
@@ -68,6 +117,26 @@ async fn download_handler_rejects_hostile_origin_before_io() {
                 .uri("/download")
                 .header(header::HOST, "127.0.0.1:45123")
                 .header(header::ORIGIN, "https://evil.test")
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .body(Body::from(valid_body()))
+                .expect("request is valid"),
+        )
+        .await
+        .expect("request succeeds");
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    assert_no_download_io(&harness);
+}
+
+#[tokio::test]
+async fn download_handler_rejects_matching_hostile_authority_before_io() {
+    let harness = mock_harness().await;
+    let response = router(harness.state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/download")
+                .header(header::HOST, "evil.test:45123")
+                .header(header::ORIGIN, "http://evil.test:45123")
                 .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
                 .body(Body::from(valid_body()))
                 .expect("request is valid"),

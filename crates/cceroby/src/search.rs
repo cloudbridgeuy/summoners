@@ -270,7 +270,7 @@ pub async fn run(seed: SearchSeed) -> Result<()> {
         .wrap_err("cannot read the local search address")?;
     let url = serving_url(address);
     let (shutdown, receiver) = broadcast::channel(1);
-    let state = AppState::new(session, services, output, shutdown);
+    let state = AppState::new(session, services, output, address, shutdown);
 
     eprintln!("Serving {url}");
     eprintln!("Press Ctrl-C to stop.");
