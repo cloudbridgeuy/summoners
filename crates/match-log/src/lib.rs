@@ -9,6 +9,7 @@ pub mod codec;
 pub mod compare;
 pub mod error;
 pub mod parse;
+mod parse_error;
 pub mod record;
 pub mod replay;
 pub mod schema;
@@ -19,6 +20,8 @@ pub use error::{
     CanonicalStateError, EncodeError, RecordingError, RecordingStopped, StateRebuildError,
     TerminalEventError, WireConversionError,
 };
+pub use parse::{TranscriptStepResultV1, TranscriptStepV1, TranscriptV1};
+pub use parse_error::{LifecycleError, ParseContext, ParseError, ParseErrorKind};
 pub use record::{RecordedMatch, RecordedStep};
 pub use state::{StateDigestV1, StateProjectionV1};
 pub use wire::{

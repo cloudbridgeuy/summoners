@@ -11,13 +11,9 @@ use summoners_core::domain::{
 use summoners_match_log::{HeaderMetadataV1, RecordedMatch};
 
 pub fn valid_transcript_bytes() -> Vec<u8> {
-    let mut recording = RecordedMatch::start(
-        Vec::new(),
-        HeaderMetadataV1::new(),
-        vec![],
-        initial_state(),
-    )
-    .expect("the fixture writer is available");
+    let mut recording =
+        RecordedMatch::start(Vec::new(), HeaderMetadataV1::new(), vec![], initial_state())
+            .expect("the fixture writer is available");
 
     recording
         .submit(&GameAction::ActivateSkill {
@@ -25,7 +21,9 @@ pub fn valid_transcript_bytes() -> Vec<u8> {
             position: Position::Main,
             ability: EntityId::parse("01234567-89ab-cdef-0123-456789abcdef")
                 .expect("the fixture ability ID is valid"),
-            targets: vec![Position::Bench(summoners_core::domain::ids::BenchSlot::First)],
+            targets: vec![Position::Bench(
+                summoners_core::domain::ids::BenchSlot::First,
+            )],
             mana_hint: Some(ManaType::Mind),
         })
         .expect("the invalid board action is a recorded rejection");
