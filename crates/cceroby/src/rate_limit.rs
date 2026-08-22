@@ -142,8 +142,8 @@ mod tests {
     use crate::artwork::ArtworkKey;
     use crate::core::{Artwork, SearchQuery};
     use crate::providers::{
-        ArtworkDropReason, DisplayImageSize, HttpRequest, ProviderCandidate, ProviderError,
-        ProviderSearchPage,
+        ArtworkDropReason, DisplayImageRequest, DisplayImageSize, HttpRequest, ProviderCandidate,
+        ProviderError, ProviderSearchPage,
     };
 
     use super::*;
@@ -190,7 +190,7 @@ mod tests {
             &self,
             _artwork: &Artwork,
             _size: DisplayImageSize,
-        ) -> Result<HttpRequest, ProviderError> {
+        ) -> Result<DisplayImageRequest, ProviderError> {
             Err(ProviderError::InvalidImageRequest)
         }
     }

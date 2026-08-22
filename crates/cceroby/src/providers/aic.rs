@@ -7,8 +7,9 @@ use crate::artwork::ArtworkKey;
 use crate::core::{Artwork, CommercialLicense, ImageUrls, SearchQuery, SourceKind};
 
 use super::{
-    ArtworkDropReason, DisplayImageSize, HttpRequest, Provider, ProviderCandidate, ProviderEntry,
-    ProviderError, ProviderSearchPage, RatePolicy, TokenBucketPolicy,
+    ArtworkDropReason, DisplayImageRequest, DisplayImageSize, DisplayMediaType, HttpRequest,
+    Provider, ProviderCandidate, ProviderEntry, ProviderError, ProviderSearchPage, RatePolicy,
+    TokenBucketPolicy,
 };
 
 const OFFICIAL_ENDPOINT: &str = "https://api.artic.edu/api/v1/artworks/search";
@@ -179,13 +180,14 @@ impl Provider for AicProvider {
         &self,
         artwork: &Artwork,
         size: DisplayImageSize,
-    ) -> Result<HttpRequest, ProviderError> {
+    ) -> Result<DisplayImageRequest, ProviderError> {
         let raw = match size {
             DisplayImageSize::Card => &artwork.image_urls.thumbnail,
             DisplayImageSize::Preview => &artwork.image_urls.display,
         };
         Url::parse(raw)
             .map(HttpRequest::get)
+            .map(|request| DisplayImageRequest::new(request, DisplayMediaType::Jpeg))
             .map_err(|_| ProviderError::InvalidImageRequest)
     }
 }
@@ -362,6 +364,23 @@ mod tests {
     }
 
     #[test]
+    fn detail_endpoint_replaces_search_and_removes_search_query_data() {
+        let search = Url::parse("https://api.artic.edu/api/v1/artworks/search?limit=20")
+            .expect("URL is valid");
+        assert_eq!(
+            detail_endpoint(&search, "1001").as_str(),
+            "https://api.artic.edu/api/v1/artworks/1001"
+        );
+
+        let collection =
+            Url::parse("https://api.artic.edu/api/v1/artworks/").expect("URL is valid");
+        assert_eq!(
+            detail_endpoint(&collection, "1001").as_str(),
+            "https://api.artic.edu/api/v1/artworks/1001"
+        );
+    }
+
+    #[test]
     fn detail_request_and_display_requests_are_provider_owned() {
         let provider = provider();
         let key = ArtworkKey::try_from_parts("aic", "1001").expect("key is valid");
@@ -384,6 +403,7 @@ mod tests {
             provider
                 .display_image_request(&artwork, DisplayImageSize::Card)
                 .expect("card request is valid")
+                .request()
                 .url()
                 .path(),
             "/iiif/2/image-one/full/200,/0/default.jpg"
@@ -392,6 +412,7 @@ mod tests {
             provider
                 .display_image_request(&artwork, DisplayImageSize::Preview)
                 .expect("preview request is valid")
+                .request()
                 .url()
                 .path(),
             "/iiif/2/image-one/full/843,/0/default.jpg"
@@ -412,6 +433,22 @@ mod tests {
             provider().display_image_request(&artwork, DisplayImageSize::Preview),
             Err(ProviderError::InvalidImageRequest)
         );
+    }
+
+    #[test]
+    fn aic_display_requests_declare_jpeg_responses() {
+        let artwork = provider()
+            .parse_artwork_response(DETAIL)
+            .expect("detail fixture is valid");
+        for size in [DisplayImageSize::Card, DisplayImageSize::Preview] {
+            assert_eq!(
+                provider()
+                    .display_image_request(&artwork, size)
+                    .expect("display request is valid")
+                    .media_type(),
+                DisplayMediaType::Jpeg
+            );
+        }
     }
 
     #[test]

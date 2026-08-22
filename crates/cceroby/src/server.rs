@@ -120,7 +120,11 @@ async fn display_image(
         Err(error) => return (StatusCode::BAD_REQUEST, error.to_string()).into_response(),
     };
     match state.services.load_display_image(&key, size).await {
-        Ok(bytes) => ([(header::CONTENT_TYPE, "image/jpeg")], bytes).into_response(),
+        Ok(image) => (
+            [(header::CONTENT_TYPE, image.media_type.content_type())],
+            image.bytes,
+        )
+            .into_response(),
         Err(error) => artwork_load_response(error),
     }
 }
@@ -145,13 +149,21 @@ async fn detail(State(state): State<AppState>, RawQuery(raw_query): RawQuery) ->
 }
 
 fn parse_artwork_query(raw_query: Option<&str>) -> Result<ArtworkKey, ArtworkRouteError> {
-    let raw_query = raw_query.ok_or(ArtworkRouteError::InvalidQuery)?;
+    let raw_query = raw_query
+        .filter(|query| !query.is_empty())
+        .ok_or(ArtworkRouteError::InvalidQuery)?;
     let mut source = None;
     let mut id = None;
-    for (name, value) in url::form_urlencoded::parse(raw_query.as_bytes()) {
-        match name.as_ref() {
-            "source" if source.is_none() => source = Some(value.into_owned()),
-            "id" if id.is_none() => id = Some(value.into_owned()),
+    for field in raw_query.split('&') {
+        let (raw_name, raw_value) = field
+            .split_once('=')
+            .filter(|(name, _)| !name.is_empty())
+            .ok_or(ArtworkRouteError::InvalidQuery)?;
+        let name = decode_form_component(raw_name)?;
+        let value = decode_form_component(raw_value)?;
+        match name.as_str() {
+            "source" if source.is_none() => source = Some(value),
+            "id" if id.is_none() => id = Some(value),
             "source" | "id" => return Err(ArtworkRouteError::DuplicateField),
             _ => return Err(ArtworkRouteError::UnknownField),
         }
@@ -161,6 +173,49 @@ fn parse_artwork_query(raw_query: Option<&str>) -> Result<ArtworkKey, ArtworkRou
         id.as_deref().ok_or(ArtworkRouteError::InvalidQuery)?,
     )
     .map_err(ArtworkRouteError::from)
+}
+
+fn decode_form_component(raw: &str) -> Result<String, ArtworkRouteError> {
+    let bytes = raw.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut position = 0;
+    while position < bytes.len() {
+        match bytes[position] {
+            b'+' => {
+                decoded.push(b' ');
+                position += 1;
+            }
+            b'%' => {
+                let high = bytes
+                    .get(position + 1)
+                    .copied()
+                    .and_then(hex_value)
+                    .ok_or(ArtworkRouteError::InvalidQuery)?;
+                let low = bytes
+                    .get(position + 2)
+                    .copied()
+                    .and_then(hex_value)
+                    .ok_or(ArtworkRouteError::InvalidQuery)?;
+                decoded.push((high << 4) | low);
+                position += 3;
+            }
+            byte => {
+                decoded.push(byte);
+                position += 1;
+            }
+        }
+    }
+    String::from_utf8(decoded).map_err(|_| ArtworkRouteError::InvalidQuery)
+}
+
+#[must_use]
+const fn hex_value(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
 }
 
 fn artwork_load_response(error: ArtworkLoadError) -> Response {
@@ -433,10 +488,42 @@ mod tests {
     }
 
     #[test]
+    fn form_component_decoder_handles_valid_encoding_and_rejects_malformed_bytes() {
+        assert_eq!(decode_form_component("aic"), Ok("aic".into()));
+        assert_eq!(
+            decode_form_component("File%3AMask+One"),
+            Ok("File:Mask One".into())
+        );
+        for raw in ["%", "%0", "%GG", "%ff"] {
+            assert_eq!(
+                decode_form_component(raw),
+                Err(ArtworkRouteError::InvalidQuery),
+                "{raw}"
+            );
+        }
+    }
+
+    #[test]
+    fn hexadecimal_decoder_accepts_both_cases_and_rejects_non_hexadecimal_bytes() {
+        assert_eq!(hex_value(b'0'), Some(0));
+        assert_eq!(hex_value(b'9'), Some(9));
+        assert_eq!(hex_value(b'a'), Some(10));
+        assert_eq!(hex_value(b'F'), Some(15));
+        assert_eq!(hex_value(b'g'), None);
+        assert_eq!(hex_value(b'/'), None);
+    }
+
+    #[test]
     fn artwork_query_parser_rejects_missing_duplicate_unknown_and_url_fields() {
         let cases = [
             (None, ArtworkRouteError::InvalidQuery),
+            (Some(""), ArtworkRouteError::InvalidQuery),
             (Some("source=aic"), ArtworkRouteError::InvalidQuery),
+            (Some("source=aic&&id=1001"), ArtworkRouteError::InvalidQuery),
+            (Some("source=aic&id=1001&"), ArtworkRouteError::InvalidQuery),
+            (Some("source=aic&id"), ArtworkRouteError::InvalidQuery),
+            (Some("source=aic&id=%"), ArtworkRouteError::InvalidQuery),
+            (Some("source=aic&id=%ff"), ArtworkRouteError::InvalidQuery),
             (
                 Some("source=aic&source=met&id=1001"),
                 ArtworkRouteError::DuplicateField,
@@ -463,6 +550,35 @@ mod tests {
             parse_artwork_query(Some("source=aic&id=https%3A%2F%2Fevil.test%2Fimage.jpg")),
             Err(ArtworkRouteError::InvalidKey(ArtworkKeyError::MalformedId))
         ));
+    }
+
+    #[tokio::test]
+    async fn artwork_load_errors_map_directly_to_short_safe_responses() {
+        let cases = [
+            (
+                ArtworkLoadError::SourceUnavailable,
+                StatusCode::NOT_FOUND,
+                "the artwork source is not available",
+            ),
+            (
+                ArtworkLoadError::ArtworkUnavailable,
+                StatusCode::BAD_GATEWAY,
+                "the artwork is not available",
+            ),
+            (
+                ArtworkLoadError::ImageUnavailable,
+                StatusCode::BAD_GATEWAY,
+                "the artwork image is not available",
+            ),
+        ];
+        for (error, status, expected_body) in cases {
+            let response = artwork_load_response(error);
+            assert_eq!(response.status(), status);
+            let body = to_bytes(response.into_body(), usize::MAX)
+                .await
+                .expect("body is readable");
+            assert_eq!(body.as_ref(), expected_body.as_bytes());
+        }
     }
 
     #[tokio::test]
@@ -543,12 +659,15 @@ mod tests {
         let invalid_queries = [
             "source=unknown&id=1",
             "source=aic&id=bad",
+            "source=aic&&id=1",
+            "source=aic&id=1&",
+            "source=aic&id",
             "source=aic&id=1&extra=x",
             "source=aic&id=1&id=2",
             "source=aic&id=https%3A%2F%2Fevil.test%2Fimage.jpg",
             "source=aic&id=1&url=https%3A%2F%2Fevil.test%2Fimage.jpg",
         ];
-        for route in ["/thumb", "/detail"] {
+        for route in ["/thumb", "/preview", "/detail"] {
             for query in invalid_queries {
                 let response = app
                     .clone()

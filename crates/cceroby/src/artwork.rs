@@ -153,6 +153,38 @@ mod tests {
     }
 
     #[test]
+    fn source_parser_maps_every_known_key_and_rejects_unknown_keys() {
+        for source in SourceKind::ALL {
+            assert_eq!(parse_source(source.key()), Ok(source));
+        }
+        assert_eq!(parse_source("unknown"), Err(ArtworkKeyError::UnknownSource));
+        assert_eq!(parse_source("AIC"), Err(ArtworkKeyError::UnknownSource));
+    }
+
+    #[test]
+    fn artwork_id_parser_applies_provider_formats_and_safe_character_rules() {
+        assert_eq!(
+            parse_artwork_id(SourceKind::ArtInstituteChicago, "1001")
+                .expect("numeric ID is valid")
+                .as_str(),
+            "1001"
+        );
+        assert_eq!(
+            parse_artwork_id(SourceKind::WikimediaCommons, "File:Mask (1900).jpg")
+                .expect("provider ID is valid")
+                .as_str(),
+            "File:Mask (1900).jpg"
+        );
+        for raw in ["", "0", "abc", "1/2", "1%2", "1&id=2"] {
+            assert_eq!(
+                parse_artwork_id(SourceKind::ArtInstituteChicago, raw),
+                Err(ArtworkKeyError::MalformedId),
+                "{raw}"
+            );
+        }
+    }
+
+    #[test]
     fn artwork_key_rejects_unknown_sources_malformed_ids_and_url_data() {
         assert_eq!(
             ArtworkKey::try_from_parts("unknown", "1"),

@@ -16,8 +16,8 @@ use crate::core::{
 };
 use crate::http::HttpClient;
 use crate::providers::{
-    DisplayImageSize, HttpRequest, Provider, ProviderCandidate, ProviderConfigError, ProviderEntry,
-    ProviderSet,
+    DisplayImageSize, DisplayMediaType, HttpRequest, Provider, ProviderCandidate,
+    ProviderConfigError, ProviderEntry, ProviderSet,
 };
 use crate::rate_limit::RateLimiters;
 use crate::server::{self, AppState};
@@ -93,26 +93,39 @@ impl SearchServices {
         &self,
         key: &ArtworkKey,
         size: DisplayImageSize,
-    ) -> std::result::Result<Vec<u8>, ArtworkLoadError> {
+    ) -> std::result::Result<DisplayImage, ArtworkLoadError> {
         let artwork = self.load_artwork(key).await?;
         let ProviderEntry::Available(provider) = self.providers.get(key.source()) else {
             return Err(ArtworkLoadError::SourceUnavailable);
         };
-        let request = provider
+        let display_request = provider
             .display_image_request(&artwork, size)
             .map_err(|_| ArtworkLoadError::ImageUnavailable)?;
         let now = SystemTime::now();
-        if let Some(bytes) = self.cache.read_thumbnail(request.canonical(), now) {
-            return Ok(bytes);
+        if let Some(cached) = self
+            .cache
+            .read_thumbnail(display_request.request().canonical(), now)
+        {
+            return Ok(DisplayImage {
+                bytes: cached.bytes,
+                media_type: cached.media_type,
+            });
         }
         self.rate_limiters.acquire(provider).await;
         let bytes = self
             .http
-            .execute(&request)
+            .execute(display_request.request())
             .await
             .map_err(|_| ArtworkLoadError::ImageUnavailable)?;
-        let _ = self.cache.write_thumbnail(request.canonical(), &bytes, now);
-        Ok(bytes)
+        let fetched_at = SystemTime::now();
+        let media_type = display_request.media_type();
+        let _ = self.cache.write_thumbnail(
+            display_request.request().canonical(),
+            media_type,
+            &bytes,
+            fetched_at,
+        );
+        Ok(DisplayImage { bytes, media_type })
     }
 
     async fn search_one(
@@ -179,6 +192,13 @@ impl SearchServices {
             .write_metadata(provider.kind(), request.canonical(), &bytes, now);
         Ok(bytes)
     }
+}
+
+/// Provider image bytes paired with a browser-safe media type.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DisplayImage {
+    pub bytes: Vec<u8>,
+    pub media_type: DisplayMediaType,
 }
 
 /// A short artwork load failure that contains no transport data.
@@ -344,13 +364,19 @@ mod tests {
             &self,
             artwork: &Artwork,
             size: DisplayImageSize,
-        ) -> Result<HttpRequest, ProviderError> {
+        ) -> Result<crate::providers::DisplayImageRequest, ProviderError> {
             let raw = match size {
                 DisplayImageSize::Card => &artwork.image_urls.thumbnail,
                 DisplayImageSize::Preview => &artwork.image_urls.display,
             };
             Url::parse(raw)
                 .map(HttpRequest::get)
+                .map(|request| {
+                    crate::providers::DisplayImageRequest::new(
+                        request,
+                        crate::providers::DisplayMediaType::Jpeg,
+                    )
+                })
                 .map_err(|_| ProviderError::InvalidImageRequest)
         }
     }

@@ -93,6 +93,52 @@ pub enum DisplayImageSize {
     Preview,
 }
 
+/// One browser-safe display image media type selected by a provider.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DisplayMediaType {
+    Jpeg,
+    Png,
+    Webp,
+}
+
+impl DisplayMediaType {
+    #[must_use]
+    pub const fn content_type(self) -> &'static str {
+        match self {
+            Self::Jpeg => "image/jpeg",
+            Self::Png => "image/png",
+            Self::Webp => "image/webp",
+        }
+    }
+}
+
+/// One provider-derived image request and its expected response type.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DisplayImageRequest {
+    request: HttpRequest,
+    media_type: DisplayMediaType,
+}
+
+impl DisplayImageRequest {
+    #[must_use]
+    pub fn new(request: HttpRequest, media_type: DisplayMediaType) -> Self {
+        Self {
+            request,
+            media_type,
+        }
+    }
+
+    #[must_use]
+    pub fn request(&self) -> &HttpRequest {
+        &self.request
+    }
+
+    #[must_use]
+    pub const fn media_type(&self) -> DisplayMediaType {
+        self.media_type
+    }
+}
+
 impl TokenBucketPolicy {
     #[must_use]
     pub const fn new(capacity: NonZeroU32, refill_interval: Duration) -> Self {
@@ -134,7 +180,7 @@ pub trait Provider: Send + Sync {
         &self,
         artwork: &Artwork,
         size: DisplayImageSize,
-    ) -> Result<HttpRequest, ProviderError>;
+    ) -> Result<DisplayImageRequest, ProviderError>;
 
     fn object_request(&self, _candidate: &ProviderCandidate) -> Option<HttpRequest> {
         None
@@ -330,6 +376,22 @@ mod tests {
         let policy = TokenBucketPolicy::new(NonZeroU32::MIN, Duration::from_millis(250));
         assert_eq!(policy.capacity(), NonZeroU32::MIN);
         assert_eq!(policy.refill_interval(), Duration::from_millis(250));
+    }
+
+    #[test]
+    fn display_media_types_have_stable_http_content_types() {
+        assert_eq!(DisplayMediaType::Jpeg.content_type(), "image/jpeg");
+        assert_eq!(DisplayMediaType::Png.content_type(), "image/png");
+        assert_eq!(DisplayMediaType::Webp.content_type(), "image/webp");
+    }
+
+    #[test]
+    fn display_image_request_keeps_provider_request_and_media_type() {
+        let request =
+            HttpRequest::get(Url::parse("https://example.test/image.jpg").expect("URL is valid"));
+        let display = DisplayImageRequest::new(request.clone(), DisplayMediaType::Jpeg);
+        assert_eq!(display.request(), &request);
+        assert_eq!(display.media_type(), DisplayMediaType::Jpeg);
     }
 
     #[test]
