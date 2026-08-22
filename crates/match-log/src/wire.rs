@@ -2,8 +2,27 @@ use std::collections::BTreeMap;
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use summoners_core::domain::cards::EntityId;
 
+use crate::error::WireConversionError;
 use crate::state::{StateDigestV1, StateProjectionV1};
+
+mod action;
+mod action_error;
+mod event;
+mod records;
+
+pub use action::{ActionV1, ManaTypeV1};
+pub use action_error::ErrorV1;
+pub use event::{
+    BattlefieldTargetV1, DamageConstraintV1, DamageContextV1, DamageOperationV1, DamageOriginV1,
+    DamageSourceV1, DamageStageV1, EventV1,
+};
+pub use records::{
+    ActionRecordKindV1, ActionRecordV1, EventRecordKindV1, EventRecordV1, FinalStateRecordKindV1,
+    FinalStateV1, MatchCompletedRecordKindV1, MatchCompletedV1, StepCompletedRecordKindV1,
+    StepCompletedV1, StepRejectedRecordKindV1, StepRejectedV1,
+};
 
 /// Diagnostic header data. Its keys are open and are not normative by default.
 pub type HeaderMetadataV1 = BTreeMap<String, serde_json::Value>;
@@ -82,11 +101,21 @@ impl MatchCreatedV1 {
 pub enum RecordV1 {
     Header(HeaderV1),
     MatchCreated(Box<MatchCreatedV1>),
+    Action(ActionRecordV1),
+    Event(EventRecordV1),
+    StepCompleted(StepCompletedV1),
+    StepRejected(StepRejectedV1),
+    FinalState(Box<FinalStateV1>),
+    MatchCompleted(MatchCompletedV1),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(transparent)]
 pub struct EntityIdV1(pub String);
+
+fn parse_entity_id(value: EntityIdV1) -> Result<EntityId, WireConversionError> {
+    EntityId::parse(&value.0).map_err(|_| WireConversionError::InvalidEntityId { value: value.0 })
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]

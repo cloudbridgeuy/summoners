@@ -112,10 +112,12 @@ pool.
 ### Requirement: Durable match-start recording
 
 A caller can start a versioned match recording with a `Write` sink, open
-header metadata, exact Set requirements, and a valid initial `GameState`. The
-recorder writes one compact NDJSON `header` record and one `match_created`
-record, and then it flushes the sink before it returns an active handle. A
-write or flush failure returns a typed error and no active handle.
+header metadata, exact Set requirements, and an initial `GameState` with a
+Playing status. An Ended or Broken initial state returns a typed error before
+the recorder writes data. For a Playing state, the recorder writes one compact
+NDJSON `header` record and one `match_created` record, and then it flushes the
+sink before it returns an active handle. A write or flush failure returns a
+typed error and no active handle.
 
 The match-created record contains every semantic state field and a SHA-256
 digest of canonical state JSON. It does not contain loaded card definitions.
@@ -141,6 +143,55 @@ Entity and ability IDs use canonical lowercase, hyphenated UUID text.
 - **WHEN** the sink returns a write or flush failure
 - **THEN** recording start returns the matching typed error and no active
   handle
+
+#### Scenario: The initial game status is terminal
+
+- **WHEN** a caller starts a recording with an Ended or Broken game state
+- **THEN** recording start returns the matching typed error before it writes
+  any record
+
+### Requirement: Complete action transcript recording
+
+An active match recorder writes each normalized action before it calls the
+game engine. An accepted action writes the engine's events in their exact
+order, the event count, and the digest of the new state. A rejected action
+writes the typed error and the unchanged state digest. Each result is flushed
+as one durable checkpoint.
+
+The action that ends a match writes one `GameEnded` event. The recorder then
+writes the complete final state and one completion record. The final state,
+completion record, and `GameEnded` event have the same winner and loss reason.
+After completion, breakage, or a recording failure, the recorder rejects all
+later actions without a new write or engine call.
+
+#### Scenario: An action is accepted
+
+- **WHEN** the engine accepts an action
+- **THEN** the transcript contains the action, its exact ordered events, the
+  event count, and the new state digest
+- **AND** an accepted action with no events records an event count of zero
+
+#### Scenario: An action is rejected
+
+- **WHEN** the engine rejects an action
+- **THEN** the transcript contains the action, the typed error, and the
+  unchanged state digest, with no event records for that step
+
+#### Scenario: An action ends the match
+
+- **WHEN** an accepted action changes the game status to Ended
+- **THEN** the transcript contains exactly one `GameEnded` event, one complete
+  final state, and one completion record
+- **AND** their winner, loss reason, event count, step count, and final digest
+  agree
+
+#### Scenario: Recording stops
+
+- **WHEN** a write or flush fails, the engine changes the game status to
+  Broken, or terminal events do not agree with the final state
+- **THEN** the recorder returns a typed error and does not write a false
+  completion record
+- **AND** each later submission fails before a write or engine call
 
 ### Requirement: Turn structure and phase order
 
@@ -470,6 +521,8 @@ types/archetypes document for content-design intent.
 - **Vault:** seven match-play cards outside the 20-card Deck.
 - **Set:** one versioned authored document that owns card definitions and their
   stable identities.
+- **Match transcript:** one versioned, append-only NDJSON record of a match's
+  initial state, actions, engine results, and final outcome.
 
 ## Important relationships
 

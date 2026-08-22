@@ -11,7 +11,13 @@ pub mod record;
 pub mod state;
 pub mod wire;
 
-pub use error::{CanonicalStateError, EncodeError, RecordingError, StateRebuildError};
-pub use record::RecordedMatch;
+pub use error::{
+    CanonicalStateError, EncodeError, RecordingError, RecordingStopped, StateRebuildError,
+    TerminalEventError, WireConversionError,
+};
+pub use record::{RecordedMatch, RecordedStep};
 pub use state::{StateDigestV1, StateProjectionV1};
-pub use wire::{HeaderMetadataV1, HeaderV1, MatchCreatedV1, RecordV1, SetRequirementV1};
+pub use wire::{
+    ActionV1, ErrorV1, EventV1, HeaderMetadataV1, HeaderV1, MatchCreatedV1, RecordV1,
+    SetRequirementV1,
+};
