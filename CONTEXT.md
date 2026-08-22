@@ -35,7 +35,8 @@ connection return an unavailable notice, and a connected-provider failure
 returns one failure notice without stopping the page. A corrupt metadata or
 thumbnail cache entry degrades to a cache miss instead of stopping the search.
 The detail page accepts an editable safe file name and free-form tags. A
-download reconstructs all policy and remote-request data from the provider,
+same-origin download strictly parses the complete form before provider I/O and
+reconstructs all policy and remote-request data from the provider,
 keeps native JPEG scan data, converts TIFF input once, embeds attribution and
 tags as standard XMP, and atomically writes one JPEG in the selected output
 directory.
@@ -93,6 +94,8 @@ directory.
   existing JPEG
 - **AND** the detail page reports that it replaced the path
 - **AND** no metadata sidecar remains
+- **AND** two concurrent writes for the same new name report one creation and
+  one replacement and leave one complete JPEG
 
 #### Scenario: A downloaded image is JPEG or TIFF
 
@@ -101,6 +104,9 @@ directory.
 - **WHEN** the provider returns TIFF data
 - **THEN** the server converts it once to JPEG at quality 100 before it uses the
   same XMP and atomic-write path
+- **WHEN** any metadata or tag contains a code point that XML 1.0 does not
+  permit
+- **THEN** XMP construction returns a typed error before a JPEG is written
 
 #### Scenario: A download form contains untrusted fields
 
@@ -108,6 +114,9 @@ directory.
   path, remote URL, license, or attribution value
 - **THEN** the server rejects the untrusted input or shows a short typed error
 - **AND** browser data cannot select a remote request or output path
+- **WHEN** the form has malformed percent or UTF-8 encoding, or its Origin does
+  not exactly match the local Host
+- **THEN** the server rejects it before provider or storage I/O
 
 #### Scenario: A thumbnail is still fresh
 

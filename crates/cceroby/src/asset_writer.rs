@@ -1,15 +1,16 @@
 //! Same-directory durable temporary writes and atomic JPEG replacement.
 
-use std::fs::{File, OpenOptions};
+use std::fs::File;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Mutex;
 
+use tempfile::Builder;
 use thiserror::Error;
 
 use crate::download::{SavedAsset, Slug, WriteDisposition};
 
-static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+static WRITE_LOCK: Mutex<()> = Mutex::new(());
 
 /// Write one JPEG to its final safe name through a unique sibling file.
 pub fn write_atomic_replace(
@@ -17,46 +18,49 @@ pub fn write_atomic_replace(
     slug: &Slug,
     jpeg: &[u8],
 ) -> Result<SavedAsset, AssetWriteError> {
+    let _guard = WRITE_LOCK
+        .lock()
+        .map_err(|_| AssetWriteError::WriteFailed)?;
     let target = target_path(output, slug);
     let disposition = if target.exists() {
         WriteDisposition::Replaced
     } else {
         WriteDisposition::Created
     };
-    let sequence = TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
-    let temporary = output.join(format!(
-        ".{}.jpg.{}.{}.tmp",
-        slug.as_str(),
-        std::process::id(),
-        sequence
-    ));
-    let result = (|| {
-        let mut file = create_temporary(&temporary)?;
-        file.write_all(jpeg)
-            .map_err(|_| AssetWriteError::WriteFailed)?;
-        file.sync_all().map_err(|_| AssetWriteError::WriteFailed)?;
-        drop(file);
-        std::fs::rename(&temporary, &target).map_err(|_| AssetWriteError::WriteFailed)?;
-        File::open(output)
-            .and_then(|directory| directory.sync_all())
-            .map_err(|_| AssetWriteError::WriteFailed)?;
-        Ok(SavedAsset {
-            path: target,
-            disposition,
-        })
-    })();
-    if result.is_err() {
-        let _ = std::fs::remove_file(temporary);
-    }
-    result
+    let prefix = format!(".{}.jpg.", slug.as_str());
+    let mut temporary = Builder::new()
+        .prefix(&prefix)
+        .suffix(".tmp")
+        .tempfile_in(output)
+        .map_err(|_| AssetWriteError::WriteFailed)?;
+    temporary
+        .write_all(jpeg)
+        .map_err(|_| AssetWriteError::WriteFailed)?;
+    temporary
+        .as_file()
+        .sync_all()
+        .map_err(|_| AssetWriteError::WriteFailed)?;
+    let persisted = temporary
+        .persist(&target)
+        .map_err(|_| AssetWriteError::WriteFailed)?;
+    drop(persisted);
+    sync_directory(output)?;
+    Ok(SavedAsset {
+        path: target,
+        disposition,
+    })
 }
 
-fn create_temporary(path: &Path) -> Result<File, AssetWriteError> {
-    OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(path)
+#[cfg(unix)]
+fn sync_directory(output: &Path) -> Result<(), AssetWriteError> {
+    File::open(output)
+        .and_then(|directory| directory.sync_all())
         .map_err(|_| AssetWriteError::WriteFailed)
+}
+
+#[cfg(not(unix))]
+fn sync_directory(_output: &Path) -> Result<(), AssetWriteError> {
+    Ok(())
 }
 
 #[must_use]
@@ -74,6 +78,8 @@ pub enum AssetWriteError {
 #[cfg(test)]
 mod tests {
     #![allow(clippy::expect_used)]
+
+    use std::sync::{Arc, Barrier};
 
     use tempfile::tempdir;
 
@@ -123,5 +129,45 @@ mod tests {
             Err(AssetWriteError::WriteFailed)
         );
         assert!(!missing.exists());
+    }
+
+    #[test]
+    fn concurrent_same_slug_writes_report_one_create_and_one_replace() {
+        let directory = tempdir().expect("temporary directory exists");
+        let start = Arc::new(Barrier::new(3));
+        let handles = [b'a', b'b'].map(|byte| {
+            let output = directory.path().to_owned();
+            let start = Arc::clone(&start);
+            std::thread::spawn(move || {
+                let slug = Slug::parse("mask").expect("slug is valid");
+                let payload = vec![byte; 4 * 1024 * 1024];
+                start.wait();
+                write_atomic_replace(&output, &slug, &payload).expect("write succeeds")
+            })
+        });
+        start.wait();
+        let saved = handles.map(|handle| handle.join().expect("writer completes"));
+        assert_eq!(
+            saved
+                .iter()
+                .filter(|asset| asset.disposition == WriteDisposition::Created)
+                .count(),
+            1
+        );
+        assert_eq!(
+            saved
+                .iter()
+                .filter(|asset| asset.disposition == WriteDisposition::Replaced)
+                .count(),
+            1
+        );
+        let target = std::fs::read(directory.path().join("mask.jpg")).expect("target reads");
+        assert!(target.iter().all(|byte| *byte == b'a') || target.iter().all(|byte| *byte == b'b'));
+        assert_eq!(
+            std::fs::read_dir(directory.path())
+                .expect("directory reads")
+                .count(),
+            1
+        );
     }
 }

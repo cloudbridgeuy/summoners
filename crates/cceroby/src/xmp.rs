@@ -43,6 +43,13 @@ pub enum XmpError {
     InvalidJpeg,
 }
 
+#[must_use]
+fn xml_1_0_text_is_valid(value: &str) -> bool {
+    value.chars().all(|character| {
+        matches!(character, '\u{9}' | '\u{a}' | '\u{d}' | '\u{20}'..='\u{d7ff}' | '\u{e000}'..='\u{fffd}' | '\u{10000}'..='\u{10ffff}')
+    })
+}
+
 /// Build escaped UTF-8 RDF/XML from trusted artwork metadata and parsed tags.
 pub fn build_xmp_packet(
     artwork: &Artwork,
@@ -55,6 +62,9 @@ pub fn build_xmp_packet(
     };
     let write_text_element =
         |writer: &mut Writer<Vec<u8>>, name: &str, value: &str| -> Result<(), XmpError> {
+            if !xml_1_0_text_is_valid(value) {
+                return Err(XmpError::BuildFailed);
+            }
             write(writer, Event::Start(BytesStart::new(name).into_owned()))?;
             write(writer, Event::Text(BytesText::new(value).into_owned()))?;
             write(writer, Event::End(BytesEnd::new(name).into_owned()))
@@ -71,6 +81,9 @@ pub fn build_xmp_packet(
             Event::Start(BytesStart::new(container).into_owned()),
         )?;
         for value in values {
+            if !xml_1_0_text_is_valid(value) {
+                return Err(XmpError::BuildFailed);
+            }
             let mut item = BytesStart::new("rdf:li");
             if language {
                 item.push_attribute(("xml:lang", "x-default"));
@@ -161,14 +174,17 @@ pub fn embed_xmp(jpeg_bytes: &[u8], packet: &XmpPacket) -> Result<Vec<u8>, XmpEr
     let insertion = jpeg
         .segments()
         .iter()
-        .take_while(|segment| {
+        .enumerate()
+        .filter(|(_, segment)| {
             (segment.marker() == markers::APP0
                 && (segment.contents().starts_with(b"JFIF\0")
                     || segment.contents().starts_with(b"JFXX\0")))
                 || (segment.marker() == markers::APP1
                     && segment.contents().starts_with(b"Exif\0\0"))
         })
-        .count();
+        .map(|(position, _)| position + 1)
+        .max()
+        .unwrap_or(0);
     let mut contents = Vec::with_capacity(XMP_IDENTIFIER.len() + packet.as_bytes().len());
     contents.extend_from_slice(XMP_IDENTIFIER);
     contents.extend_from_slice(packet.as_bytes());
@@ -309,6 +325,37 @@ mod tests {
     }
 
     #[test]
+    fn packet_rejects_xml_1_0_invalid_provider_attribution_and_tag_text() {
+        for invalid in ["bad\0text", "bad\u{b}text"] {
+            let mut invalid_artwork = artwork();
+            invalid_artwork.title = invalid.into();
+            assert_eq!(
+                build_xmp_packet(&invalid_artwork, "Attribution", &Tags::default()),
+                Err(XmpError::BuildFailed)
+            );
+            assert_eq!(
+                build_xmp_packet(&artwork(), invalid, &Tags::default()),
+                Err(XmpError::BuildFailed)
+            );
+            assert_eq!(
+                build_xmp_packet(&artwork(), "Attribution", &Tags::parse(invalid)),
+                Err(XmpError::BuildFailed)
+            );
+        }
+    }
+
+    #[test]
+    fn packet_accepts_xml_1_0_tab_newline_and_carriage_return() {
+        let allowed = "tab\tline\nreturn\rtext";
+        assert!(xml_1_0_text_is_valid(allowed));
+        let mut allowed_artwork = artwork();
+        allowed_artwork.title = allowed.into();
+        assert!(build_xmp_packet(&allowed_artwork, allowed, &Tags::parse(allowed)).is_ok());
+        assert!(!xml_1_0_text_is_valid("bad\0text"));
+        assert!(!xml_1_0_text_is_valid("bad\u{b}text"));
+    }
+
+    #[test]
     fn native_jpeg_round_trip_keeps_scan_data_and_reads_the_packet() {
         let input = native_jpeg();
         let packet = build_xmp_packet(&artwork(), "Exact attribution", &Tags::parse("mask"))
@@ -365,6 +412,41 @@ mod tests {
             .position(|segment| segment.contents().starts_with(XMP_IDENTIFIER))
             .expect("XMP exists");
         assert!(exif_position < xmp_position);
+    }
+
+    #[test]
+    fn embedding_inserts_after_noncontiguous_jfif_and_exif_metadata() {
+        let mut source = Jpeg::from_bytes(Bytes::from(native_jpeg())).expect("JPEG parses");
+        source.segments_mut().insert(
+            1,
+            JpegSegment::new_with_contents(
+                markers::APP2,
+                Bytes::from_static(b"ICC_PROFILE\0proof"),
+            ),
+        );
+        source.segments_mut().insert(
+            2,
+            JpegSegment::new_with_contents(markers::APP1, Bytes::from_static(b"Exif\0\0proof")),
+        );
+        let mut bytes = Vec::new();
+        source.encoder().write_to(&mut bytes).expect("JPEG writes");
+        let packet = XmpPacket::try_from_bytes(b"<proof/>".to_vec()).expect("packet fits");
+        let output = embed_xmp(&bytes, &packet).expect("XMP embeds");
+        let parsed = Jpeg::from_bytes(Bytes::from(output)).expect("output parses");
+        let segments = parsed.segments();
+        let icc = segments
+            .iter()
+            .position(|segment| segment.contents().starts_with(b"ICC_PROFILE\0"))
+            .expect("ICC remains");
+        let exif = segments
+            .iter()
+            .position(|segment| segment.contents().starts_with(b"Exif\0\0"))
+            .expect("EXIF remains");
+        let xmp = segments
+            .iter()
+            .position(|segment| segment.contents().starts_with(XMP_IDENTIFIER))
+            .expect("XMP exists");
+        assert!(icc < exif && exif < xmp);
     }
 
     #[test]
