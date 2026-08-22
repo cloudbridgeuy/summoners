@@ -6,11 +6,15 @@
 
 pub mod app;
 pub mod artwork;
+pub mod asset_writer;
 pub mod cache;
 pub mod core;
+pub mod download;
 pub mod http;
+pub mod image;
 pub mod providers;
 pub mod rate_limit;
 pub mod render;
 pub mod search;
 pub mod server;
+pub mod xmp;

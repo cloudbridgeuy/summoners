@@ -182,6 +182,10 @@ pub trait Provider: Send + Sync {
         size: DisplayImageSize,
     ) -> Result<DisplayImageRequest, ProviderError>;
 
+    fn best_image_request(&self, _artwork: &Artwork) -> Result<HttpRequest, ProviderError> {
+        Err(ProviderError::InvalidImageRequest)
+    }
+
     fn object_request(&self, _candidate: &ProviderCandidate) -> Option<HttpRequest> {
         None
     }

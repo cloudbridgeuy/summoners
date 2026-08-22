@@ -193,6 +193,16 @@ impl Provider for AicProvider {
             .map(|request| DisplayImageRequest::new(request, DisplayMediaType::Jpeg))
             .map_err(|_| ProviderError::InvalidImageRequest)
     }
+
+    fn best_image_request(&self, artwork: &Artwork) -> Result<HttpRequest, ProviderError> {
+        artwork
+            .image_urls
+            .original
+            .as_deref()
+            .ok_or(ProviderError::MissingImageService)
+            .and_then(|raw| Url::parse(raw).map_err(|_| ProviderError::InvalidImageRequest))
+            .map(aic_request)
+    }
 }
 
 #[must_use]
@@ -436,6 +446,14 @@ mod tests {
                 .path(),
             "/iiif/2/image-one/full/843,/0/default.jpg"
         );
+        assert_eq!(
+            provider
+                .best_image_request(&artwork)
+                .expect("original request is valid")
+                .url()
+                .path(),
+            "/iiif/2/image-one/full/full/0/default.jpg"
+        );
     }
 
     #[test]
@@ -460,6 +478,9 @@ mod tests {
                 .expect("preview request is valid")
                 .request()
                 .clone(),
+            provider
+                .best_image_request(&artwork)
+                .expect("original request is valid"),
         ];
 
         for request in requests {
@@ -480,6 +501,16 @@ mod tests {
         assert_eq!(
             provider().display_image_request(&artwork, DisplayImageSize::Preview),
             Err(ProviderError::InvalidImageRequest)
+        );
+        artwork.image_urls.original = Some("not a URL".into());
+        assert_eq!(
+            provider().best_image_request(&artwork),
+            Err(ProviderError::InvalidImageRequest)
+        );
+        artwork.image_urls.original = None;
+        assert_eq!(
+            provider().best_image_request(&artwork),
+            Err(ProviderError::MissingImageService)
         );
     }
 

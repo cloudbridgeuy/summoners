@@ -10,17 +10,21 @@ use tokio::net::TcpListener;
 use tokio::sync::broadcast;
 
 use crate::artwork::ArtworkKey;
+use crate::asset_writer::write_atomic_replace;
 use crate::cache::Cache;
 use crate::core::{
     ProviderOutcome, ProviderPage, SearchQuery, SearchSeed, SearchSession, merge_page,
 };
+use crate::download::{DownloadError, DownloadJob, SavedAsset};
 use crate::http::HttpClient;
+use crate::image::{DownloadedImage, ImageError};
 use crate::providers::{
     DisplayImageSize, DisplayMediaType, HttpRequest, Provider, ProviderCandidate,
     ProviderConfigError, ProviderEntry, ProviderSet,
 };
 use crate::rate_limit::RateLimiters;
 use crate::server::{self, AppState};
+use crate::xmp::{build_xmp_packet, embed_xmp};
 
 /// Provider I/O dependencies shared by startup and form searches.
 #[derive(Debug, Clone)]
@@ -128,6 +132,36 @@ impl SearchServices {
         Ok(DisplayImage { bytes, media_type })
     }
 
+    /// Fetch one full provider image without caching it, then write its self-contained JPEG.
+    pub(crate) async fn download(
+        &self,
+        job: DownloadJob<'_>,
+    ) -> std::result::Result<SavedAsset, DownloadError> {
+        let ProviderEntry::Available(provider) = self.providers.get(job.artwork.source) else {
+            return Err(DownloadError::Provider);
+        };
+        let request = provider
+            .best_image_request(job.artwork)
+            .map_err(|_| DownloadError::Provider)?;
+        self.rate_limiters.acquire(provider).await;
+        let bytes = self
+            .http
+            .execute(&request)
+            .await
+            .map_err(|_| DownloadError::Provider)?;
+        let downloaded = DownloadedImage::try_from_magic(bytes).map_err(|error| match error {
+            ImageError::UnsupportedFormat => DownloadError::UnsupportedFormat,
+            ImageError::ConversionFailed => DownloadError::Image,
+        })?;
+        let jpeg = downloaded
+            .into_jpeg_quality_100()
+            .map_err(|_| DownloadError::Image)?;
+        let packet = build_xmp_packet(job.artwork, job.attribution, job.tags)
+            .map_err(|_| DownloadError::Xmp)?;
+        let embedded = embed_xmp(&jpeg, &packet).map_err(|_| DownloadError::Xmp)?;
+        write_atomic_replace(job.output, job.slug, &embedded).map_err(|_| DownloadError::Write)
+    }
+
     async fn search_one(
         &self,
         entry: ProviderEntry<'_>,
@@ -220,6 +254,7 @@ pub async fn bind_listener(address: &str) -> std::io::Result<TcpListener> {
 /// Start the local page and stop it after Ctrl-C.
 pub async fn run(seed: SearchSeed) -> Result<()> {
     let should_open = seed.open;
+    let output = seed.output.clone();
     let query = SearchQuery::from_seed(&seed);
     let services = SearchServices::from_env().wrap_err("cannot configure providers")?;
     let outcomes = services.search_batch(&query).await;
@@ -235,7 +270,7 @@ pub async fn run(seed: SearchSeed) -> Result<()> {
         .wrap_err("cannot read the local search address")?;
     let url = serving_url(address);
     let (shutdown, receiver) = broadcast::channel(1);
-    let state = AppState::new(session, services, shutdown);
+    let state = AppState::new(session, services, output, shutdown);
 
     eprintln!("Serving {url}");
     eprintln!("Press Ctrl-C to stop.");

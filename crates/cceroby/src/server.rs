@@ -3,16 +3,20 @@
 use std::sync::Arc;
 
 use axum::Router;
+use axum::body::Bytes;
 use axum::extract::{RawQuery, State};
 use axum::http::{StatusCode, header};
 use axum::response::{Html, IntoResponse, Response};
-use axum::routing::get;
+use axum::routing::{get, post};
 use thiserror::Error;
 use tokio::net::TcpListener;
 use tokio::sync::{Mutex, RwLock, broadcast};
 
 use crate::artwork::{ArtworkKey, ArtworkKeyError, format_attribution};
-use crate::core::{SearchParams, SearchQuery, SearchSession, merge_page};
+use crate::core::{OutputDirectory, SearchParams, SearchQuery, SearchSession, merge_page};
+use crate::download::{
+    DownloadError, DownloadForm, DownloadJob, DownloadNotice, DownloadRequest, Slug,
+};
 use crate::providers::DisplayImageSize;
 use crate::render::{DetailView, render_detail_page, render_search_page};
 use crate::search::{ArtworkLoadError, SearchServices};
@@ -22,6 +26,7 @@ use crate::search::{ArtworkLoadError, SearchServices};
 pub struct AppState {
     session: Arc<RwLock<SearchSession>>,
     services: SearchServices,
+    output: OutputDirectory,
     search_gate: Arc<Mutex<()>>,
     shutdown: broadcast::Sender<()>,
 }
@@ -31,11 +36,13 @@ impl AppState {
     pub fn new(
         session: SearchSession,
         services: SearchServices,
+        output: OutputDirectory,
         shutdown: broadcast::Sender<()>,
     ) -> Self {
         Self {
             session: Arc::new(RwLock::new(session)),
             services,
+            output,
             search_gate: Arc::new(Mutex::new(())),
             shutdown,
         }
@@ -54,6 +61,7 @@ pub fn router(state: AppState) -> Router {
         .route("/thumb", get(thumbnail))
         .route("/preview", get(preview))
         .route("/detail", get(detail))
+        .route("/download", post(download))
         .with_state(state)
 }
 
@@ -137,15 +145,68 @@ async fn detail(State(state): State<AppState>, RawQuery(raw_query): RawQuery) ->
     match state.services.load_artwork(&key).await {
         Ok(artwork) => {
             let attribution = format_attribution(&artwork);
+            let slug = Slug::from_title(&artwork.title);
             Html(render_detail_page(DetailView {
                 artwork: &artwork,
                 key: &key,
                 attribution: &attribution,
+                slug: slug.as_str(),
+                tags: "",
+                notice: None,
             }))
             .into_response()
         }
         Err(error) => artwork_load_response(error),
     }
+}
+
+async fn download(State(state): State<AppState>, body: Bytes) -> Response {
+    let Ok(form) = serde_urlencoded::from_bytes::<DownloadForm>(&body) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            DownloadError::Validation.to_string(),
+        )
+            .into_response();
+    };
+    let Ok(key) = ArtworkKey::try_from_parts(&form.source, &form.id) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            DownloadError::Validation.to_string(),
+        )
+            .into_response();
+    };
+    let raw_slug = form.slug.clone();
+    let raw_tags = form.tags.clone();
+    let artwork = match state.services.load_artwork(&key).await {
+        Ok(artwork) => artwork,
+        Err(error) => return artwork_load_response(error),
+    };
+    let attribution = format_attribution(&artwork);
+    let result = match DownloadRequest::try_from(form) {
+        Ok(request) => {
+            state
+                .services
+                .download(DownloadJob {
+                    artwork: &artwork,
+                    attribution: &attribution,
+                    slug: &request.slug,
+                    tags: &request.tags,
+                    output: state.output.as_path(),
+                })
+                .await
+        }
+        Err(error) => Err(DownloadError::from(error)),
+    };
+    let notice = DownloadNotice::from_result(result);
+    Html(render_detail_page(DetailView {
+        artwork: &artwork,
+        key: &key,
+        attribution: &attribution,
+        slug: &raw_slug,
+        tags: &raw_tags,
+        notice: Some(&notice),
+    }))
+    .into_response()
 }
 
 fn parse_artwork_query(raw_query: Option<&str>) -> Result<ArtworkKey, ArtworkRouteError> {
@@ -270,6 +331,7 @@ mod tests {
         requests: Arc<AtomicUsize>,
         task: JoinHandle<()>,
         _cache: TempDir,
+        output: TempDir,
     }
 
     impl Drop for MockHarness {
@@ -301,6 +363,21 @@ mod tests {
         vec![0xff, 0xd8, 0x01, 0xff, 0xd9]
     }
 
+    async fn counted_original(State(requests): State<Arc<AtomicUsize>>) -> Vec<u8> {
+        requests.fetch_add(1, Ordering::SeqCst);
+        include_str!("../tests/fixtures/images/native-jpeg.hex")
+            .trim()
+            .as_bytes()
+            .chunks_exact(2)
+            .map(|pair| {
+                std::str::from_utf8(pair)
+                    .ok()
+                    .and_then(|text| u8::from_str_radix(text, 16).ok())
+                    .unwrap_or_default()
+            })
+            .collect()
+    }
+
     async fn mock_harness() -> MockHarness {
         let requests = Arc::new(AtomicUsize::new(0));
         let listener = TcpListener::bind("127.0.0.1:0")
@@ -321,6 +398,10 @@ mod tests {
                         "/iiif/2/image-one/full/843,/0/default.jpg",
                         get(counted_image),
                     )
+                    .route(
+                        "/iiif/2/image-one/full/full/0/default.jpg",
+                        get(counted_original),
+                    )
                     .with_state(requests.clone()),
             );
         let task = tokio::spawn(async move {
@@ -332,6 +413,7 @@ mod tests {
             culture: Culture::parse(None),
         };
         let cache = tempfile::tempdir().expect("temporary cache exists");
+        let output = tempfile::tempdir().expect("temporary output exists");
         let endpoint =
             Url::parse(&format!("{base}/api/v1/artworks/search")).expect("mock endpoint is valid");
         let mut session = SearchSession::new(query);
@@ -368,6 +450,7 @@ mod tests {
                 HttpClient::new(),
                 RateLimiters::new(),
             ),
+            OutputDirectory::from_verified_path(output.path().to_path_buf()),
             shutdown,
         );
         MockHarness {
@@ -375,6 +458,7 @@ mod tests {
             requests,
             task,
             _cache: cache,
+            output,
         }
     }
 
@@ -393,6 +477,7 @@ mod tests {
                 HttpClient::new(),
                 RateLimiters::new(),
             ),
+            OutputDirectory::from_verified_path(std::env::temp_dir()),
             shutdown,
         )
     }
@@ -703,5 +788,131 @@ mod tests {
             .await
             .expect("request succeeds");
         assert_eq!(unavailable.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn download_handler_rejects_all_browser_controlled_trust_fields_before_io() {
+        let harness = mock_harness().await;
+        let app = router(harness.state.clone());
+        let hostile = [
+            "source=aic&id=1001&slug=mask&tags=&url=https%3A%2F%2Fevil.test",
+            "source=aic&id=1001&slug=mask&tags=&license=CC0",
+            "source=aic&id=1001&slug=mask&tags=&attribution=evil",
+            "source=aic&id=1001&slug=mask&tags=&output_path=%2Ftmp%2Fevil",
+            "source=aic&id=1001&slug=mask&tags=&remote_request=evil",
+            "source=aic&id=1001&slug=mask&slug=other&tags=",
+            "source=aic&id=1001&slug=mask&tags=&tags=other",
+            "source=aic&id=1001&slug=mask",
+        ];
+        for body in hostile {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/download")
+                        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                        .body(Body::from(body))
+                        .expect("request is valid"),
+                )
+                .await
+                .expect("request succeeds");
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{body}");
+            let bytes = to_bytes(response.into_body(), usize::MAX)
+                .await
+                .expect("body is readable");
+            assert_eq!(bytes.as_ref(), b"the download form is invalid");
+        }
+        assert_eq!(harness.requests.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            std::fs::read_dir(harness.output.path())
+                .expect("output reads")
+                .count(),
+            0
+        );
+    }
+
+    #[tokio::test]
+    async fn mocked_download_refetches_original_and_replaces_one_self_contained_jpeg() {
+        let harness = mock_harness().await;
+        let app = router(harness.state.clone());
+        let body = "source=aic&id=1001&slug=ceremonial-mask&tags=ritual%2Cblue";
+        for expected in ["Created", "Replaced"] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/download")
+                        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                        .body(Body::from(body))
+                        .expect("request is valid"),
+                )
+                .await
+                .expect("request succeeds");
+            assert_eq!(response.status(), StatusCode::OK);
+            let bytes = to_bytes(response.into_body(), usize::MAX)
+                .await
+                .expect("body is readable");
+            let html = String::from_utf8(bytes.to_vec()).expect("body is UTF-8");
+            assert!(html.contains(expected));
+            assert!(html.contains("Ceremonial Mask"));
+            assert!(html.contains("Gift of A &amp; B"));
+        }
+
+        let target = harness.output.path().join("ceremonial-mask.jpg");
+        let bytes = std::fs::read(&target).expect("asset reads");
+        let jpeg = img_parts::jpeg::Jpeg::from_bytes(img_parts::Bytes::from(bytes))
+            .expect("asset is a JPEG");
+        let xmp = jpeg
+            .segments()
+            .iter()
+            .filter(|segment| {
+                segment.marker() == img_parts::jpeg::markers::APP1
+                    && segment.contents().starts_with(crate::xmp::XMP_IDENTIFIER)
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(xmp.len(), 1);
+        let xml = std::str::from_utf8(&xmp[0].contents()[crate::xmp::XMP_IDENTIFIER.len()..])
+            .expect("XMP is UTF-8");
+        assert!(xml.contains("<rdf:li>ritual</rdf:li><rdf:li>blue</rdf:li>"));
+        assert!(xml.contains("Gift of A &amp; B"));
+        assert_eq!(harness.requests.load(Ordering::SeqCst), 3);
+        let entries = std::fs::read_dir(harness.output.path())
+            .expect("output reads")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("entries read");
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].path(), target);
+    }
+
+    #[tokio::test]
+    async fn invalid_slug_rerenders_trusted_detail_with_a_typed_notice() {
+        let harness = mock_harness().await;
+        let response = router(harness.state.clone())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/download")
+                    .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                    .body(Body::from("source=aic&id=1001&slug=..%2Fescape&tags=mask"))
+                    .expect("request is valid"),
+            )
+            .await
+            .expect("request succeeds");
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body is readable");
+        let html = String::from_utf8(bytes.to_vec()).expect("body is UTF-8");
+        assert!(html.contains("the download form is invalid"));
+        assert!(html.contains("value=\"../escape\""));
+        assert_eq!(harness.requests.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            std::fs::read_dir(harness.output.path())
+                .expect("output reads")
+                .count(),
+            0
+        );
     }
 }

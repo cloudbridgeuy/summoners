@@ -13,7 +13,8 @@ unavailable.
 - `crates/cards`: strict authored Set and Deck loading with built-in content.
 - `crates/cceroby`: local museum image search CLI and form with public-domain
   Art Institute of Chicago results, locally proxied artwork previews, exact
-  attribution, a 24-hour metadata cache, and a 30-day image cache.
+  attribution, a 24-hour metadata cache, a 30-day image cache, and a trusted
+  self-contained JPEG download path for provider image responses.
 - `xtask`: repository lint and Git hook automation.
 
 ## Design inputs
