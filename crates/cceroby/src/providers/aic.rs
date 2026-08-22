@@ -3,11 +3,12 @@
 use serde::Deserialize;
 use url::Url;
 
+use crate::artwork::ArtworkKey;
 use crate::core::{Artwork, CommercialLicense, ImageUrls, SearchQuery, SourceKind};
 
 use super::{
-    ArtworkDropReason, HttpRequest, Provider, ProviderCandidate, ProviderEntry, ProviderError,
-    ProviderSearchPage, RatePolicy, TokenBucketPolicy,
+    ArtworkDropReason, DisplayImageSize, HttpRequest, Provider, ProviderCandidate, ProviderEntry,
+    ProviderError, ProviderSearchPage, RatePolicy, TokenBucketPolicy,
 };
 
 const OFFICIAL_ENDPOINT: &str = "https://api.artic.edu/api/v1/artworks/search";
@@ -144,6 +145,55 @@ impl Provider for AicProvider {
             object_url: format!("https://www.artic.edu/artworks/{source_id}"),
         })
     }
+
+    fn artwork_request(&self, key: &ArtworkKey) -> Result<HttpRequest, ProviderError> {
+        let mut url = detail_endpoint(&self.endpoint, key.id().as_str());
+        url.query_pairs_mut().append_pair("fields", SEARCH_FIELDS);
+        Ok(HttpRequest::get(url))
+    }
+
+    fn parse_artwork_response(&self, bytes: &[u8]) -> Result<Artwork, ProviderError> {
+        let response: AicDetailResponse =
+            serde_json::from_slice(bytes).map_err(|_| ProviderError::MalformedResponse)?;
+        let image_base = response
+            .config
+            .iiif_url
+            .filter(|value| !value.trim().is_empty())
+            .ok_or(ProviderError::MissingImageService)?;
+        self.parse_artwork(
+            &ProviderCandidate {
+                raw: response.data,
+                context: Some(image_base),
+            },
+            None,
+        )
+        .map_err(|reason| match reason {
+            ArtworkDropReason::NotPublicDomain => ProviderError::ArtworkUnavailable,
+            ArtworkDropReason::MissingSourceId
+            | ArtworkDropReason::MissingTitle
+            | ArtworkDropReason::MissingImage => ProviderError::MalformedResponse,
+        })
+    }
+
+    fn display_image_request(
+        &self,
+        artwork: &Artwork,
+        size: DisplayImageSize,
+    ) -> Result<HttpRequest, ProviderError> {
+        let raw = match size {
+            DisplayImageSize::Card => &artwork.image_urls.thumbnail,
+            DisplayImageSize::Preview => &artwork.image_urls.display,
+        };
+        Url::parse(raw)
+            .map(HttpRequest::get)
+            .map_err(|_| ProviderError::InvalidImageRequest)
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct AicDetailResponse {
+    data: serde_json::Value,
+    config: AicConfig,
 }
 
 #[derive(Debug, Deserialize)]
@@ -190,6 +240,16 @@ pub fn build_iiif_url(image_base: &str, image_id: &str, width: &str) -> String {
     )
 }
 
+#[must_use]
+fn detail_endpoint(search_endpoint: &Url, object_id: &str) -> Url {
+    let mut detail = search_endpoint.clone();
+    let search_path = detail.path().trim_end_matches('/');
+    let collection_path = search_path.strip_suffix("/search").unwrap_or(search_path);
+    detail.set_path(&format!("{collection_path}/{object_id}"));
+    detail.set_query(None);
+    detail
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::expect_used)]
@@ -207,6 +267,7 @@ mod tests {
         include_bytes!("../../tests/fixtures/aic/missing-image-service.json");
     const NON_PUBLIC_DOMAIN: &[u8] =
         include_bytes!("../../tests/fixtures/aic/non-public-domain.json");
+    const DETAIL: &[u8] = include_bytes!("../../tests/fixtures/aic/detail.json");
 
     fn query(culture: Option<&str>) -> SearchQuery {
         SearchQuery {
@@ -297,6 +358,59 @@ mod tests {
         assert_eq!(
             build_iiif_url(base, "image-one", "full"),
             "https://www.artic.edu/iiif/2/image-one/full/full/0/default.jpg"
+        );
+    }
+
+    #[test]
+    fn detail_request_and_display_requests_are_provider_owned() {
+        let provider = provider();
+        let key = ArtworkKey::try_from_parts("aic", "1001").expect("key is valid");
+        let request = provider.artwork_request(&key).expect("request is valid");
+        assert_eq!(request.url().path(), "/api/v1/artworks/1001");
+        assert_eq!(
+            request
+                .url()
+                .query_pairs()
+                .find(|(name, _)| name == "fields")
+                .map(|(_, value)| value.into_owned()),
+            Some(SEARCH_FIELDS.into())
+        );
+
+        let artwork = provider
+            .parse_artwork_response(DETAIL)
+            .expect("detail fixture is valid");
+        assert_eq!(artwork.source_id, "1001");
+        assert_eq!(
+            provider
+                .display_image_request(&artwork, DisplayImageSize::Card)
+                .expect("card request is valid")
+                .url()
+                .path(),
+            "/iiif/2/image-one/full/200,/0/default.jpg"
+        );
+        assert_eq!(
+            provider
+                .display_image_request(&artwork, DisplayImageSize::Preview)
+                .expect("preview request is valid")
+                .url()
+                .path(),
+            "/iiif/2/image-one/full/843,/0/default.jpg"
+        );
+    }
+
+    #[test]
+    fn malformed_detail_and_image_urls_return_typed_errors() {
+        assert_eq!(
+            provider().parse_artwork_response(MALFORMED),
+            Err(ProviderError::MalformedResponse)
+        );
+        let mut artwork = provider()
+            .parse_artwork_response(DETAIL)
+            .expect("detail fixture is valid");
+        artwork.image_urls.display = "not a URL".into();
+        assert_eq!(
+            provider().display_image_request(&artwork, DisplayImageSize::Preview),
+            Err(ProviderError::InvalidImageRequest)
         );
     }
 

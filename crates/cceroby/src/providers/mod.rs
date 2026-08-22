@@ -7,6 +7,7 @@ use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use thiserror::Error;
 use url::Url;
 
+use crate::artwork::ArtworkKey;
 use crate::core::{Artwork, ProviderNotice, SearchQuery, SourceKind};
 
 pub mod aic;
@@ -85,6 +86,13 @@ pub struct TokenBucketPolicy {
     refill_interval: Duration,
 }
 
+/// One provider-owned display image purpose.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DisplayImageSize {
+    Card,
+    Preview,
+}
+
 impl TokenBucketPolicy {
     #[must_use]
     pub const fn new(capacity: NonZeroU32, refill_interval: Duration) -> Self {
@@ -120,6 +128,13 @@ pub trait Provider: Send + Sync {
         candidate: &ProviderCandidate,
         object_bytes: Option<&[u8]>,
     ) -> Result<Artwork, ArtworkDropReason>;
+    fn artwork_request(&self, key: &ArtworkKey) -> Result<HttpRequest, ProviderError>;
+    fn parse_artwork_response(&self, bytes: &[u8]) -> Result<Artwork, ProviderError>;
+    fn display_image_request(
+        &self,
+        artwork: &Artwork,
+        size: DisplayImageSize,
+    ) -> Result<HttpRequest, ProviderError>;
 
     fn object_request(&self, _candidate: &ProviderCandidate) -> Option<HttpRequest> {
         None
@@ -147,6 +162,10 @@ pub enum ProviderError {
     MalformedResponse,
     #[error("the provider response has no image service")]
     MissingImageService,
+    #[error("the provider artwork is not available")]
+    ArtworkUnavailable,
+    #[error("the provider image request is invalid")]
+    InvalidImageRequest,
 }
 
 /// Built-in provider configuration cannot be constructed.
