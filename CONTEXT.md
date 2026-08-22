@@ -56,9 +56,9 @@ thumbnail cache entry degrades to a cache miss instead of stopping the search.
 - **WHEN** the user follows a result card's detail link
 - **THEN** the server reconstructs the artwork from its known source and object
   ID through the provider and metadata cache
-- **AND** the page shows a full local-proxy preview, title, creator, date,
-  culture or region, institution, source ID, accepted license, source object,
-  and ready-to-print attribution
+- **AND** the page shows a full local-proxy preview, title, institution, source
+  ID, accepted license, source object, and ready-to-print attribution
+- **AND** creator, date, and culture or region appear when available
 - **AND** the Back link returns to the accumulated search results
 
 #### Scenario: An artwork route receives untrusted input

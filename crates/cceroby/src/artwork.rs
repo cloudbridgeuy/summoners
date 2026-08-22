@@ -100,7 +100,21 @@ pub fn format_attribution(artwork: &Artwork) -> String {
         artwork.license.url()
     ));
     parts.push(format!("Source: {}", artwork.object_url));
-    format!("{}.", parts.join(". "))
+    let mut attribution = String::new();
+    for part in parts {
+        if !attribution.is_empty() {
+            attribution.push(' ');
+        }
+        attribution.push_str(&part);
+        let terminal_candidate = part.trim_end().strip_suffix('”').unwrap_or(part.trim_end());
+        if !matches!(
+            terminal_candidate.chars().next_back(),
+            Some('.' | '!' | '?')
+        ) {
+            attribution.push('.');
+        }
+    }
+    attribution
 }
 
 #[cfg(test)]
@@ -263,6 +277,47 @@ mod tests {
         artwork.provider_credit = Some("Crédit — Donor; 100% verbatim".into());
         let attribution = format_attribution(&artwork);
         assert!(attribution.contains("Crédit — Donor; 100% verbatim"));
+    }
+
+    #[test]
+    fn attribution_does_not_duplicate_terminal_creator_or_credit_punctuation() {
+        let cases = [
+            (
+                "Maker unknown.",
+                "Gift of A & B",
+                "“Ceremonial Mask” — Maker unknown. Gift of A & B. Public domain",
+            ),
+            (
+                "Maker unknown?",
+                "Gift of A & B",
+                "“Ceremonial Mask” — Maker unknown? Gift of A & B. Public domain",
+            ),
+            (
+                "Maker unknown",
+                "Gift of A & B.",
+                "“Ceremonial Mask” — Maker unknown. Gift of A & B. Public domain",
+            ),
+            (
+                "Maker unknown",
+                "Gift of A & B!",
+                "“Ceremonial Mask” — Maker unknown. Gift of A & B! Public domain",
+            ),
+        ];
+
+        for (creator, credit, expected_start) in cases {
+            let mut artwork = complete_artwork();
+            artwork.creator = Some(creator.into());
+            artwork.provider_credit = Some(credit.into());
+            let attribution = format_attribution(&artwork);
+            assert!(
+                attribution.starts_with(expected_start),
+                "{creator} / {credit}"
+            );
+            assert!(attribution.contains(credit), "{creator} / {credit}");
+            assert!(!attribution.contains(".."), "{creator} / {credit}");
+            assert!(!attribution.contains("?."), "{creator} / {credit}");
+            assert!(!attribution.contains("!."), "{creator} / {credit}");
+        }
     }
 
     #[test]

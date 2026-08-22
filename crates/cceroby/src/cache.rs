@@ -14,7 +14,7 @@ use crate::providers::DisplayMediaType;
 
 const METADATA_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 const THUMBNAIL_TTL: Duration = Duration::from_secs(30 * 24 * 60 * 60);
-const THUMBNAIL_MAGIC: &[u8; 8] = b"CCERTHM1";
+const THUMBNAIL_MAGIC: &[u8; 8] = b"CCERTHM2";
 const THUMBNAIL_TIMESTAMP_BYTES: usize = 16;
 const THUMBNAIL_CHECKSUM_BYTES: usize = 32;
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
@@ -228,8 +228,13 @@ fn encode_thumbnail_entry(
     if bytes.is_empty() {
         return None;
     }
-    let timestamp = fetched_at.duration_since(UNIX_EPOCH).ok()?.as_nanos();
-    let checksum = Sha256::digest(bytes);
+    let timestamp = fetched_at
+        .duration_since(UNIX_EPOCH)
+        .ok()?
+        .as_nanos()
+        .to_be_bytes();
+    let media_code = media_type_code(media_type);
+    let checksum = thumbnail_checksum(&timestamp, media_code, bytes);
     let mut encoded = Vec::with_capacity(
         THUMBNAIL_MAGIC.len()
             + THUMBNAIL_TIMESTAMP_BYTES
@@ -238,8 +243,8 @@ fn encode_thumbnail_entry(
             + bytes.len(),
     );
     encoded.extend_from_slice(THUMBNAIL_MAGIC);
-    encoded.extend_from_slice(&timestamp.to_be_bytes());
-    encoded.push(media_type_code(media_type));
+    encoded.extend_from_slice(&timestamp);
+    encoded.push(media_code);
     encoded.extend_from_slice(&checksum);
     encoded.extend_from_slice(bytes);
     Some(encoded)
@@ -255,20 +260,35 @@ fn decode_thumbnail_entry(bytes: &[u8]) -> Option<ThumbnailEntry> {
     let timestamp_end = timestamp_start + THUMBNAIL_TIMESTAMP_BYTES;
     let timestamp: [u8; THUMBNAIL_TIMESTAMP_BYTES] =
         bytes.get(timestamp_start..timestamp_end)?.try_into().ok()?;
-    let fetched_at = system_time_from_epoch_nanos(u128::from_be_bytes(timestamp))?;
-    let media_type = decode_media_type(*bytes.get(timestamp_end)?)?;
+    let media_code = *bytes.get(timestamp_end)?;
+    let media_type = decode_media_type(media_code)?;
     let checksum_start = timestamp_end + 1;
     let checksum_end = checksum_start + THUMBNAIL_CHECKSUM_BYTES;
     let checksum = bytes.get(checksum_start..checksum_end)?;
     let payload = bytes.get(checksum_end..)?;
-    if &Sha256::digest(payload)[..] != checksum {
+    if thumbnail_checksum(&timestamp, media_code, payload) != checksum {
         return None;
     }
+    let fetched_at = system_time_from_epoch_nanos(u128::from_be_bytes(timestamp))?;
     Some(ThumbnailEntry {
         fetched_at,
         bytes: payload.to_vec(),
         media_type,
     })
+}
+
+#[must_use]
+fn thumbnail_checksum(
+    timestamp: &[u8; THUMBNAIL_TIMESTAMP_BYTES],
+    media_code: u8,
+    payload: &[u8],
+) -> [u8; THUMBNAIL_CHECKSUM_BYTES] {
+    let mut hash = Sha256::new();
+    hash.update(THUMBNAIL_MAGIC);
+    hash.update(timestamp);
+    hash.update([media_code]);
+    hash.update(payload);
+    hash.finalize().into()
 }
 
 #[must_use]
@@ -448,6 +468,21 @@ mod tests {
     }
 
     #[test]
+    fn thumbnail_checksum_covers_timestamp_media_type_and_payload() {
+        let timestamp = 123_u128.to_be_bytes();
+        let baseline = thumbnail_checksum(&timestamp, 1, b"image");
+
+        let mut changed_timestamp = timestamp;
+        changed_timestamp[THUMBNAIL_TIMESTAMP_BYTES - 1] ^= 1;
+        assert_ne!(
+            baseline,
+            thumbnail_checksum(&changed_timestamp, 1, b"image")
+        );
+        assert_ne!(baseline, thumbnail_checksum(&timestamp, 2, b"image"));
+        assert_ne!(baseline, thumbnail_checksum(&timestamp, 1, b"Image"));
+    }
+
+    #[test]
     fn thumbnail_media_type_codes_are_complete_and_reject_unknown_values() {
         let cases = [
             (DisplayMediaType::Jpeg, 1),
@@ -608,6 +643,54 @@ mod tests {
         .expect("entry encodes");
         let last = encoded.last_mut().expect("payload is present");
         *last ^= 0xff;
+        fs::write(&path, encoded).expect("fixture writes");
+
+        assert_eq!(
+            cache.read_thumbnail(REQUEST, UNIX_EPOCH + Duration::from_secs(2)),
+            None
+        );
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn tampered_thumbnail_timestamp_is_a_miss_and_is_removed() {
+        let directory = tempdir().expect("temporary directory exists");
+        let cache = Cache::new(directory.path().to_path_buf());
+        let path = cache.thumbnail_path(REQUEST).expect("cache is enabled");
+        fs::create_dir_all(path.parent().expect("path has a parent"))
+            .expect("cache directory exists");
+        let mut encoded = encode_thumbnail_entry(
+            DisplayMediaType::Jpeg,
+            b"valid payload",
+            UNIX_EPOCH + Duration::new(1, 7),
+        )
+        .expect("entry encodes");
+        let timestamp_last = THUMBNAIL_MAGIC.len() + THUMBNAIL_TIMESTAMP_BYTES - 1;
+        encoded[timestamp_last] ^= 1;
+        fs::write(&path, encoded).expect("fixture writes");
+
+        assert_eq!(
+            cache.read_thumbnail(REQUEST, UNIX_EPOCH + Duration::from_secs(2)),
+            None
+        );
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn tampered_thumbnail_media_type_is_a_miss_and_is_removed() {
+        let directory = tempdir().expect("temporary directory exists");
+        let cache = Cache::new(directory.path().to_path_buf());
+        let path = cache.thumbnail_path(REQUEST).expect("cache is enabled");
+        fs::create_dir_all(path.parent().expect("path has a parent"))
+            .expect("cache directory exists");
+        let mut encoded = encode_thumbnail_entry(
+            DisplayMediaType::Jpeg,
+            b"valid payload",
+            UNIX_EPOCH + Duration::new(1, 7),
+        )
+        .expect("entry encodes");
+        let media_position = THUMBNAIL_MAGIC.len() + THUMBNAIL_TIMESTAMP_BYTES;
+        encoded[media_position] = media_type_code(DisplayMediaType::Png);
         fs::write(&path, encoded).expect("fixture writes");
 
         assert_eq!(
