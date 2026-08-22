@@ -89,6 +89,23 @@ mod tests {
     }
 
     #[test]
+    fn provider_slot_returns_its_kind_and_direct_unavailable_notice() {
+        let slot = ProviderRegistry::new().slots()[0];
+        assert_eq!(slot.kind(), SourceKind::ArtInstituteChicago);
+        assert_eq!(
+            slot.unavailable_notice(),
+            ProviderNotice::Unavailable {
+                source: SourceKind::ArtInstituteChicago
+            }
+        );
+    }
+
+    #[test]
+    fn default_registry_has_the_same_slots_as_a_new_registry() {
+        assert_eq!(ProviderRegistry::default(), ProviderRegistry::new());
+    }
+
+    #[test]
     fn selected_slots_return_typed_unavailable_notices() {
         let notices = ProviderRegistry::new()
             .unavailable_for(&[SourceKind::ClevelandMuseum, SourceKind::WikimediaCommons]);
