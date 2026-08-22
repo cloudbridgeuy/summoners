@@ -1,5 +1,6 @@
 //! Art Institute of Chicago request construction and response parsing.
 
+use reqwest::header::{HeaderValue, USER_AGENT};
 use serde::Deserialize;
 use url::Url;
 
@@ -15,6 +16,8 @@ use super::{
 const OFFICIAL_ENDPOINT: &str = "https://api.artic.edu/api/v1/artworks/search";
 const SEARCH_FIELDS: &str =
     "id,title,artist_display,date_display,place_of_origin,image_id,is_public_domain,credit_line";
+const AIC_USER_AGENT: HeaderValue =
+    HeaderValue::from_static("cceroby/0.0.0 (local public-domain artwork search)");
 
 /// AIC provider configuration.
 #[derive(Debug, Clone)]
@@ -70,7 +73,7 @@ impl Provider for AicProvider {
             pairs.append_pair("limit", "20");
             pairs.append_pair("fields", SEARCH_FIELDS);
         }
-        HttpRequest::get(url)
+        aic_request(url)
     }
 
     fn parse_search(&self, bytes: &[u8]) -> Result<ProviderSearchPage, ProviderError> {
@@ -150,7 +153,7 @@ impl Provider for AicProvider {
     fn artwork_request(&self, key: &ArtworkKey) -> Result<HttpRequest, ProviderError> {
         let mut url = detail_endpoint(&self.endpoint, key.id().as_str());
         url.query_pairs_mut().append_pair("fields", SEARCH_FIELDS);
-        Ok(HttpRequest::get(url))
+        Ok(aic_request(url))
     }
 
     fn parse_artwork_response(&self, bytes: &[u8]) -> Result<Artwork, ProviderError> {
@@ -186,10 +189,15 @@ impl Provider for AicProvider {
             DisplayImageSize::Preview => &artwork.image_urls.display,
         };
         Url::parse(raw)
-            .map(HttpRequest::get)
+            .map(aic_request)
             .map(|request| DisplayImageRequest::new(request, DisplayMediaType::Jpeg))
             .map_err(|_| ProviderError::InvalidImageRequest)
     }
+}
+
+#[must_use]
+fn aic_request(url: Url) -> HttpRequest {
+    HttpRequest::get(url).with_header(USER_AGENT, AIC_USER_AGENT)
 }
 
 #[derive(Debug, Deserialize)]
@@ -258,6 +266,8 @@ mod tests {
 
     use std::collections::HashMap;
 
+    use reqwest::header::{HeaderValue, USER_AGENT};
+
     use crate::core::{Culture, QueryText, SourceSet};
 
     use super::*;
@@ -285,6 +295,15 @@ mod tests {
 
     fn query_map(request: &HttpRequest) -> HashMap<String, String> {
         request.url().query_pairs().into_owned().collect()
+    }
+
+    #[test]
+    fn aic_request_helper_applies_the_exact_stable_user_agent() {
+        const EXPECTED: HeaderValue =
+            HeaderValue::from_static("cceroby/0.0.0 (local public-domain artwork search)");
+        let url = Url::parse("https://example.test/resource").expect("URL is valid");
+        let request = aic_request(url);
+        assert_eq!(request.headers().get(USER_AGENT), Some(&EXPECTED));
     }
 
     #[test]
@@ -417,6 +436,35 @@ mod tests {
                 .path(),
             "/iiif/2/image-one/full/843,/0/default.jpg"
         );
+    }
+
+    #[test]
+    fn every_aic_remote_request_has_the_exact_provider_owned_user_agent() {
+        const EXPECTED: HeaderValue =
+            HeaderValue::from_static("cceroby/0.0.0 (local public-domain artwork search)");
+        let provider = provider();
+        let artwork = provider
+            .parse_artwork_response(DETAIL)
+            .expect("detail fixture is valid");
+        let key = ArtworkKey::try_from_parts("aic", "1001").expect("key is valid");
+        let requests = [
+            provider.search_request(&query(None), None),
+            provider.artwork_request(&key).expect("request is valid"),
+            provider
+                .display_image_request(&artwork, DisplayImageSize::Card)
+                .expect("card request is valid")
+                .request()
+                .clone(),
+            provider
+                .display_image_request(&artwork, DisplayImageSize::Preview)
+                .expect("preview request is valid")
+                .request()
+                .clone(),
+        ];
+
+        for request in requests {
+            assert_eq!(request.headers().get(USER_AGENT), Some(&EXPECTED));
+        }
     }
 
     #[test]

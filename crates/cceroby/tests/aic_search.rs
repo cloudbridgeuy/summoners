@@ -7,7 +7,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use axum::Router;
 use axum::body::{Body, to_bytes};
 use axum::extract::State;
-use axum::http::{Request, StatusCode};
+use axum::http::header::USER_AGENT;
+use axum::http::{HeaderMap, Request, StatusCode};
 use axum::routing::get;
 use cceroby::cache::Cache;
 use cceroby::core::{Culture, QueryText, SearchQuery, SearchSession, SourceKind, SourceSet};
@@ -23,6 +24,7 @@ use tower::ServiceExt;
 use url::Url;
 
 const SUCCESS: &str = include_str!("fixtures/aic/success.json");
+const AIC_USER_AGENT: &str = "cceroby/0.0.0 (local public-domain artwork search)";
 
 fn aic_query() -> SearchQuery {
     let query = match QueryText::parse("mask") {
@@ -49,9 +51,19 @@ fn services(endpoint: Url, cache_root: &TempDir) -> SearchServices {
     )
 }
 
-async fn success(State(requests): State<Arc<AtomicUsize>>) -> &'static str {
+async fn success(
+    State(requests): State<Arc<AtomicUsize>>,
+    headers: HeaderMap,
+) -> (StatusCode, &'static str) {
     requests.fetch_add(1, Ordering::SeqCst);
-    SUCCESS
+    if headers
+        .get(USER_AGENT)
+        .is_some_and(|value| value == AIC_USER_AGENT)
+    {
+        (StatusCode::OK, SUCCESS)
+    } else {
+        (StatusCode::FORBIDDEN, "missing AIC User-Agent")
+    }
 }
 
 async fn failure(State(requests): State<Arc<AtomicUsize>>) -> StatusCode {
