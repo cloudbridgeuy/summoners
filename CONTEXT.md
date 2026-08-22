@@ -193,6 +193,32 @@ later actions without a new write or engine call.
   completion record
 - **AND** each later submission fails before a write or engine call
 
+### Requirement: Complete match transcript parsing
+
+A **Match transcript** parser accepts only strict version 1 NDJSON with one
+complete record lifecycle. It returns normalized actions, ordered events,
+typed rejections, authoritative states, and completion data as typed values.
+
+#### Scenario: A complete transcript is parsed
+
+- **WHEN** a caller supplies bytes with one valid and complete record lifecycle
+- **THEN** parsing returns all normative values without data loss
+
+#### Scenario: A record is malformed
+
+- **WHEN** a record has invalid UTF-8, malformed JSON, an unknown or missing
+  normative field, an invalid integer, a noncanonical identity, an unknown
+  variant, or an unsupported format version
+- **THEN** parsing returns a typed fault with the available line, record, and
+  JSON path context
+
+#### Scenario: The record lifecycle is invalid or incomplete
+
+- **WHEN** records are missing, repeated, reordered, inconsistent, or truncated
+- **THEN** parsing returns the exact lifecycle fault with the available
+  sequence, step, and event index context
+- **AND** it does not return a **Match transcript** value
+
 ### Requirement: Turn structure and phase order
 
 A turn moves through Upkeep, Main Phase, and Combat, and phases only move
