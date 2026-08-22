@@ -2,12 +2,14 @@
 
 Home of Summoners, a two-player card game.
 
-This repository currently contains the Rust workspace and development tools.
-It does not yet implement the game rules.
+This repository contains the deterministic game rules, authored card data, a
+local museum image search tool, and development tools.
 
 ## Workspace
 
 - `crates/core`: the dependency-free deterministic rules and state-transition library.
+- `crates/cards`: strict authored Set and Deck loading with built-in content.
+- `crates/cceroby`: local museum image search CLI and form.
 - `xtask`: repository lint and Git hook automation.
 
 ## Design inputs
