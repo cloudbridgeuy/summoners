@@ -9,11 +9,45 @@ rules described below. The engine reads no file, calls no network, uses no
 clock, and uses no random source. Every entry point takes one state value and
 one action, and returns a new state value; it never mutates anything the caller
 still holds. A strict authored-card boundary parses caller-held Set bytes into
-core definitions without file I/O. There is no CLI, server, client, runtime
-file loader, Deck loader, or built-in catalog yet. This file is an index of
-stable product language, not an API contract.
+core definitions without file I/O. A separate CLI serves a local museum image
+search form. Its provider connections are not available yet. There is no game
+client or runtime file loader yet. This file is an index of stable product
+language, not an API contract.
 
 ## Behavior
+
+### Requirement: Local museum image search
+
+The `cceroby search` command parses a non-empty query, one or more of five
+museum sources, an optional culture or region, an output directory, and local
+server options before it starts a loopback-only server on an operating-system
+assigned port. The local page keeps valid query and filter values in its form.
+Provider slots that do not have a connection return an unavailable notice.
+
+#### Scenario: A valid local search starts
+
+- **WHEN** a user starts a search with a valid query, source set, and output
+  directory
+- **THEN** the CLI reports a `127.0.0.1` URL with an assigned port
+- **AND** the root page contains the initial query, sources, culture or region,
+  and search control
+
+#### Scenario: Search form values change
+
+- **WHEN** a user submits a non-empty query and source set from the local page
+- **THEN** the page keeps the submitted query and filters
+- **AND** each selected source without a connection has an unavailable notice
+
+#### Scenario: Command input is invalid
+
+- **WHEN** a user supplies an empty source set or an output path that is not an
+  available directory
+- **THEN** the command reports the input error before it starts the server
+
+#### Scenario: The user stops the local server
+
+- **WHEN** the local server receives Ctrl-C
+- **THEN** it completes graceful shutdown and the command exits
 
 ### Requirement: Complete local quality gate
 
