@@ -176,8 +176,9 @@ fn encode_entry(bytes: &[u8], fetched_at: SystemTime) -> Option<Vec<u8>> {
 
 fn decode_entry(bytes: &[u8]) -> Option<CachedMetadata> {
     let entry: OwnedDiskMetadata = serde_json::from_slice(bytes).ok()?;
+    let fetched_at = UNIX_EPOCH.checked_add(Duration::from_secs(entry.fetched_at))?;
     Some(CachedMetadata {
-        fetched_at: UNIX_EPOCH + Duration::from_secs(entry.fetched_at),
+        fetched_at,
         bytes: entry.body.into_bytes(),
     })
 }
@@ -261,6 +262,30 @@ mod tests {
             cache.read_metadata(SourceKind::ArtInstituteChicago, REQUEST, SystemTime::now()),
             None
         );
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn overflowing_timestamp_is_corrupt_for_reads_and_pruning() {
+        let directory = tempdir().expect("temporary directory exists");
+        let cache = Cache::new(directory.path().to_path_buf());
+        let path = cache
+            .metadata_path(SourceKind::ArtInstituteChicago, REQUEST)
+            .expect("cache is enabled");
+        fs::create_dir_all(path.parent().expect("path has a parent"))
+            .expect("cache directory exists");
+        let overflow = format!(r#"{{"fetched_at":{},"body":"metadata"}}"#, u64::MAX);
+
+        assert_eq!(decode_entry(overflow.as_bytes()), None);
+        fs::write(&path, &overflow).expect("fixture writes");
+        assert_eq!(
+            cache.read_metadata(SourceKind::ArtInstituteChicago, REQUEST, UNIX_EPOCH),
+            None
+        );
+        assert!(!path.exists());
+
+        fs::write(&path, overflow).expect("fixture writes again");
+        assert_eq!(cache.prune_expired(UNIX_EPOCH), 1);
         assert!(!path.exists());
     }
 

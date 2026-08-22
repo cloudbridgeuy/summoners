@@ -3,8 +3,8 @@
 Home of Summoners, a two-player card game.
 
 This repository contains the deterministic game rules, authored card data, a
-local museum image search shell, and development tools. The search shell does
-connect to the Art Institute of Chicago. Four additional source slots remain
+local museum image search shell, and development tools. The search shell
+connects to the Art Institute of Chicago. Four additional source slots remain
 unavailable.
 
 ## Workspace

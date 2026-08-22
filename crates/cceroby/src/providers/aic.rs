@@ -7,7 +7,7 @@ use crate::core::{Artwork, CommercialLicense, ImageUrls, SearchQuery, SourceKind
 
 use super::{
     ArtworkDropReason, HttpRequest, Provider, ProviderCandidate, ProviderEntry, ProviderError,
-    ProviderSearchPage,
+    ProviderSearchPage, RatePolicy, TokenBucketPolicy,
 };
 
 const OFFICIAL_ENDPOINT: &str = "https://api.artic.edu/api/v1/artworks/search";
@@ -43,6 +43,13 @@ impl AicProvider {
 impl Provider for AicProvider {
     fn kind(&self) -> SourceKind {
         SourceKind::ArtInstituteChicago
+    }
+
+    fn rate_policy(&self) -> RatePolicy {
+        RatePolicy::TokenBucket(TokenBucketPolicy::new(
+            std::num::NonZeroU32::MIN,
+            std::time::Duration::from_secs(1),
+        ))
     }
 
     fn search_request(&self, query: &SearchQuery, cursor: Option<&str>) -> HttpRequest {
@@ -196,6 +203,8 @@ mod tests {
     const SUCCESS: &[u8] = include_bytes!("../../tests/fixtures/aic/success.json");
     const MISSING_FIELDS: &[u8] = include_bytes!("../../tests/fixtures/aic/missing-fields.json");
     const MALFORMED: &[u8] = include_bytes!("../../tests/fixtures/aic/malformed.json");
+    const MISSING_IMAGE_SERVICE: &[u8] =
+        include_bytes!("../../tests/fixtures/aic/missing-image-service.json");
     const NON_PUBLIC_DOMAIN: &[u8] =
         include_bytes!("../../tests/fixtures/aic/non-public-domain.json");
 
@@ -217,7 +226,15 @@ mod tests {
 
     #[test]
     fn request_contains_query_policy_fields_and_first_page() {
-        let request = provider().search_request(&query(None), None);
+        let provider = provider();
+        let request = provider.search_request(&query(None), None);
+        assert_eq!(
+            provider.rate_policy(),
+            RatePolicy::TokenBucket(TokenBucketPolicy::new(
+                std::num::NonZeroU32::MIN,
+                std::time::Duration::from_secs(1)
+            ))
+        );
         let pairs = query_map(&request);
         assert_eq!(pairs.get("q").map(String::as_str), Some("ritual mask"));
         assert_eq!(
@@ -371,13 +388,8 @@ mod tests {
 
     #[test]
     fn missing_image_service_returns_a_typed_provider_error() {
-        let missing_image_service = br#"{
-            "pagination": { "current_page": 1, "total_pages": 1 },
-            "data": [],
-            "config": { "iiif_url": "  " }
-        }"#;
         assert_eq!(
-            provider().parse_search(missing_image_service),
+            provider().parse_search(MISSING_IMAGE_SERVICE),
             Err(ProviderError::MissingImageService)
         );
     }

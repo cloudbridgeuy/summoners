@@ -1,5 +1,9 @@
 //! Provider contracts, fixed provider set, and source-specific modules.
 
+use std::num::NonZeroU32;
+use std::time::Duration;
+
+use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use thiserror::Error;
 use url::Url;
 
@@ -18,15 +22,37 @@ use met::MetProvider;
 use smithsonian::SmithsonianProvider;
 
 /// One immutable outbound provider request.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct HttpRequest {
     url: Url,
+    headers: HeaderMap,
+}
+
+impl std::fmt::Debug for HttpRequest {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("HttpRequest")
+            .field("scheme", &self.url.scheme())
+            .field("host", &self.url.host_str())
+            .field("path", &self.url.path())
+            .field("header_names", &self.headers.keys().collect::<Vec<_>>())
+            .finish()
+    }
 }
 
 impl HttpRequest {
     #[must_use]
     pub fn get(url: Url) -> Self {
-        Self { url }
+        Self {
+            url,
+            headers: HeaderMap::new(),
+        }
+    }
+
+    #[must_use]
+    pub fn with_header(mut self, name: HeaderName, value: HeaderValue) -> Self {
+        self.headers.insert(name, value);
+        self
     }
 
     #[must_use]
@@ -38,11 +64,55 @@ impl HttpRequest {
     pub fn canonical(&self) -> &str {
         self.url.as_str()
     }
+
+    #[must_use]
+    pub fn headers(&self) -> &HeaderMap {
+        &self.headers
+    }
+}
+
+/// One provider-owned request-rate policy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RatePolicy {
+    Unlimited,
+    TokenBucket(TokenBucketPolicy),
+}
+
+/// Valid token-bucket parameters.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TokenBucketPolicy {
+    capacity: NonZeroU32,
+    refill_interval: Duration,
+}
+
+impl TokenBucketPolicy {
+    #[must_use]
+    pub const fn new(capacity: NonZeroU32, refill_interval: Duration) -> Self {
+        assert!(
+            !refill_interval.is_zero(),
+            "refill interval must be positive"
+        );
+        Self {
+            capacity,
+            refill_interval,
+        }
+    }
+
+    #[must_use]
+    pub const fn capacity(self) -> NonZeroU32 {
+        self.capacity
+    }
+
+    #[must_use]
+    pub const fn refill_interval(self) -> Duration {
+        self.refill_interval
+    }
 }
 
 /// A pure provider request and parser contract.
 pub trait Provider: Send + Sync {
     fn kind(&self) -> SourceKind;
+    fn rate_policy(&self) -> RatePolicy;
     fn search_request(&self, query: &SearchQuery, cursor: Option<&str>) -> HttpRequest;
     fn parse_search(&self, bytes: &[u8]) -> Result<ProviderSearchPage, ProviderError>;
     fn parse_artwork(
@@ -192,6 +262,8 @@ impl ProviderSet {
 mod tests {
     #![allow(clippy::expect_used)]
 
+    use reqwest::header::{AUTHORIZATION, HeaderValue, USER_AGENT};
+
     use crate::core::{Culture, QueryText, SourceSet};
 
     use super::*;
@@ -211,9 +283,40 @@ mod tests {
     #[test]
     fn http_request_keeps_one_canonical_get_url() {
         let url = Url::parse("https://example.test/search?q=mask").expect("URL is valid");
-        let request = HttpRequest::get(url.clone());
+        let request = HttpRequest::get(url.clone())
+            .with_header(USER_AGENT, HeaderValue::from_static("cceroby-test/1.0"));
         assert_eq!(request.url(), &url);
         assert_eq!(request.canonical(), url.as_str());
+        assert_eq!(
+            request.headers().get(USER_AGENT),
+            Some(&HeaderValue::from_static("cceroby-test/1.0"))
+        );
+    }
+
+    #[test]
+    fn http_request_diagnostics_hide_query_and_header_secrets() {
+        let request = HttpRequest::get(
+            Url::parse("https://example.test/search?api_key=query-secret").expect("URL is valid"),
+        )
+        .with_header(AUTHORIZATION, HeaderValue::from_static("header-secret"));
+        let debug = format!("{request:?}");
+        assert!(debug.contains("example.test"));
+        assert!(debug.contains("authorization"));
+        assert!(!debug.contains("query-secret"));
+        assert!(!debug.contains("header-secret"));
+    }
+
+    #[test]
+    fn token_bucket_policy_keeps_nonzero_capacity_and_interval() {
+        let policy = TokenBucketPolicy::new(NonZeroU32::MIN, Duration::from_millis(250));
+        assert_eq!(policy.capacity(), NonZeroU32::MIN);
+        assert_eq!(policy.refill_interval(), Duration::from_millis(250));
+    }
+
+    #[test]
+    #[should_panic(expected = "refill interval must be positive")]
+    fn token_bucket_policy_rejects_a_zero_interval() {
+        let _ = TokenBucketPolicy::new(NonZeroU32::MIN, Duration::ZERO);
     }
 
     #[test]

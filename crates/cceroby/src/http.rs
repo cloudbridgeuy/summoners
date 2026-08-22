@@ -28,6 +28,7 @@ impl HttpClient {
         let response = self
             .client
             .get(request.url().clone())
+            .headers(request.headers().clone())
             .timeout(self.timeout)
             .send()
             .await
@@ -67,7 +68,9 @@ mod tests {
     use std::convert::Infallible;
 
     use axum::Router;
+    use axum::http::HeaderMap;
     use axum::routing::get;
+    use reqwest::header::{HeaderName, HeaderValue};
     use tokio::net::TcpListener;
     use url::Url;
 
@@ -105,6 +108,43 @@ mod tests {
         assert_eq!(
             client.execute(&request).await,
             Err(HttpError::RequestFailed)
+        );
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn request_applies_provider_owned_headers() {
+        async fn read_provider_header(headers: HeaderMap) -> String {
+            headers
+                .get("x-provider-test")
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or("missing")
+                .to_owned()
+        }
+
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("mock listener binds");
+        let address = listener.local_addr().expect("mock address exists");
+        let task = tokio::spawn(async move {
+            axum::serve(
+                listener,
+                Router::new().route("/header", get(read_provider_header)),
+            )
+            .await
+            .expect("mock server runs");
+        });
+        let request = HttpRequest::get(
+            Url::parse(&format!("http://{address}/header")).expect("mock URL is valid"),
+        )
+        .with_header(
+            HeaderName::from_static("x-provider-test"),
+            HeaderValue::from_static("provider-owned"),
+        );
+
+        assert_eq!(
+            HttpClient::new().execute(&request).await,
+            Ok(b"provider-owned".to_vec())
         );
         task.abort();
     }

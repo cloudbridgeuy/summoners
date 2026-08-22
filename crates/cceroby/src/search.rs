@@ -122,7 +122,7 @@ impl SearchServices {
         {
             return Ok(bytes);
         }
-        self.rate_limiters.acquire(provider.kind()).await;
+        self.rate_limiters.acquire(provider).await;
         let bytes = self.http.execute(request).await.map_err(|_| ())?;
         let _ = self
             .cache
@@ -209,6 +209,10 @@ mod tests {
     impl Provider for ObjectProvider {
         fn kind(&self) -> SourceKind {
             SourceKind::ClevelandMuseum
+        }
+
+        fn rate_policy(&self) -> crate::providers::RatePolicy {
+            crate::providers::RatePolicy::Unlimited
         }
 
         fn search_request(&self, _query: &SearchQuery, _cursor: Option<&str>) -> HttpRequest {

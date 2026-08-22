@@ -1,30 +1,40 @@
 //! Per-provider token buckets with pure acquisition decisions.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use tokio::sync::Mutex;
 
 use crate::core::SourceKind;
+use crate::providers::{Provider, RatePolicy, TokenBucketPolicy};
 
 /// Shared rate-limit state for each available provider.
 #[derive(Debug, Clone)]
 pub struct RateLimiters {
-    aic: Arc<TokenBucket>,
+    buckets: Arc<Mutex<HashMap<SourceKind, Arc<TokenBucket>>>>,
 }
 
 impl RateLimiters {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            aic: Arc::new(TokenBucket::new(1.0, 1.0)),
+            buckets: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
-    pub async fn acquire(&self, source: SourceKind) {
-        if source == SourceKind::ArtInstituteChicago {
-            self.aic.acquire().await;
-        }
+    pub async fn acquire(&self, provider: &dyn Provider) {
+        let RatePolicy::TokenBucket(policy) = provider.rate_policy() else {
+            return;
+        };
+        let bucket = {
+            let mut buckets = self.buckets.lock().await;
+            buckets
+                .entry(provider.kind())
+                .or_insert_with(|| Arc::new(TokenBucket::new(policy)))
+                .clone()
+        };
+        bucket.acquire().await;
     }
 }
 
@@ -42,10 +52,11 @@ struct TokenBucket {
 }
 
 impl TokenBucket {
-    fn new(capacity: f64, tokens_per_second: f64) -> Self {
+    fn new(policy: TokenBucketPolicy) -> Self {
+        let capacity = f64::from(policy.capacity().get());
         Self {
             capacity,
-            tokens_per_second,
+            tokens_per_second: 1.0 / policy.refill_interval().as_secs_f64(),
             state: Mutex::new(BucketState {
                 available: capacity,
                 updated_at: Instant::now(),
@@ -122,7 +133,49 @@ fn decide_acquire(
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::expect_used)]
+
+    use std::num::NonZeroU32;
+
+    use url::Url;
+
+    use crate::core::{Artwork, SearchQuery};
+    use crate::providers::{
+        ArtworkDropReason, HttpRequest, ProviderCandidate, ProviderError, ProviderSearchPage,
+    };
+
     use super::*;
+
+    struct TestProvider {
+        source: SourceKind,
+        policy: RatePolicy,
+    }
+
+    impl Provider for TestProvider {
+        fn kind(&self) -> SourceKind {
+            self.source
+        }
+
+        fn rate_policy(&self) -> RatePolicy {
+            self.policy
+        }
+
+        fn search_request(&self, _query: &SearchQuery, _cursor: Option<&str>) -> HttpRequest {
+            HttpRequest::get(Url::parse("https://example.test/search").expect("URL is valid"))
+        }
+
+        fn parse_search(&self, _bytes: &[u8]) -> Result<ProviderSearchPage, ProviderError> {
+            Err(ProviderError::MalformedResponse)
+        }
+
+        fn parse_artwork(
+            &self,
+            _candidate: &ProviderCandidate,
+            _object_bytes: Option<&[u8]>,
+        ) -> Result<Artwork, ArtworkDropReason> {
+            Err(ArtworkDropReason::MissingSourceId)
+        }
+    }
 
     #[test]
     fn available_token_is_granted_and_consumed() {
@@ -159,16 +212,30 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn non_aic_sources_do_not_wait() {
-        RateLimiters::new()
-            .acquire(SourceKind::ClevelandMuseum)
-            .await;
+    async fn unlimited_provider_does_not_create_a_bucket() {
+        let limiters = RateLimiters::new();
+        let provider = TestProvider {
+            source: SourceKind::WikimediaCommons,
+            policy: RatePolicy::Unlimited,
+        };
+        limiters.acquire(&provider).await;
+        assert!(limiters.buckets.lock().await.is_empty());
     }
 
     #[tokio::test]
-    async fn aic_bucket_grants_its_initial_token() {
-        RateLimiters::new()
-            .acquire(SourceKind::ArtInstituteChicago)
-            .await;
+    async fn provider_policy_creates_and_reuses_a_bucket_by_source() {
+        let limiters = RateLimiters::new();
+        let provider = TestProvider {
+            source: SourceKind::ArtInstituteChicago,
+            policy: RatePolicy::TokenBucket(TokenBucketPolicy::new(
+                NonZeroU32::new(2).expect("capacity is non-zero"),
+                Duration::from_millis(1),
+            )),
+        };
+        limiters.acquire(&provider).await;
+        limiters.acquire(&provider).await;
+        let buckets = limiters.buckets.lock().await;
+        assert_eq!(buckets.len(), 1);
+        assert!(buckets.contains_key(&SourceKind::ArtInstituteChicago));
     }
 }

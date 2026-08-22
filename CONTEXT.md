@@ -27,7 +27,8 @@ The Art Institute of Chicago search keeps only records that the response marks
 as public domain, and it shows normalized result cards. Metadata responses stay
 in the user cache for 24 hours. Provider slots that do not have a connection
 return an unavailable notice, and a connected-provider failure returns one
-failure notice without stopping the page.
+failure notice without stopping the page. A corrupt metadata cache entry
+degrades to a cache miss instead of stopping the search.
 
 #### Scenario: A valid local search starts
 
@@ -57,6 +58,14 @@ failure notice without stopping the page.
 - **WHEN** the user repeats the same Art Institute of Chicago search less than
   24 hours after a successful metadata response
 - **THEN** the page uses the cached metadata without a second provider request
+
+#### Scenario: A metadata cache entry is corrupt
+
+- **WHEN** a metadata cache entry is malformed or has a time that the system
+  cannot represent
+- **THEN** the search treats the entry as a cache miss and removes it on a
+  best-effort basis
+- **AND** the provider request can continue
 
 #### Scenario: A connected provider fails
 
