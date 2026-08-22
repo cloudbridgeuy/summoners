@@ -10,9 +10,10 @@ clock, and uses no random source. Every entry point takes one state value and
 one action, and returns a new state value; it never mutates anything the caller
 still holds. A strict authored-card boundary parses caller-held Set bytes into
 core definitions without file I/O. A separate CLI serves a local museum image
-search form. Its provider connections are not available yet. There is no game
-client or runtime file loader yet. This file is an index of stable product
-language, not an API contract.
+search form. It connects to the Art Institute of Chicago; the other four
+provider connections are not available yet. There is no game client or runtime
+file loader yet. This file is an index of stable product language, not an API
+contract.
 
 ## Behavior
 
@@ -22,7 +23,11 @@ The `cceroby search` command parses a non-empty query, one or more of five
 museum sources, an optional culture or region, an output directory, and local
 server options before it starts a loopback-only server on an operating-system
 assigned port. The local page keeps valid query and filter values in its form.
-Provider slots that do not have a connection return an unavailable notice.
+The Art Institute of Chicago search keeps only records that the response marks
+as public domain, and it shows normalized result cards. Metadata responses stay
+in the user cache for 24 hours. Provider slots that do not have a connection
+return an unavailable notice, and a connected-provider failure returns one
+failure notice without stopping the page.
 
 #### Scenario: A valid local search starts
 
@@ -31,12 +36,33 @@ Provider slots that do not have a connection return an unavailable notice.
 - **THEN** the CLI reports a `127.0.0.1` URL with an assigned port
 - **AND** the root page contains the initial query, sources, culture or region,
   and search control
+- **AND** the page contains the initial search results and provider notices
+
+#### Scenario: An Art Institute search succeeds
+
+- **WHEN** the Art Institute of Chicago returns matching public-domain records
+- **THEN** the page shows the loaded result count
+- **AND** each accepted record has a placeholder image area, title,
+  institution, and public-domain license badge
+- **AND** a record that is not public domain does not appear
 
 #### Scenario: Search form values change
 
 - **WHEN** a user submits a non-empty query and source set from the local page
 - **THEN** the page keeps the submitted query and filters
 - **AND** each selected source without a connection has an unavailable notice
+
+#### Scenario: A metadata response is still fresh
+
+- **WHEN** the user repeats the same Art Institute of Chicago search less than
+  24 hours after a successful metadata response
+- **THEN** the page uses the cached metadata without a second provider request
+
+#### Scenario: A connected provider fails
+
+- **WHEN** a selected connected provider cannot complete its search
+- **THEN** the page shows one failure notice for that provider
+- **AND** the page remains available with an empty result set
 
 #### Scenario: Command input is invalid
 

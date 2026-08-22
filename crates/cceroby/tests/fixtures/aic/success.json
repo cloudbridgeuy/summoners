@@ -1,0 +1,39 @@
+{
+  "pagination": { "current_page": 1, "total_pages": 2 },
+  "data": [
+    {
+      "id": 1001,
+      "title": "Ceremonial Mask",
+      "artist_display": "Maker unknown",
+      "date_display": "1900-1920",
+      "place_of_origin": "Côte d’Ivoire",
+      "image_id": "image-one",
+      "is_public_domain": true,
+      "credit_line": "Gift of Example",
+      "copyright_notice": null
+    },
+    {
+      "id": 1002,
+      "title": "Dance Mask",
+      "artist_display": null,
+      "date_display": null,
+      "place_of_origin": null,
+      "image_id": "image-two",
+      "is_public_domain": true,
+      "credit_line": null,
+      "copyright_notice": null
+    },
+    {
+      "id": 1003,
+      "title": "Restricted Mask",
+      "artist_display": null,
+      "date_display": null,
+      "place_of_origin": null,
+      "image_id": "image-three",
+      "is_public_domain": false,
+      "credit_line": null,
+      "copyright_notice": "All rights reserved"
+    }
+  ],
+  "config": { "iiif_url": "https://www.artic.edu/iiif/2" }
+}

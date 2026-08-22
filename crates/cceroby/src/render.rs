@@ -1,7 +1,6 @@
 //! Pure complete-page HTML rendering.
 
-use crate::core::{SearchView, SourceKind};
-use crate::providers::ProviderNotice;
+use crate::core::{ProviderNotice, SearchView, SourceKind};
 
 /// Render a complete local search page from read-only page data.
 #[must_use]
@@ -36,6 +35,10 @@ pub fn render_search_page(view: SearchView<'_>) -> String {
                 "<li><strong>{}</strong> is not available in this build.</li>",
                 source.label()
             ),
+            ProviderNotice::Failed { source } => format!(
+                "<li><strong>{}</strong> could not complete the search.</li>",
+                source.label()
+            ),
         })
         .collect::<Vec<_>>()
         .join("\n");
@@ -44,6 +47,24 @@ pub fn render_search_page(view: SearchView<'_>) -> String {
     } else {
         format!("<section aria-live=\"polite\"><h2>Source status</h2><ul>{notices}</ul></section>")
     };
+    let cards = view
+        .artworks
+        .iter()
+        .map(|artwork| {
+            format!(
+                concat!(
+                    "<article class=\"artwork-card\">",
+                    "<div class=\"image-placeholder\" aria-label=\"Image preview is not loaded\"></div>",
+                    "<h3>{}</h3><p>{}</p><span class=\"license-badge\">{}</span>",
+                    "</article>"
+                ),
+                escape_html(&artwork.title),
+                escape_html(&artwork.institution),
+                artwork.license.label()
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
 
     format!(
         r#"<!doctype html>
@@ -59,6 +80,11 @@ pub fn render_search_page(view: SearchView<'_>) -> String {
     fieldset {{ display: grid; gap: .5rem; border: 0; padding: 0; }}
     input[type="text"] {{ box-sizing: border-box; width: 100%; padding: .7rem; }}
     button {{ width: max-content; padding: .7rem 1.2rem; font-weight: 700; }}
+    .artwork-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr)); gap: 1rem; }}
+    .artwork-card {{ display: grid; gap: .6rem; padding: .9rem; border: 1px solid #8886; border-radius: .6rem; }}
+    .artwork-card h3, .artwork-card p {{ margin: 0; }}
+    .image-placeholder {{ min-height: 9rem; border-radius: .4rem; background: #8883; }}
+    .license-badge {{ width: max-content; padding: .2rem .5rem; border: 1px solid #8888; border-radius: 99rem; font-size: .85rem; }}
   </style>
 </head>
 <body>
@@ -71,9 +97,15 @@ pub fn render_search_page(view: SearchView<'_>) -> String {
       <button type="submit">Search</button>
     </form>
     {notice_section}
+    <section aria-live="polite">
+      <h2>Results</h2>
+      <p>Loaded {} results.</p>
+      <div class="artwork-grid">{cards}</div>
+    </section>
   </main>
 </body>
-</html>"#
+</html>"#,
+        view.artworks.len()
     )
 }
 
@@ -100,8 +132,10 @@ fn escape_html(raw: &str) -> String {
 mod tests {
     #![allow(clippy::expect_used)]
 
-    use crate::core::{Culture, QueryText, SearchQuery, SourceSet};
-    use crate::providers::ProviderRegistry;
+    use crate::core::{
+        Artwork, CommercialLicense, Culture, ImageUrls, ProviderOutcome, ProviderPage, QueryText,
+        SearchQuery, SourceSet, merge_page,
+    };
 
     use super::*;
 
@@ -111,6 +145,26 @@ mod tests {
             sources: SourceSet::parse(&[SourceKind::MetropolitanMuseum])
                 .expect("sources are valid"),
             culture: Culture::parse(Some("Japan".into())),
+        }
+    }
+
+    fn artwork() -> Artwork {
+        Artwork {
+            source: SourceKind::ArtInstituteChicago,
+            source_id: "1".into(),
+            title: "Mask <One>".into(),
+            creator: None,
+            date: None,
+            culture: None,
+            license: CommercialLicense::PublicDomain,
+            image_urls: ImageUrls {
+                thumbnail: "https://example.test/thumb.jpg".into(),
+                display: "https://example.test/display.jpg".into(),
+                original: None,
+            },
+            institution: "AIC & Friends".into(),
+            provider_credit: None,
+            object_url: "https://example.test/object".into(),
         }
     }
 
@@ -135,9 +189,42 @@ mod tests {
     #[test]
     fn renderer_escapes_query_and_shows_typed_provider_notices() {
         let mut session = crate::core::SearchSession::new(query("old"));
-        session.reset_if_changed(query("<mask>"), &ProviderRegistry::new());
+        session.begin_search(query("<mask>"));
+        merge_page(
+            &mut session,
+            ProviderOutcome::Unavailable {
+                source: SourceKind::MetropolitanMuseum,
+            },
+        );
+        merge_page(
+            &mut session,
+            ProviderOutcome::Failed {
+                source: SourceKind::ArtInstituteChicago,
+            },
+        );
         let html = render_search_page(session.view());
         assert!(html.contains("value=\"&lt;mask&gt;\""));
         assert!(html.contains("The Met</strong> is not available"));
+        assert!(html.contains("Art Institute of Chicago</strong> could not complete"));
+    }
+
+    #[test]
+    fn renderer_shows_loaded_count_and_placeholder_cards() {
+        let mut session = crate::core::SearchSession::new(query("mask"));
+        merge_page(
+            &mut session,
+            ProviderOutcome::Success(ProviderPage {
+                source: SourceKind::ArtInstituteChicago,
+                artworks: vec![artwork()],
+                next_cursor: None,
+            }),
+        );
+        let html = render_search_page(session.view());
+        assert!(html.contains("Loaded 1 results."));
+        assert!(html.contains("class=\"artwork-grid\""));
+        assert!(html.contains("class=\"image-placeholder\""));
+        assert!(html.contains("Mask &lt;One&gt;"));
+        assert!(html.contains("AIC &amp; Friends"));
+        assert!(html.contains("class=\"license-badge\">Public domain"));
     }
 }
