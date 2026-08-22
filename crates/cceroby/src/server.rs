@@ -1,18 +1,21 @@
 //! HTTP and shared-state shell for the local search page.
 
+use std::net::SocketAddr;
 use std::sync::Arc;
 
 use axum::Router;
+use axum::body::Bytes;
 use axum::extract::{RawQuery, State};
-use axum::http::{StatusCode, header};
+use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{Html, IntoResponse, Response};
-use axum::routing::get;
+use axum::routing::{get, post};
 use thiserror::Error;
 use tokio::net::TcpListener;
 use tokio::sync::{Mutex, RwLock, broadcast};
 
 use crate::artwork::{ArtworkKey, ArtworkKeyError, format_attribution};
-use crate::core::{SearchParams, SearchQuery, SearchSession, merge_page};
+use crate::core::{OutputDirectory, SearchParams, SearchQuery, SearchSession, merge_page};
+use crate::download::{DownloadError, DownloadJob, DownloadNotice, DownloadRequest, Slug};
 use crate::providers::DisplayImageSize;
 use crate::render::{DetailView, render_detail_page, render_search_page};
 use crate::search::{ArtworkLoadError, SearchServices};
@@ -22,8 +25,24 @@ use crate::search::{ArtworkLoadError, SearchServices};
 pub struct AppState {
     session: Arc<RwLock<SearchSession>>,
     services: SearchServices,
+    output: OutputDirectory,
+    authority: ListenerAuthority,
     search_gate: Arc<Mutex<()>>,
     shutdown: broadcast::Sender<()>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ListenerAuthority {
+    host: String,
+    origin: String,
+}
+
+impl ListenerAuthority {
+    fn from_address(address: SocketAddr) -> Self {
+        let host = address.to_string();
+        let origin = format!("http://{host}");
+        Self { host, origin }
+    }
 }
 
 impl AppState {
@@ -31,11 +50,15 @@ impl AppState {
     pub fn new(
         session: SearchSession,
         services: SearchServices,
+        output: OutputDirectory,
+        authority: SocketAddr,
         shutdown: broadcast::Sender<()>,
     ) -> Self {
         Self {
             session: Arc::new(RwLock::new(session)),
             services,
+            output,
+            authority: ListenerAuthority::from_address(authority),
             search_gate: Arc::new(Mutex::new(())),
             shutdown,
         }
@@ -54,6 +77,7 @@ pub fn router(state: AppState) -> Router {
         .route("/thumb", get(thumbnail))
         .route("/preview", get(preview))
         .route("/detail", get(detail))
+        .route("/download", post(download))
         .with_state(state)
 }
 
@@ -137,15 +161,85 @@ async fn detail(State(state): State<AppState>, RawQuery(raw_query): RawQuery) ->
     match state.services.load_artwork(&key).await {
         Ok(artwork) => {
             let attribution = format_attribution(&artwork);
+            let slug = Slug::from_title(&artwork.title);
             Html(render_detail_page(DetailView {
                 artwork: &artwork,
                 key: &key,
                 attribution: &attribution,
+                slug: slug.as_str(),
+                tags: "",
+                notice: None,
             }))
             .into_response()
         }
         Err(error) => artwork_load_response(error),
     }
+}
+
+async fn download(State(state): State<AppState>, headers: HeaderMap, body: Bytes) -> Response {
+    if !is_same_origin(&state.authority, &headers) {
+        return (StatusCode::FORBIDDEN, DownloadError::Validation.to_string()).into_response();
+    }
+    if headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        != Some("application/x-www-form-urlencoded")
+    {
+        return (
+            StatusCode::BAD_REQUEST,
+            DownloadError::Validation.to_string(),
+        )
+            .into_response();
+    };
+    let Ok(request) = DownloadRequest::parse_urlencoded(&body) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            DownloadError::Validation.to_string(),
+        )
+            .into_response();
+    };
+    let artwork = match state.services.load_artwork(&request.key).await {
+        Ok(artwork) => artwork,
+        Err(error) => return artwork_load_response(error),
+    };
+    let attribution = format_attribution(&artwork);
+    let result = state
+        .services
+        .download(DownloadJob {
+            artwork: &artwork,
+            attribution: &attribution,
+            slug: &request.slug,
+            tags: &request.tags,
+            output: state.output.as_path(),
+        })
+        .await;
+    let notice = DownloadNotice::from_result(result);
+    Html(render_detail_page(DetailView {
+        artwork: &artwork,
+        key: &request.key,
+        attribution: &attribution,
+        slug: request.slug.as_str(),
+        tags: &request.tags.as_slice().join(", "),
+        notice: Some(&notice),
+    }))
+    .into_response()
+}
+
+#[must_use]
+fn is_same_origin(authority: &ListenerAuthority, headers: &HeaderMap) -> bool {
+    let Some(host) = headers
+        .get(header::HOST)
+        .and_then(|value| value.to_str().ok())
+    else {
+        return false;
+    };
+    let Some(origin) = headers
+        .get(header::ORIGIN)
+        .and_then(|value| value.to_str().ok())
+    else {
+        return false;
+    };
+    host == authority.host && origin == authority.origin
 }
 
 fn parse_artwork_query(raw_query: Option<&str>) -> Result<ArtworkKey, ArtworkRouteError> {
@@ -270,6 +364,7 @@ mod tests {
         requests: Arc<AtomicUsize>,
         task: JoinHandle<()>,
         _cache: TempDir,
+        output: TempDir,
     }
 
     impl Drop for MockHarness {
@@ -301,6 +396,21 @@ mod tests {
         vec![0xff, 0xd8, 0x01, 0xff, 0xd9]
     }
 
+    async fn counted_original(State(requests): State<Arc<AtomicUsize>>) -> Vec<u8> {
+        requests.fetch_add(1, Ordering::SeqCst);
+        include_str!("../tests/fixtures/images/native-jpeg.hex")
+            .trim()
+            .as_bytes()
+            .chunks_exact(2)
+            .map(|pair| {
+                std::str::from_utf8(pair)
+                    .ok()
+                    .and_then(|text| u8::from_str_radix(text, 16).ok())
+                    .unwrap_or_default()
+            })
+            .collect()
+    }
+
     async fn mock_harness() -> MockHarness {
         let requests = Arc::new(AtomicUsize::new(0));
         let listener = TcpListener::bind("127.0.0.1:0")
@@ -321,6 +431,10 @@ mod tests {
                         "/iiif/2/image-one/full/843,/0/default.jpg",
                         get(counted_image),
                     )
+                    .route(
+                        "/iiif/2/image-one/full/full/0/default.jpg",
+                        get(counted_original),
+                    )
                     .with_state(requests.clone()),
             );
         let task = tokio::spawn(async move {
@@ -332,6 +446,7 @@ mod tests {
             culture: Culture::parse(None),
         };
         let cache = tempfile::tempdir().expect("temporary cache exists");
+        let output = tempfile::tempdir().expect("temporary output exists");
         let endpoint =
             Url::parse(&format!("{base}/api/v1/artworks/search")).expect("mock endpoint is valid");
         let mut session = SearchSession::new(query);
@@ -368,6 +483,8 @@ mod tests {
                 HttpClient::new(),
                 RateLimiters::new(),
             ),
+            OutputDirectory::from_verified_path(output.path().to_path_buf()),
+            SocketAddr::from(([127, 0, 0, 1], 45_123)),
             shutdown,
         );
         MockHarness {
@@ -375,6 +492,7 @@ mod tests {
             requests,
             task,
             _cache: cache,
+            output,
         }
     }
 
@@ -393,6 +511,8 @@ mod tests {
                 HttpClient::new(),
                 RateLimiters::new(),
             ),
+            OutputDirectory::from_verified_path(std::env::temp_dir()),
+            SocketAddr::from(([127, 0, 0, 1], 45_123)),
             shutdown,
         )
     }
@@ -704,4 +824,7 @@ mod tests {
             .expect("request succeeds");
         assert_eq!(unavailable.status(), StatusCode::NOT_FOUND);
     }
+
+    #[path = "download_tests.rs"]
+    mod download_tests;
 }

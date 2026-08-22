@@ -2,6 +2,7 @@
 
 use crate::artwork::ArtworkKey;
 use crate::core::{Artwork, ProviderNotice, SearchView, SourceKind};
+use crate::download::DownloadNotice;
 
 /// Trusted data rendered on the artwork detail page.
 ///
@@ -11,6 +12,9 @@ pub struct DetailView<'a> {
     pub artwork: &'a Artwork,
     pub key: &'a ArtworkKey,
     pub attribution: &'a str,
+    pub slug: &'a str,
+    pub tags: &'a str,
+    pub notice: Option<&'a DownloadNotice>,
 }
 
 /// Render a complete local search page from read-only page data.
@@ -144,6 +148,13 @@ pub fn render_detail_page(view: DetailView<'_>) -> String {
     .join("\n");
     let license_url = escape_html(artwork.license.url());
     let object_url = escape_html(&artwork.object_url);
+    let notice = view.notice.map_or_else(String::new, |notice| {
+        let role = if notice.is_error() { "alert" } else { "status" };
+        format!(
+            "<p class=\"download-notice\" role=\"{role}\">{}</p>",
+            escape_html(&notice.message())
+        )
+    });
 
     format!(
         r#"<!doctype html>
@@ -161,6 +172,10 @@ pub fn render_detail_page(view: DetailView<'_>) -> String {
     dl div {{ display: grid; grid-template-columns: minmax(8rem, 12rem) 1fr; gap: .75rem; }}
     dt {{ font-weight: 700; }} dd {{ margin: 0; }}
     .attribution {{ padding: 1rem; border: 1px solid #8886; border-radius: .6rem; }}
+    .download-form {{ display: grid; gap: .8rem; padding: 1rem; border: 1px solid #8886; border-radius: .6rem; }}
+    .download-form input, .download-form textarea {{ box-sizing: border-box; width: 100%; padding: .7rem; }}
+    .download-form textarea {{ min-height: 7rem; }}
+    .download-notice {{ padding: .8rem; border: 1px solid #8888; border-radius: .5rem; }}
   </style>
 </head>
 <body>
@@ -176,14 +191,29 @@ pub fn render_detail_page(view: DetailView<'_>) -> String {
       <div><dt>Source object</dt><dd><a href="{object_url}">{object_url}</a></dd></div>
     </dl>
     <section><h2>Ready-to-print attribution</h2><p class="attribution">{attribution}</p></section>
+    <section>
+      <h2>Download JPEG</h2>
+      {notice}
+      <form class="download-form" action="/download" method="post">
+        <input name="source" type="hidden" value="{source}">
+        <input name="id" type="hidden" value="{form_id}">
+        <label>File name <input name="slug" type="text" required value="{slug}"></label>
+        <label>Tags <textarea name="tags" placeholder="Separate tags with commas or new lines">{tags}</textarea></label>
+        <button type="submit">Download</button>
+      </form>
+    </section>
   </main>
 </body>
 </html>"#,
         title = escape_html(&artwork.title),
         institution = escape_html(&artwork.institution),
         source_id = escape_html(&artwork.source_id),
+        form_id = escape_html(view.key.id().as_str()),
         license = artwork.license.label(),
         attribution = escape_html(view.attribution),
+        source = artwork.source.key(),
+        slug = escape_html(view.slug),
+        tags = escape_html(view.tags),
     )
 }
 
@@ -337,6 +367,9 @@ mod tests {
             artwork: &artwork,
             key: &key,
             attribution: &attribution,
+            slug: "mask-one",
+            tags: "",
+            notice: None,
         });
 
         assert!(html.contains("href=\"/\">Back to search results"));
@@ -367,6 +400,9 @@ mod tests {
             artwork: &artwork,
             key: &key,
             attribution: &future_xmp_value,
+            slug: "mask-one",
+            tags: "",
+            notice: None,
         });
         assert!(html.contains(&format!("<p class=\"attribution\">{future_xmp_value}</p>")));
     }
@@ -383,9 +419,40 @@ mod tests {
             artwork: &artwork,
             key: &key,
             attribution: &attribution,
+            slug: "mask-one",
+            tags: "",
+            notice: None,
         });
         assert!(!html.contains("<dt>Creator</dt>"));
         assert!(!html.contains("<dt>Date</dt>"));
         assert!(!html.contains("<dt>Culture or region</dt>"));
+    }
+
+    #[test]
+    fn detail_download_form_exposes_only_identity_slug_tags_and_a_typed_notice() {
+        let artwork = artwork();
+        let key = ArtworkKey::try_from_parts("aic", "1001").expect("key is valid");
+        let attribution = format_attribution(&artwork);
+        let notice = DownloadNotice::Replaced {
+            path: "assets/mask.jpg".into(),
+        };
+        let html = render_detail_page(DetailView {
+            artwork: &artwork,
+            key: &key,
+            attribution: &attribution,
+            slug: "mask&lt;hostile",
+            tags: "ritual & blue",
+            notice: Some(&notice),
+        });
+        for field in ["source", "id", "slug", "tags"] {
+            assert!(html.contains(&format!("name=\"{field}\"")));
+        }
+        for forbidden in ["url", "license", "attribution", "output_path"] {
+            assert!(!html.contains(&format!("name=\"{forbidden}\"")));
+        }
+        assert!(html.contains(">Download</button>"));
+        assert!(html.contains("Replaced assets/mask.jpg."));
+        assert!(html.contains("mask&amp;lt;hostile"));
+        assert!(html.contains("ritual &amp; blue"));
     }
 }

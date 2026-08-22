@@ -1,6 +1,7 @@
 //! Deterministic provider, cache, and page integration evidence.
 #![deny(clippy::unwrap_used, clippy::expect_used)]
 
+use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -10,8 +11,12 @@ use axum::extract::State;
 use axum::http::header::USER_AGENT;
 use axum::http::{HeaderMap, Request, StatusCode};
 use axum::routing::get;
+use cceroby::app::SearchArgs;
 use cceroby::cache::Cache;
-use cceroby::core::{Culture, QueryText, SearchQuery, SearchSession, SourceKind, SourceSet};
+use cceroby::core::{
+    Culture, OutputDirectory, QueryText, SearchQuery, SearchSeed, SearchSession, SourceKind,
+    SourceSet,
+};
 use cceroby::http::HttpClient;
 use cceroby::providers::ProviderSet;
 use cceroby::rate_limit::RateLimiters;
@@ -25,6 +30,21 @@ use url::Url;
 
 const SUCCESS: &str = include_str!("fixtures/aic/success.json");
 const AIC_USER_AGENT: &str = "cceroby/0.0.0 (local public-domain artwork search)";
+
+fn output_directory(path: &Path) -> OutputDirectory {
+    let seed = match SearchSeed::try_from(SearchArgs {
+        query: "mask".into(),
+        source: vec![SourceKind::ArtInstituteChicago],
+        culture: None,
+        open: false,
+        out: path.to_path_buf(),
+        serve: false,
+    }) {
+        Ok(seed) => seed,
+        Err(error) => panic!("fixture output directory must be valid: {error}"),
+    };
+    seed.output
+}
 
 fn aic_query() -> SearchQuery {
     let query = match QueryText::parse("mask") {
@@ -132,7 +152,13 @@ async fn first_search_fetches_and_second_search_uses_metadata_cache() {
     let services = services(endpoint, &cache_root);
     let query = aic_query();
     let (shutdown, _) = broadcast::channel(1);
-    let app = router(AppState::new(SearchSession::new(query), services, shutdown));
+    let app = router(AppState::new(
+        SearchSession::new(query),
+        services,
+        output_directory(cache_root.path()),
+        std::net::SocketAddr::from(([127, 0, 0, 1], 45_123)),
+        shutdown,
+    ));
 
     let html = response_html(app.clone(), "/?query=mask&aic=true").await;
     assert_eq!(requests.load(Ordering::SeqCst), 1);
@@ -158,6 +184,8 @@ async fn provider_failure_becomes_one_notice_and_keeps_the_page_alive() {
     let app = router(AppState::new(
         SearchSession::new(aic_query()),
         services(endpoint, &cache_root),
+        output_directory(cache_root.path()),
+        std::net::SocketAddr::from(([127, 0, 0, 1], 45_123)),
         shutdown,
     ));
     let html = response_html(app, "/?query=mask&aic=true").await;

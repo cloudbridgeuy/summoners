@@ -12,8 +12,9 @@ still holds. A strict authored-card boundary parses caller-held Set bytes into
 core definitions without file I/O. A separate CLI serves a local museum image
 search form. It connects to the Art Institute of Chicago; the other four
 provider connections are not available yet. There is no game client or runtime
-file loader yet. This file is an index of stable product language, not an API
-contract.
+file loader yet. Detail pages include a trusted self-contained JPEG download
+path for provider image responses. This file is an index of stable product
+language, not an API contract.
 
 ## Behavior
 
@@ -33,6 +34,12 @@ license, and the ready-to-print attribution. Provider slots that do not have a
 connection return an unavailable notice, and a connected-provider failure
 returns one failure notice without stopping the page. A corrupt metadata or
 thumbnail cache entry degrades to a cache miss instead of stopping the search.
+The detail page accepts an editable safe file name and free-form tags. A
+download requires the Host and Origin to match the exact authority assigned to
+the loopback listener. It strictly parses the complete form before provider I/O
+and reconstructs all policy and remote-request data from the provider, keeps
+native JPEG scan data, converts TIFF input once, embeds attribution and tags as
+standard XMP, and atomically writes one JPEG in the selected output directory.
 
 #### Scenario: A valid local search starts
 
@@ -67,6 +74,51 @@ thumbnail cache entry degrades to a cache miss instead of stopping the search.
   malformed object ID, duplicate field, unrecognized field, or remote URL
 - **THEN** the server rejects the request with a short error
 - **AND** it does not fetch the browser-provided remote URL
+
+#### Scenario: A trusted artwork download succeeds
+
+- **WHEN** the user submits the source, object ID, safe file name, and optional
+  comma- or newline-separated tags from a detail page
+- **THEN** the server reconstructs the artwork, license, exact attribution, and
+  best image request from trusted provider data
+- **AND** the full image request uses the provider rate limit and headers
+  without writing the response to the metadata or thumbnail cache
+- **AND** the server writes `<output>/<file-name>.jpg` with the attribution and
+  ordered, de-duplicated tags in standard XMP
+- **AND** the detail page reports the created path
+
+#### Scenario: A download target exists
+
+- **WHEN** the user downloads the same safe file name again
+- **THEN** a durable same-directory temporary write atomically replaces the
+  existing JPEG
+- **AND** the detail page reports that it replaced the path
+- **AND** no metadata sidecar remains
+- **AND** two concurrent writes for the same new name report one creation and
+  one replacement and leave one complete JPEG
+
+#### Scenario: A downloaded image is JPEG or TIFF
+
+- **WHEN** the provider returns a native JPEG
+- **THEN** XMP embedding preserves its scan data and all non-XMP marker data
+- **WHEN** the provider returns TIFF data
+- **THEN** the server converts it once to JPEG at quality 100 before it uses the
+  same XMP and atomic-write path
+- **WHEN** any metadata or tag contains a code point that XML 1.0 does not
+  permit
+- **THEN** XMP construction returns a typed error before a JPEG is written
+
+#### Scenario: A download form contains untrusted fields
+
+- **WHEN** a download form contains an unknown, duplicate, missing, malformed,
+  path, remote URL, license, or attribution value
+- **THEN** the server rejects the untrusted input or shows a short typed error
+- **AND** browser data cannot select a remote request or output path
+- **WHEN** the form has malformed percent or UTF-8 encoding, or its Host and
+  Origin do not exactly match the authority assigned to the loopback listener
+- **OR WHEN** a hostile Host and Origin match each other but not that assigned
+  authority
+- **THEN** the server rejects it before provider or storage I/O
 
 #### Scenario: A thumbnail is still fresh
 

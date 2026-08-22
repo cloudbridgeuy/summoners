@@ -182,6 +182,10 @@ pub trait Provider: Send + Sync {
         size: DisplayImageSize,
     ) -> Result<DisplayImageRequest, ProviderError>;
 
+    fn best_image_request(&self, _artwork: &Artwork) -> Result<HttpRequest, ProviderError> {
+        Err(ProviderError::InvalidImageRequest)
+    }
+
     fn object_request(&self, _candidate: &ProviderCandidate) -> Option<HttpRequest> {
         None
     }
@@ -329,7 +333,7 @@ mod tests {
 
     use reqwest::header::{AUTHORIZATION, HeaderValue, USER_AGENT};
 
-    use crate::core::{Culture, QueryText, SourceSet};
+    use crate::core::{CommercialLicense, Culture, ImageUrls, QueryText, SourceSet};
 
     use super::*;
 
@@ -343,6 +347,70 @@ mod tests {
 
     fn provider_set() -> ProviderSet {
         ProviderSet::from_env().expect("built-in provider configuration is valid")
+    }
+
+    struct DefaultBestImageProvider;
+
+    impl Provider for DefaultBestImageProvider {
+        fn kind(&self) -> SourceKind {
+            SourceKind::ClevelandMuseum
+        }
+
+        fn rate_policy(&self) -> RatePolicy {
+            RatePolicy::Unlimited
+        }
+
+        fn search_request(&self, _query: &SearchQuery, _cursor: Option<&str>) -> HttpRequest {
+            unreachable!("not used by this direct default-method test")
+        }
+
+        fn parse_search(&self, _bytes: &[u8]) -> Result<ProviderSearchPage, ProviderError> {
+            unreachable!("not used by this direct default-method test")
+        }
+
+        fn parse_artwork(
+            &self,
+            _candidate: &ProviderCandidate,
+            _object_bytes: Option<&[u8]>,
+        ) -> Result<Artwork, ArtworkDropReason> {
+            unreachable!("not used by this direct default-method test")
+        }
+
+        fn artwork_request(&self, _key: &ArtworkKey) -> Result<HttpRequest, ProviderError> {
+            unreachable!("not used by this direct default-method test")
+        }
+
+        fn parse_artwork_response(&self, _bytes: &[u8]) -> Result<Artwork, ProviderError> {
+            unreachable!("not used by this direct default-method test")
+        }
+
+        fn display_image_request(
+            &self,
+            _artwork: &Artwork,
+            _size: DisplayImageSize,
+        ) -> Result<DisplayImageRequest, ProviderError> {
+            unreachable!("not used by this direct default-method test")
+        }
+    }
+
+    fn default_method_artwork() -> Artwork {
+        Artwork {
+            source: SourceKind::ClevelandMuseum,
+            source_id: "1".into(),
+            title: "Mask".into(),
+            creator: None,
+            date: None,
+            culture: None,
+            license: CommercialLicense::PublicDomain,
+            image_urls: ImageUrls {
+                thumbnail: "https://example.test/thumb.jpg".into(),
+                display: "https://example.test/display.jpg".into(),
+                original: Some("https://example.test/original.jpg".into()),
+            },
+            institution: "Cleveland Museum of Art".into(),
+            provider_credit: None,
+            object_url: "https://example.test/art/1".into(),
+        }
     }
 
     #[test]
@@ -408,6 +476,14 @@ mod tests {
             context: None,
         };
         assert_eq!(provider.object_request(&candidate), None);
+    }
+
+    #[test]
+    fn provider_default_best_image_request_is_typed_invalid() {
+        assert_eq!(
+            DefaultBestImageProvider.best_image_request(&default_method_artwork()),
+            Err(ProviderError::InvalidImageRequest)
+        );
     }
 
     #[test]
