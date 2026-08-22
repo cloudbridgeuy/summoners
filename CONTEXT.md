@@ -109,6 +109,39 @@ pool.
 - **THEN** each caller receives the same cached catalog allocation and core
   card-pool allocation
 
+### Requirement: Durable match-start recording
+
+A caller can start a versioned match recording with a `Write` sink, open
+header metadata, exact Set requirements, and a valid initial `GameState`. The
+recorder writes one compact NDJSON `header` record and one `match_created`
+record, and then it flushes the sink before it returns an active handle. A
+write or flush failure returns a typed error and no active handle.
+
+The match-created record contains every semantic state field and a SHA-256
+digest of canonical state JSON. It does not contain loaded card definitions.
+The projection rebuilds the same state with a caller-supplied shared card pool.
+Entity and ability IDs use canonical lowercase, hyphenated UUID text.
+
+#### Scenario: A valid recording starts
+
+- **WHEN** a caller starts a recording with a writable sink and a valid state
+- **THEN** the sink contains exact `header` and `match_created` NDJSON records
+- **AND** the recorder flushes the sink before it returns an active handle
+- **AND** the handle returns the unchanged initial state
+
+#### Scenario: The initial state is rebuilt and verified
+
+- **WHEN** a caller rebuilds the recorded projection with the same shared card
+  pool
+- **THEN** every semantic state field equals the original state
+- **AND** the rebuilt state has the recorded canonical SHA-256 digest
+
+#### Scenario: The initial checkpoint cannot be written
+
+- **WHEN** the sink returns a write or flush failure
+- **THEN** recording start returns the matching typed error and no active
+  handle
+
 ### Requirement: Turn structure and phase order
 
 A turn moves through Upkeep, Main Phase, and Combat, and phases only move

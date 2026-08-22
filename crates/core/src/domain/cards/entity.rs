@@ -17,6 +17,7 @@
 
 use super::{Cost, EffectLeaf, Form, Modifier, SpellTiming, TriggerEvent};
 use crate::domain::ids::ManaType;
+use std::fmt;
 
 /// A core-defined, opaque card or ability identity. The core holds,
 /// compares, and parses an `EntityId`; it never generates one. Minting an id
@@ -81,6 +82,32 @@ impl EntityId {
             *byte = u8::from_str_radix(pair, 16).map_err(|_| malformed())?;
         }
         Ok(EntityId(bytes))
+    }
+}
+
+impl fmt::Display for EntityId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let bytes = self.0;
+        write!(
+            formatter,
+            "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+            bytes[0],
+            bytes[1],
+            bytes[2],
+            bytes[3],
+            bytes[4],
+            bytes[5],
+            bytes[6],
+            bytes[7],
+            bytes[8],
+            bytes[9],
+            bytes[10],
+            bytes[11],
+            bytes[12],
+            bytes[13],
+            bytes[14],
+            bytes[15],
+        )
     }
 }
 
@@ -372,6 +399,18 @@ mod tests {
         let bare = EntityId::parse("0123456789abcdef0123456789abcdef").unwrap();
         let hyphenated = EntityId::parse("01234567-89ab-cdef-0123-456789abcdef").unwrap();
         assert_eq!(bare, hyphenated);
+    }
+
+    #[test]
+    fn entity_id_display_normalizes_bare_input_to_canonical_uuid_text() {
+        let parsed = EntityId::parse("0123456789abcdef0123456789abcdef").unwrap();
+        assert_eq!(parsed.to_string(), "01234567-89ab-cdef-0123-456789abcdef");
+    }
+
+    #[test]
+    fn entity_id_display_normalizes_uppercase_input_to_lowercase_uuid_text() {
+        let parsed = EntityId::parse("01234567-89AB-CDEF-0123-456789ABCDEF").unwrap();
+        assert_eq!(parsed.to_string(), "01234567-89ab-cdef-0123-456789abcdef");
     }
 
     #[test]
