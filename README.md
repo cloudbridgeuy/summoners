@@ -3,15 +3,16 @@
 Home of Summoners, a two-player card game.
 
 This repository contains the deterministic game rules, authored card data, a
-local museum image search shell, and development tools. The search shell does
-not have provider connections yet.
+local museum image search shell, and development tools. The search shell
+connects to the Art Institute of Chicago. Four additional source slots remain
+unavailable.
 
 ## Workspace
 
 - `crates/core`: the dependency-free deterministic rules and state-transition library.
 - `crates/cards`: strict authored Set and Deck loading with built-in content.
-- `crates/cceroby`: local museum image search CLI and form; provider
-  connections are not available yet.
+- `crates/cceroby`: local museum image search CLI and form with public-domain
+  Art Institute of Chicago results and a 24-hour metadata cache.
 - `xtask`: repository lint and Git hook automation.
 
 ## Design inputs

@@ -5,8 +5,11 @@
 #![deny(clippy::unwrap_used, clippy::expect_used)]
 
 pub mod app;
+pub mod cache;
 pub mod core;
+pub mod http;
 pub mod providers;
+pub mod rate_limit;
 pub mod render;
 pub mod search;
 pub mod server;

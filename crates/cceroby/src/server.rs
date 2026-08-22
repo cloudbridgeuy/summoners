@@ -8,26 +8,32 @@ use axum::http::StatusCode;
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::get;
 use tokio::net::TcpListener;
-use tokio::sync::{RwLock, broadcast};
+use tokio::sync::{Mutex, RwLock, broadcast};
 
-use crate::core::{SearchParams, SearchQuery, SearchSession};
-use crate::providers::ProviderRegistry;
+use crate::core::{SearchParams, SearchQuery, SearchSession, merge_page};
 use crate::render::render_search_page;
+use crate::search::SearchServices;
 
 /// Process resources shared by local HTTP handlers.
 #[derive(Debug, Clone)]
 pub struct AppState {
     session: Arc<RwLock<SearchSession>>,
-    providers: ProviderRegistry,
+    services: SearchServices,
+    search_gate: Arc<Mutex<()>>,
     shutdown: broadcast::Sender<()>,
 }
 
 impl AppState {
     #[must_use]
-    pub fn new(session: SearchSession, shutdown: broadcast::Sender<()>) -> Self {
+    pub fn new(
+        session: SearchSession,
+        services: SearchServices,
+        shutdown: broadcast::Sender<()>,
+    ) -> Self {
         Self {
             session: Arc::new(RwLock::new(session)),
-            providers: ProviderRegistry::new(),
+            services,
+            search_gate: Arc::new(Mutex::new(())),
             shutdown,
         }
     }
@@ -72,8 +78,16 @@ async fn index(State(state): State<AppState>, RawQuery(raw_query): RawQuery) -> 
             Ok(query) => query,
             Err(error) => return (StatusCode::BAD_REQUEST, error.to_string()).into_response(),
         };
+        let _search = state.search_gate.lock().await;
+        {
+            let mut session = state.session.write().await;
+            session.begin_search(query.clone());
+        }
+        let outcomes = state.services.search_batch(&query).await;
         let mut session = state.session.write().await;
-        session.reset_if_changed(query, &state.providers);
+        for outcome in outcomes {
+            merge_page(&mut session, outcome);
+        }
     }
 
     let session = state.session.read().await;
@@ -88,7 +102,11 @@ mod tests {
     use axum::http::Request;
     use tower::ServiceExt;
 
+    use crate::cache::Cache;
     use crate::core::{Culture, QueryText, SearchQuery, SourceKind, SourceSet};
+    use crate::http::HttpClient;
+    use crate::providers::ProviderSet;
+    use crate::rate_limit::RateLimiters;
 
     use super::*;
 
@@ -99,7 +117,16 @@ mod tests {
             culture: Culture::parse(None),
         };
         let (shutdown, _) = broadcast::channel(1);
-        AppState::new(SearchSession::new(query), shutdown)
+        AppState::new(
+            SearchSession::new(query),
+            SearchServices::new(
+                ProviderSet::from_env().expect("provider configuration is valid"),
+                Cache::new(std::env::temp_dir().join("cceroby-server-tests")),
+                HttpClient::new(),
+                RateLimiters::new(),
+            ),
+            shutdown,
+        )
     }
 
     #[test]
@@ -151,11 +178,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn root_route_returns_notices_for_an_unchanged_seeded_search() {
+    async fn root_route_returns_notices_for_unavailable_sources() {
         let response = router(state("mask"))
             .oneshot(
                 Request::builder()
-                    .uri("/?query=mask&aic=true&cleveland=true&met=true&smithsonian=true&wikimedia=true")
+                    .uri("/?query=mask&cleveland=true&met=true&smithsonian=true&wikimedia=true")
                     .body(Body::empty())
                     .expect("request is valid"),
             )
@@ -166,7 +193,7 @@ mod tests {
             .await
             .expect("body is readable");
         let html = String::from_utf8(body.to_vec()).expect("body is utf-8");
-        assert_eq!(html.matches("is not available in this build").count(), 5);
+        assert_eq!(html.matches("is not available in this build").count(), 4);
     }
 
     #[tokio::test]
