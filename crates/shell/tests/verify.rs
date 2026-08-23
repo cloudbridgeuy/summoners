@@ -5,14 +5,11 @@ use std::{
     fs,
     path::PathBuf,
     process::{Command, Output},
-    sync::atomic::{AtomicU64, Ordering},
 };
 
-fn golden(name: &str) -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../match-log/tests/goldens")
-        .join(name)
-}
+mod support;
+
+use support::{TemporaryDirectory, golden};
 
 fn run_verify<I, S>(args: I) -> Output
 where
@@ -24,33 +21,6 @@ where
         .args(args)
         .output()
         .expect("the summoners binary runs")
-}
-
-struct TemporaryDirectory {
-    path: PathBuf,
-}
-
-impl TemporaryDirectory {
-    fn new(label: &str) -> Self {
-        static NEXT: AtomicU64 = AtomicU64::new(0);
-        let sequence = NEXT.fetch_add(1, Ordering::Relaxed);
-        let path = std::env::temp_dir().join(format!(
-            "summoners-shell-verify-test-{label}-{}-{sequence}",
-            std::process::id()
-        ));
-        fs::create_dir_all(&path).expect("the temporary directory is created");
-        Self { path }
-    }
-
-    fn join(&self, name: &str) -> PathBuf {
-        self.path.join(name)
-    }
-}
-
-impl Drop for TemporaryDirectory {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.path);
-    }
 }
 
 fn tampered_terminal_empty_deck(directory: &TemporaryDirectory) -> PathBuf {

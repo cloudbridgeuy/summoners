@@ -14,7 +14,7 @@ use summoners_cards::{CardLibrary, built_in_catalog};
 use summoners_shell::cli::{Cli, Command};
 use summoners_shell::error::ShellError;
 use summoners_shell::exit::exit_code;
-use summoners_shell::{report, verify};
+use summoners_shell::{replay, report, verify};
 
 fn main() -> ExitCode {
     let command = Command::from(Cli::parse());
@@ -38,6 +38,14 @@ fn run(command: Command, library: &CardLibrary) -> Result<String, ShellError> {
         Command::Verify { path } => {
             let summary = verify::run_verify(&path, library)?;
             Ok(report::verify_success(&path, &summary))
+        }
+        Command::Replay {
+            from,
+            output,
+            force,
+        } => {
+            let summary = replay::run_replay(&from, &output, force, library)?;
+            Ok(report::replay_success(&from, &output, &summary))
         }
     }
 }

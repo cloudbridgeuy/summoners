@@ -24,18 +24,47 @@ pub enum CliCommand {
         /// Path to the NDJSON transcript to verify.
         expected: PathBuf,
     },
+    /// Replay a transcript's recorded actions into a fresh recording, then
+    /// compare the observed result against it.
+    Replay {
+        /// Path to the NDJSON transcript to replay.
+        #[arg(long = "from")]
+        from: PathBuf,
+        /// Path to write the observed transcript to.
+        #[arg(long = "output")]
+        output: PathBuf,
+        /// Overwrite an existing output path.
+        #[arg(long)]
+        force: bool,
+    },
 }
 
 /// The strict, engine-facing command this process will run.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
-    Verify { path: PathBuf },
+    Verify {
+        path: PathBuf,
+    },
+    Replay {
+        from: PathBuf,
+        output: PathBuf,
+        force: bool,
+    },
 }
 
 impl From<Cli> for Command {
     fn from(cli: Cli) -> Self {
         match cli.command {
             CliCommand::Verify { expected } => Self::Verify { path: expected },
+            CliCommand::Replay {
+                from,
+                output,
+                force,
+            } => Self::Replay {
+                from,
+                output,
+                force,
+            },
         }
     }
 }
@@ -52,6 +81,49 @@ mod tests {
             Command::from(cli),
             Command::Verify {
                 path: PathBuf::from("match.ndjson"),
+            }
+        );
+    }
+
+    #[test]
+    fn replay_maps_its_arguments() {
+        let cli = Cli::parse_from([
+            "summoners",
+            "replay",
+            "--from",
+            "expected.ndjson",
+            "--output",
+            "observed.ndjson",
+            "--force",
+        ]);
+
+        assert_eq!(
+            Command::from(cli),
+            Command::Replay {
+                from: PathBuf::from("expected.ndjson"),
+                output: PathBuf::from("observed.ndjson"),
+                force: true,
+            }
+        );
+    }
+
+    #[test]
+    fn replay_defaults_force_to_false() {
+        let cli = Cli::parse_from([
+            "summoners",
+            "replay",
+            "--from",
+            "expected.ndjson",
+            "--output",
+            "observed.ndjson",
+        ]);
+
+        assert_eq!(
+            Command::from(cli),
+            Command::Replay {
+                from: PathBuf::from("expected.ndjson"),
+                output: PathBuf::from("observed.ndjson"),
+                force: false,
             }
         );
     }
