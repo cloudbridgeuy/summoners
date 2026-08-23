@@ -12,7 +12,7 @@ use crate::domain::actions::GameAction;
 use crate::domain::errors::ActionError;
 use crate::domain::events::GameEvent;
 use crate::domain::ids::PlayerId;
-use crate::domain::state::{GameState, GameStatus, PendingInput};
+use crate::domain::state::{GameOutcome, GameState, GameStatus, LossReason, PendingInput};
 use crate::engine::{destruction, resolution, stack, turn};
 
 /// The result of one accepted action: the next state and the ordered facts
@@ -39,6 +39,10 @@ pub fn apply(state: &GameState, action: &GameAction) -> Result<ActionOutcome, Ac
         GameStatus::Broken(_) => return Err(ActionError::GameBroken),
     }
 
+    if let GameAction::Resign { player } = action {
+        return Ok(resign(state, *player));
+    }
+
     check_actor(state, action.actor())?;
 
     let outcome = dispatch(state, action)?;
@@ -48,6 +52,28 @@ pub fn apply(state: &GameState, action: &GameAction) -> Result<ActionOutcome, Ac
     events.extend(drained_events);
 
     Ok(ActionOutcome { state, events })
+}
+
+/// End the match in `player`'s resignation. This bypasses the actor gate
+/// entirely — either player may resign regardless of `pending`, an open
+/// Priority window, or whose turn it is — and it never reaches `dispatch`
+/// or `resolution::drain`, so the stack, the work queue, and `pending` stay
+/// exactly as they were.
+fn resign(state: &GameState, player: PlayerId) -> ActionOutcome {
+    let mut state = state.clone();
+    let outcome = GameOutcome {
+        winner: player.opponent(),
+        reason: LossReason::Resignation,
+    };
+    state.status = GameStatus::Ended(outcome);
+
+    ActionOutcome {
+        state,
+        events: vec![GameEvent::GameEnded {
+            winner: outcome.winner,
+            reason: outcome.reason,
+        }],
+    }
 }
 
 /// The one player currently allowed to act (decision 15). A window can be
@@ -143,6 +169,9 @@ fn dispatch(state: &GameState, action: &GameAction) -> Result<ActionOutcome, Act
             player,
             prize_index,
         } => destruction::answer_prize(state, *player, *prize_index),
+        // `apply` handles `Resign` before `dispatch` is ever reached; this
+        // arm only keeps the match total.
+        GameAction::Resign { player } => Ok(resign(state, *player)),
     }
 }
 

@@ -80,6 +80,9 @@ pub enum GameAction {
         player: PlayerId,
         prize_index: usize,
     },
+    /// Concede the match outright. Either player may submit this while the
+    /// match is still playing; the opponent wins.
+    Resign { player: PlayerId },
 }
 
 impl GameAction {
@@ -97,7 +100,8 @@ impl GameAction {
             | GameAction::ConvertCoin { player, .. }
             | GameAction::ChooseManaType { player, .. }
             | GameAction::ChoosePromotion { player, .. }
-            | GameAction::ChoosePrize { player, .. } => *player,
+            | GameAction::ChoosePrize { player, .. }
+            | GameAction::Resign { player } => *player,
         }
     }
 }
@@ -165,12 +169,15 @@ mod tests {
                 player: PlayerId::One,
                 prize_index: 0,
             },
+            GameAction::Resign {
+                player: PlayerId::One,
+            },
         ]
     }
 
     #[test]
     fn every_game_action_variant_constructs() {
-        assert_eq!(sample_actions().len(), 12);
+        assert_eq!(sample_actions().len(), 13);
     }
 
     #[test]

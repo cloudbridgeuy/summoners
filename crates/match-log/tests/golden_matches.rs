@@ -12,6 +12,8 @@ use std::{
 use summoners_cards::{BuiltInError, built_in_catalog};
 use summoners_match_log::replay::{ReplayDivergenceKind, ReplayError, verify_transcript};
 
+mod support;
+
 #[derive(Debug)]
 enum GoldenCorpusError {
     Catalog(BuiltInError),
@@ -228,5 +230,19 @@ fn changed_line_names_the_fixture_before_the_typed_difference() {
         error
             .to_string()
             .starts_with("changed-event.ndjson: step 3, event 0, path events.event:")
+    );
+}
+
+#[test]
+fn the_resignation_golden_is_reproducible_from_its_generator() {
+    let checked_in = fs::read(checked_in_corpus().join("resignation.ndjson"))
+        .expect("the checked-in resignation golden is readable");
+
+    let generated = support::resignation_transcript_bytes();
+
+    assert_eq!(
+        generated, checked_in,
+        "support::resignation_transcript_bytes() must reproduce \
+         tests/goldens/resignation.ndjson byte for byte"
     );
 }

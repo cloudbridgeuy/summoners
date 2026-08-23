@@ -748,6 +748,7 @@ const fn reason_name(reason: LossReasonV1) -> &'static str {
         LossReasonV1::ThirdMainLoss => "third_main_loss",
         LossReasonV1::NoPromotionAvailable => "no_promotion_available",
         LossReasonV1::EmptyDeckDraw => "empty_deck_draw",
+        LossReasonV1::Resignation => "resignation",
     }
 }
 

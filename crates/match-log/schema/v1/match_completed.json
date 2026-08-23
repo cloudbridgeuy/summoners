@@ -4,7 +4,8 @@
       "enum": [
         "third_main_loss",
         "no_promotion_available",
-        "empty_deck_draw"
+        "empty_deck_draw",
+        "resignation"
       ],
       "type": "string"
     },
