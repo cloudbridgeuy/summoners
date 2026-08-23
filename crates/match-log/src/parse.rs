@@ -573,10 +573,17 @@ fn validate_completion(
             LifecycleError::CompletionDigestMismatch,
         ));
     }
-    if completed.winner != terminal_outcome.winner || completed.reason != terminal_outcome.reason {
+    if completed.winner != terminal_outcome.winner {
         return Err(lifecycle_error(
             decoded,
             "winner",
+            LifecycleError::OutcomeMismatch,
+        ));
+    }
+    if completed.reason != terminal_outcome.reason {
+        return Err(lifecycle_error(
+            decoded,
+            "reason",
             LifecycleError::OutcomeMismatch,
         ));
     }

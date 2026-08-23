@@ -387,6 +387,13 @@ fn final_and_completion_outcome_digest_and_count_inconsistencies_are_rejected() 
     let error = parse_error(&outcome);
     assert_lifecycle(&error, &LifecycleError::OutcomeMismatch);
 
+    let mut completion_reason = values();
+    let completed = record_index(&completion_reason, "match_completed");
+    completion_reason[completed]["reason"] = json!("third_main_loss");
+    let error = parse_error(&completion_reason);
+    assert_lifecycle(&error, &LifecycleError::OutcomeMismatch);
+    assert_eq!(error.context().path.as_deref(), Some("reason"));
+
     let mut steps = values();
     let completed = record_index(&steps, "match_completed");
     let expected = steps[completed]["step_count"].as_u64().expect("step count");
