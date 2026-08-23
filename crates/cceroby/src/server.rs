@@ -577,7 +577,7 @@ mod tests {
         let response = router(state("mask"))
             .oneshot(
                 Request::builder()
-                    .uri("/?query=mask&cleveland=true&wikimedia=true")
+                    .uri("/?query=mask&wikimedia=true")
                     .body(Body::empty())
                     .expect("request is valid"),
             )
@@ -588,7 +588,7 @@ mod tests {
             .await
             .expect("body is readable");
         let html = String::from_utf8(body.to_vec()).expect("body is utf-8");
-        assert_eq!(html.matches("is not available in this build").count(), 2);
+        assert_eq!(html.matches("is not available in this build").count(), 1);
     }
 
     #[tokio::test]
@@ -823,7 +823,7 @@ mod tests {
         let unavailable = app
             .oneshot(
                 Request::builder()
-                    .uri("/detail?source=cleveland&id=1")
+                    .uri("/detail?source=wikimedia&id=1")
                     .body(Body::empty())
                     .expect("request is valid"),
             )
