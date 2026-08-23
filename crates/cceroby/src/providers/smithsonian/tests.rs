@@ -365,6 +365,8 @@ async fn missing_key_does_not_stop_another_source_search_or_expose_secret_text()
     let temporary = tempdir().expect("temporary directory exists");
     let providers = ProviderSet::with_endpoints(
         Url::parse(&format!("http://{address}/search")).expect("mock AIC endpoint is valid"),
+        crate::providers::cleveland::ClevelandProvider::official_endpoint()
+            .expect("Cleveland endpoint is valid"),
         crate::providers::met::MetProvider::official_endpoint().expect("Met endpoint is valid"),
         SmithsonianProvider::official_endpoint().expect("Smithsonian endpoint is valid"),
         None,
@@ -538,6 +540,8 @@ async fn common_v4_paths_search_detail_display_and_download_with_xmp() {
     });
     let providers = ProviderSet::with_endpoints(
         crate::providers::aic::AicProvider::official_endpoint().expect("AIC endpoint is valid"),
+        crate::providers::cleveland::ClevelandProvider::official_endpoint()
+            .expect("Cleveland endpoint is valid"),
         crate::providers::met::MetProvider::official_endpoint().expect("Met endpoint is valid"),
         Url::parse(&format!("{base}/search")).expect("mock endpoint is valid"),
         Some(SECRET.into()),

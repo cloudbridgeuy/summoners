@@ -624,6 +624,8 @@ mod tests {
             Url::parse(&format!("http://{address}/search")).expect("mock URL is valid");
         let providers = ProviderSet::with_endpoints(
             crate::providers::aic::AicProvider::official_endpoint().expect("AIC endpoint is valid"),
+            crate::providers::cleveland::ClevelandProvider::official_endpoint()
+                .expect("Cleveland endpoint is valid"),
             met_endpoint,
             crate::providers::smithsonian::SmithsonianProvider::official_endpoint()
                 .expect("Smithsonian endpoint is valid"),
@@ -716,6 +718,8 @@ mod tests {
         });
         let providers = ProviderSet::with_endpoints(
             crate::providers::aic::AicProvider::official_endpoint().expect("AIC endpoint is valid"),
+            crate::providers::cleveland::ClevelandProvider::official_endpoint()
+                .expect("Cleveland endpoint is valid"),
             Url::parse(&format!("{base}/search")).expect("mock endpoint is valid"),
             crate::providers::smithsonian::SmithsonianProvider::official_endpoint()
                 .expect("Smithsonian endpoint is valid"),

@@ -449,6 +449,8 @@ mod tests {
         let output = tempfile::tempdir().expect("temporary output exists");
         let endpoint =
             Url::parse(&format!("{base}/api/v1/artworks/search")).expect("mock endpoint is valid");
+        let cleveland = crate::providers::cleveland::ClevelandProvider::official_endpoint()
+            .expect("built-in Cleveland endpoint is valid");
         let mut session = SearchSession::new(query);
         merge_page(
             &mut session,
@@ -480,6 +482,7 @@ mod tests {
             SearchServices::new(
                 ProviderSet::with_endpoints(
                     endpoint,
+                    cleveland,
                     crate::providers::met::MetProvider::official_endpoint()
                         .expect("Met endpoint is valid"),
                     crate::providers::smithsonian::SmithsonianProvider::official_endpoint()

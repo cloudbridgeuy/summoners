@@ -4,19 +4,22 @@ Home of Summoners, a two-player card game.
 
 This repository contains the deterministic game rules, authored card data, a
 local museum image search shell, and development tools. The search shell
-connects to the Art Institute of Chicago and the Metropolitan Museum of Art.
-It connects to Smithsonian Open Access when `SMITHSONIAN_API_KEY` contains an
-api.data.gov key. Two additional source slots remain unavailable.
+connects to the Art Institute of Chicago, the Cleveland Museum of Art, and the
+Metropolitan Museum of Art. It connects to Smithsonian Open Access when
+`SMITHSONIAN_API_KEY` contains an api.data.gov key. Wikimedia Commons remains
+unavailable.
 
 ## Workspace
 
 - `crates/core`: the dependency-free deterministic rules and state-transition library.
 - `crates/cards`: strict authored Set and Deck loading with built-in content.
 - `crates/cceroby`: local museum image search CLI and form with public-domain
-  Art Institute of Chicago, Metropolitan Museum of Art, and configured
-  Smithsonian Open Access results; locally proxied artwork previews; exact
-  attribution; a 24-hour metadata cache; a 30-day image cache; and a trusted
-  self-contained JPEG download path for provider image responses.
+  Art Institute of Chicago, CC0 Cleveland Museum, Metropolitan Museum of Art,
+  and configured Smithsonian Open Access results; locally proxied artwork
+  previews; exact attribution; a 24-hour metadata cache; a 30-day image cache;
+  and a trusted self-contained JPEG download path. Cleveland downloads use
+  valid absolute HTTP(S) full TIFF originals when available and the best valid
+  absolute HTTP(S) JPEG otherwise.
 - `xtask`: repository lint and Git hook automation.
 
 ## Design inputs

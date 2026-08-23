@@ -10,13 +10,13 @@ clock, and uses no random source. Every entry point takes one state value and
 one action, and returns a new state value; it never mutates anything the caller
 still holds. A strict authored-card boundary parses caller-held Set bytes into
 core definitions without file I/O. A separate CLI serves a local museum image
-search form. It connects to the Art Institute of Chicago and the Metropolitan
-Museum of Art. It connects to Smithsonian Open Access when the process has a
-valid api.data.gov key in `SMITHSONIAN_API_KEY`.
-Cleveland and Wikimedia Commons are not available yet. There is no game client
-or runtime file loader yet. Detail pages include a trusted self-contained JPEG
-download path for provider image responses. This file is an index of stable
-product language, not an API contract.
+search form. It connects to the Art Institute of Chicago, the Cleveland Museum
+of Art, and the Metropolitan Museum of Art. It connects to Smithsonian Open
+Access when the process has a valid api.data.gov key in
+`SMITHSONIAN_API_KEY`. Wikimedia Commons is not available yet. There is no game
+client or runtime file loader yet. Detail pages include a trusted
+self-contained JPEG download path for provider image responses. This file is
+an index of stable product language, not an API contract.
 
 ## Behavior
 
@@ -26,25 +26,27 @@ The `cceroby search` command parses a non-empty query, one or more of five
 museum sources, an optional culture or region, an output directory, and local
 server options before it starts a loopback-only server on an operating-system
 assigned port. The local page keeps valid query and filter values in its form.
-The Art Institute of Chicago, Metropolitan Museum of Art, and configured
-Smithsonian Open Access searches keep only records with an accepted public-use
-license, and they show normalized result cards. Smithsonian requests use the
-configured key without putting it in browser content, diagnostics, or cache
-names. Metadata responses stay in the user cache for 24 hours. Card and preview
-image bytes stay in a separate user cache for 30 days. Cards use local image and
-detail routes that accept only a known source and object ID. The detail route
-reconstructs trusted provider metadata and shows a local-proxy preview,
-normalized metadata, the accepted license, and the ready-to-print attribution.
-Provider slots that do not have a connection return an unavailable notice, and
-a connected-provider failure returns one failure notice without stopping the
-page. A corrupt metadata or thumbnail cache entry degrades to a cache miss
-instead of stopping the search. The detail page accepts an editable safe file
-name and free-form tags. A download requires the Host and Origin to match the
-exact authority assigned to the loopback listener. It strictly parses the
-complete form before provider I/O and reconstructs all policy and remote-request
-data from the provider, keeps native JPEG scan data, converts TIFF input once,
-embeds attribution and tags as standard XMP, and atomically writes one JPEG in
-the selected output directory.
+The Art Institute of Chicago search keeps only records that the response marks
+as public domain. The Cleveland Museum of Art search requires exact CC0 records
+with display images and supports a culture filter. The Metropolitan Museum of
+Art and configured Smithsonian Open Access searches also keep only records with
+an accepted public-use license. All connected sources show normalized result
+cards. Smithsonian requests use the configured key without putting it in
+browser content, diagnostics, or cache names. Metadata responses stay in the
+user cache for 24 hours. Card and preview image bytes stay in a separate user
+cache for 30 days. Cards use local image and detail routes that accept only a
+known source and object ID. The detail route reconstructs trusted provider
+metadata and shows a local-proxy preview, normalized metadata, the accepted
+license, and the ready-to-print attribution. Provider slots that do not have a
+connection return an unavailable notice, and a connected-provider failure
+returns one failure notice without stopping the page. A corrupt metadata or
+thumbnail cache entry degrades to a cache miss instead of stopping the search.
+The detail page accepts an editable safe file name and free-form tags. A
+download requires the Host and Origin to match the exact authority assigned to
+the loopback listener. It strictly parses the complete form before provider I/O
+and reconstructs all policy and remote-request data from the provider, keeps
+native JPEG scan data, converts TIFF input once, embeds attribution and tags as
+standard XMP, and atomically writes one JPEG in the selected output directory.
 
 #### Scenario: A valid local search starts
 
@@ -88,6 +90,18 @@ the selected output directory.
 - **WHEN** a user selects Smithsonian without a valid `SMITHSONIAN_API_KEY`
 - **THEN** the page shows one Smithsonian unavailable notice
 - **AND** other selected connected sources can return their results
+
+#### Scenario: A Cleveland Museum search succeeds
+
+- **WHEN** the Cleveland Museum of Art returns matching CC0 records for an
+  optional culture filter
+- **THEN** the page shows normalized records with the museum's exact object URL
+  and credit line
+- **AND** records with a missing ID, title, exact CC0 state, absolute HTTP(S)
+  object URL, or valid absolute HTTP(S) display image do not appear
+- **AND** card and preview requests use the best available JPEG sizes
+- **AND** a download uses the highest-resolution TIFF when available or the best
+  JPEG otherwise
 
 #### Scenario: A user opens one artwork
 
