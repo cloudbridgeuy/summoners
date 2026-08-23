@@ -81,6 +81,14 @@ fn clear_removes_only_the_selected_root_and_is_idempotent() {
     assert_eq!(cache.clear().expect("second cache clear succeeds"), 0);
 }
 
+#[test]
+fn clear_is_a_no_op_when_the_cache_parent_is_missing() {
+    let directory = tempdir().expect("temporary directory exists");
+    let root = directory.path().join("missing-parent/cceroby");
+
+    assert_eq!(Cache::new(root).clear().expect("missing cache clears"), 0);
+}
+
 #[cfg(unix)]
 #[test]
 fn clear_propagates_an_inaccessible_parent_error() {
@@ -149,6 +157,85 @@ fn clear_propagates_a_snapshot_delete_error() {
         .expect("snapshot permissions restore");
     let error = result.expect_err("snapshot delete failure must propagate");
     assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+}
+
+#[cfg(unix)]
+#[test]
+fn clear_rejects_a_replaced_detached_root_without_deleting_the_replacement() {
+    use std::os::unix::fs::symlink;
+
+    let directory = tempdir().expect("temporary directory exists");
+    let root = directory.path().join("cceroby");
+    let real_snapshot = directory.path().join("real-snapshot");
+    let outside = directory.path().join("outside");
+    fs::create_dir_all(&root).expect("cache fixture directory exists");
+    fs::write(root.join("old"), b"old").expect("cache fixture writes");
+    fs::create_dir_all(&outside).expect("outside fixture directory exists");
+    fs::write(outside.join("keep"), b"outside").expect("outside fixture writes");
+    let snapshot = crate::cache::cache_fs::detach_root(&root)
+        .expect("cache root detaches")
+        .expect("cache root exists");
+
+    let result = crate::cache::cache_fs::remove_snapshot_with_delete_hook(&snapshot, || {
+        let tombstone = clear_tombstone(directory.path());
+        fs::rename(&tombstone, &real_snapshot).expect("detached root moves");
+        symlink(&outside, &tombstone).expect("replacement root link is created");
+    });
+
+    let error = result.expect_err("replacement root must stop clear");
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+    assert_eq!(
+        fs::read(real_snapshot.join("old")).expect("snapshot remains"),
+        b"old"
+    );
+    let tombstone = clear_tombstone(directory.path());
+    assert!(
+        fs::symlink_metadata(tombstone)
+            .expect("replacement remains")
+            .file_type()
+            .is_symlink()
+    );
+    assert_eq!(
+        fs::read(outside.join("keep")).expect("outside remains"),
+        b"outside"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn clear_rejects_a_replaced_nested_entry_without_deleting_either_entry() {
+    use std::os::unix::fs::symlink;
+
+    let directory = tempdir().expect("temporary directory exists");
+    let root = directory.path().join("cceroby");
+    let outside = directory.path().join("outside");
+    fs::create_dir_all(root.join("nested")).expect("cache fixture directory exists");
+    fs::write(root.join("nested/old"), b"old").expect("cache fixture writes");
+    fs::write(&outside, b"outside").expect("outside fixture writes");
+    let snapshot = crate::cache::cache_fs::detach_root(&root)
+        .expect("cache root detaches")
+        .expect("cache root exists");
+
+    let result = crate::cache::cache_fs::remove_snapshot_with_delete_hook(&snapshot, || {
+        let nested = clear_tombstone(directory.path()).join("nested");
+        fs::rename(nested.join("old"), nested.join("moved-old")).expect("snapshot entry moves");
+        symlink(&outside, nested.join("old")).expect("replacement entry link is created");
+    });
+
+    let error = result.expect_err("replacement entry must stop clear");
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+    let nested = clear_tombstone(directory.path()).join("nested");
+    assert_eq!(
+        fs::read(nested.join("moved-old")).expect("real entry remains"),
+        b"old"
+    );
+    assert!(
+        fs::symlink_metadata(nested.join("old"))
+            .expect("replacement remains")
+            .file_type()
+            .is_symlink()
+    );
+    assert_eq!(fs::read(&outside).expect("outside remains"), b"outside");
 }
 
 #[cfg(unix)]
@@ -260,7 +347,7 @@ fn a_swapped_entry_link_is_rejected_before_open() {
 
 #[cfg(unix)]
 #[test]
-fn clear_removes_a_swapped_root_link_without_following_its_target() {
+fn clear_rejects_a_root_swap_before_detach_without_following_its_target() {
     use std::os::unix::fs::symlink;
 
     let directory = tempdir().expect("temporary directory exists");
@@ -272,17 +359,20 @@ fn clear_removes_a_swapped_root_link_without_following_its_target() {
     fs::write(root.join("old"), b"old").expect("cache fixture writes");
     fs::write(outside.join("keep"), b"outside").expect("outside fixture writes");
 
-    let snapshot = crate::cache::cache_fs::detach_root_with_rename_hook(&root, || {
+    let result = crate::cache::cache_fs::detach_root_with_rename_hook(&root, || {
         fs::rename(&root, &moved).expect("cache root moves");
         symlink(&outside, &root).expect("replacement root link is created");
-    })
-    .expect("replacement root detaches")
-    .expect("replacement root exists");
-    let removed =
-        crate::cache::cache_fs::remove_snapshot(&snapshot).expect("detached root link is removed");
+    });
 
-    assert_eq!(removed, 1);
+    let error = result.expect_err("root swap must stop clear");
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
     assert!(!root.exists());
+    assert!(
+        fs::symlink_metadata(clear_tombstone(directory.path()))
+            .expect("replacement root remains detached")
+            .file_type()
+            .is_symlink()
+    );
     assert_eq!(
         fs::read(moved.join("old")).expect("moved cache remains"),
         b"old"

@@ -2,7 +2,7 @@
 
 #[cfg(unix)]
 mod imp {
-    use std::ffi::CStr;
+    use std::ffi::{CStr, CString};
     use std::fs;
     use std::io::{self, Read, Write};
     use std::os::fd::OwnedFd;
@@ -31,9 +31,36 @@ mod imp {
         .union(OFlags::NONBLOCK)
         .union(OFlags::CLOEXEC);
 
+    #[derive(Debug)]
     pub(crate) struct Snapshot {
         parent: OwnedFd,
         name: String,
+        identity: Identity,
+        directory: Option<OwnedFd>,
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    struct Identity {
+        device: u128,
+        inode: u128,
+        file_type: FileType,
+    }
+
+    struct RemovalPlan {
+        children: Vec<PinnedEntry>,
+        files: usize,
+    }
+
+    struct PinnedEntry {
+        name: CString,
+        identity: Identity,
+        directory: Option<PinnedDirectory>,
+    }
+
+    struct PinnedDirectory {
+        handle: OwnedFd,
+        children: Vec<PinnedEntry>,
+        files: usize,
     }
 
     pub(crate) fn read(root: &Path, directories: &[&str], name: &str) -> io::Result<Vec<u8>> {
@@ -133,7 +160,25 @@ mod imp {
         before_rename: impl FnOnce(),
     ) -> io::Result<Option<Snapshot>> {
         let (parent_path, root_name) = split_root(root)?;
-        let parent = open(&parent_path, DIRECTORY_FLAGS, Mode::empty()).map_err(io::Error::from)?;
+        let parent = match open(&parent_path, DIRECTORY_FLAGS, Mode::empty()) {
+            Ok(parent) => parent,
+            Err(rustix::io::Errno::NOENT) => return Ok(None),
+            Err(error) => return Err(error.into()),
+        };
+        let root_metadata = match statat(&parent, &root_name, AtFlags::SYMLINK_NOFOLLOW) {
+            Ok(metadata) => metadata,
+            Err(rustix::io::Errno::NOENT) => return Ok(None),
+            Err(error) => return Err(error.into()),
+        };
+        let identity = identity_from_stat(&root_metadata);
+        let directory = if identity.file_type == FileType::Directory {
+            let handle = openat(&parent, &root_name, DIRECTORY_FLAGS, Mode::empty())
+                .map_err(io::Error::from)?;
+            verify_handle_identity(&handle, identity)?;
+            Some(handle)
+        } else {
+            None
+        };
         before_rename();
 
         loop {
@@ -141,12 +186,17 @@ mod imp {
             let tombstone = format!(".cceroby-clear-{}-{sequence}", std::process::id());
             match rename_noreplace(&parent, &root_name, &tombstone) {
                 Ok(()) => {
+                    verify_identity(&parent, tombstone.as_str(), identity)?;
                     return Ok(Some(Snapshot {
                         parent,
                         name: tombstone,
+                        identity,
+                        directory,
                     }));
                 }
-                Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                    return Err(snapshot_changed());
+                }
                 Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
                 Err(error) => return Err(error),
             }
@@ -161,10 +211,10 @@ mod imp {
         snapshot: &Snapshot,
         before_delete: impl FnOnce(),
     ) -> io::Result<usize> {
-        let count = count_entry_strict(&snapshot.parent, &snapshot.name)?;
+        let plan = pin_snapshot(snapshot)?;
         before_delete();
-        remove_entry_strict(&snapshot.parent, &snapshot.name)?;
-        Ok(count)
+        remove_planned_snapshot(snapshot, &plan)?;
+        Ok(plan.files)
     }
 
     fn open_directory(path: &Path) -> io::Result<OwnedFd> {
@@ -287,19 +337,26 @@ mod imp {
         removed
     }
 
-    fn count_entry_strict(parent: &OwnedFd, name: &str) -> io::Result<usize> {
-        let metadata = statat(parent, name, AtFlags::SYMLINK_NOFOLLOW).map_err(io::Error::from)?;
-        if FileType::from_raw_mode(metadata.st_mode) != FileType::Directory {
-            return Ok(1);
-        }
-        let directory =
-            openat(parent, name, DIRECTORY_FLAGS, Mode::empty()).map_err(io::Error::from)?;
-        count_directory_strict(&directory)
+    fn pin_snapshot(snapshot: &Snapshot) -> io::Result<RemovalPlan> {
+        verify_identity(&snapshot.parent, snapshot.name.as_str(), snapshot.identity)?;
+        let Some(directory) = snapshot.directory.as_ref() else {
+            return Ok(RemovalPlan {
+                children: Vec::new(),
+                files: 1,
+            });
+        };
+        verify_handle_identity(directory, snapshot.identity)?;
+        let pinned = pin_directory(directory)?;
+        Ok(RemovalPlan {
+            children: pinned.children,
+            files: pinned.files,
+        })
     }
 
-    fn count_directory_strict(directory: &OwnedFd) -> io::Result<usize> {
+    fn pin_directory(directory: &OwnedFd) -> io::Result<PinnedDirectory> {
         let entries = Dir::read_from(directory).map_err(io::Error::from)?;
-        let mut count = 0_usize;
+        let mut children = Vec::new();
+        let mut files = 0_usize;
         for entry in entries {
             let entry = entry.map_err(io::Error::from)?;
             let name = entry.file_name();
@@ -308,48 +365,104 @@ mod imp {
             }
             let metadata =
                 statat(directory, name, AtFlags::SYMLINK_NOFOLLOW).map_err(io::Error::from)?;
-            if FileType::from_raw_mode(metadata.st_mode) == FileType::Directory {
-                let child = openat(directory, name, DIRECTORY_FLAGS, Mode::empty())
+            let identity = identity_from_stat(&metadata);
+            let child_directory = if identity.file_type == FileType::Directory {
+                let handle = openat(directory, name, DIRECTORY_FLAGS, Mode::empty())
                     .map_err(io::Error::from)?;
-                count = count.saturating_add(count_directory_strict(&child)?);
+                verify_handle_identity(&handle, identity)?;
+                let child = pin_directory(&handle)?;
+                files = files.saturating_add(child.files);
+                Some(PinnedDirectory {
+                    handle,
+                    children: child.children,
+                    files: child.files,
+                })
             } else {
-                count = count.saturating_add(1);
-            }
+                files = files.saturating_add(1);
+                None
+            };
+            children.push(PinnedEntry {
+                name: name.to_owned(),
+                identity,
+                directory: child_directory,
+            });
         }
-        Ok(count)
+        Ok(PinnedDirectory {
+            handle: rustix::io::dup(directory).map_err(io::Error::from)?,
+            children,
+            files,
+        })
     }
 
-    fn remove_entry_strict(parent: &OwnedFd, name: &str) -> io::Result<()> {
-        let metadata = statat(parent, name, AtFlags::SYMLINK_NOFOLLOW).map_err(io::Error::from)?;
-        if FileType::from_raw_mode(metadata.st_mode) != FileType::Directory {
-            return unlinkat(parent, name, AtFlags::empty()).map_err(io::Error::from);
+    fn remove_planned_snapshot(snapshot: &Snapshot, plan: &RemovalPlan) -> io::Result<()> {
+        verify_identity(&snapshot.parent, snapshot.name.as_str(), snapshot.identity)?;
+        if let Some(directory) = snapshot.directory.as_ref() {
+            remove_pinned_entries(directory, &plan.children)?;
+            verify_identity(&snapshot.parent, snapshot.name.as_str(), snapshot.identity)?;
+            unlinkat(&snapshot.parent, snapshot.name.as_str(), AtFlags::REMOVEDIR)
+                .map_err(io::Error::from)
+        } else {
+            unlinkat(&snapshot.parent, snapshot.name.as_str(), AtFlags::empty())
+                .map_err(io::Error::from)
         }
-        let directory =
-            openat(parent, name, DIRECTORY_FLAGS, Mode::empty()).map_err(io::Error::from)?;
-        remove_directory_contents_strict(&directory)?;
-        unlinkat(parent, name, AtFlags::REMOVEDIR).map_err(io::Error::from)
     }
 
-    fn remove_directory_contents_strict(directory: &OwnedFd) -> io::Result<()> {
-        let entries = Dir::read_from(directory).map_err(io::Error::from)?;
+    fn remove_pinned_entries(directory: &OwnedFd, entries: &[PinnedEntry]) -> io::Result<()> {
         for entry in entries {
-            let entry = entry.map_err(io::Error::from)?;
-            let name = entry.file_name();
-            if is_dot(name) {
-                continue;
-            }
-            let metadata =
-                statat(directory, name, AtFlags::SYMLINK_NOFOLLOW).map_err(io::Error::from)?;
-            if FileType::from_raw_mode(metadata.st_mode) == FileType::Directory {
-                let child = openat(directory, name, DIRECTORY_FLAGS, Mode::empty())
+            verify_identity(directory, entry.name.as_c_str(), entry.identity)?;
+            if let Some(child) = entry.directory.as_ref() {
+                verify_handle_identity(&child.handle, entry.identity)?;
+                remove_pinned_entries(&child.handle, &child.children)?;
+                verify_identity(directory, entry.name.as_c_str(), entry.identity)?;
+                unlinkat(directory, entry.name.as_c_str(), AtFlags::REMOVEDIR)
                     .map_err(io::Error::from)?;
-                remove_directory_contents_strict(&child)?;
-                unlinkat(directory, name, AtFlags::REMOVEDIR).map_err(io::Error::from)?;
             } else {
-                unlinkat(directory, name, AtFlags::empty()).map_err(io::Error::from)?;
+                unlinkat(directory, entry.name.as_c_str(), AtFlags::empty())
+                    .map_err(io::Error::from)?;
             }
         }
         Ok(())
+    }
+
+    fn verify_identity<P: rustix::path::Arg>(
+        parent: &OwnedFd,
+        name: P,
+        expected: Identity,
+    ) -> io::Result<()> {
+        let metadata = match statat(parent, name, AtFlags::SYMLINK_NOFOLLOW) {
+            Ok(metadata) => metadata,
+            Err(rustix::io::Errno::NOENT) => return Err(snapshot_changed()),
+            Err(error) => return Err(error.into()),
+        };
+        if identity_from_stat(&metadata) == expected {
+            Ok(())
+        } else {
+            Err(snapshot_changed())
+        }
+    }
+
+    fn verify_handle_identity(handle: &OwnedFd, expected: Identity) -> io::Result<()> {
+        let metadata = fstat(handle).map_err(io::Error::from)?;
+        if identity_from_stat(&metadata) == expected {
+            Ok(())
+        } else {
+            Err(snapshot_changed())
+        }
+    }
+
+    fn identity_from_stat(metadata: &rustix::fs::Stat) -> Identity {
+        Identity {
+            device: metadata.st_dev as u128,
+            inode: metadata.st_ino as u128,
+            file_type: FileType::from_raw_mode(metadata.st_mode),
+        }
+    }
+
+    fn snapshot_changed() -> io::Error {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            "cache snapshot changed during removal",
+        )
     }
 
     #[cfg(any(target_vendor = "apple", target_os = "linux", target_os = "android"))]

@@ -174,6 +174,8 @@ server. Ctrl-C stops either mode and closes open event streams cleanly.
 - **AND** on Apple platforms, Linux, and Android it atomically detaches and
   removes only the Cceroby cache root without following symbolic links
 - **AND** a cache root that a writer creates after the detach operation remains
+- **AND** if the detached root or a nested entry changes identity, the command
+  fails without deleting the replacement
 - **AND** a permission, inspection, count, or removal error makes the command
   fail without a success report
 - **AND** a missing or disabled cache is a safe no-op

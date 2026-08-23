@@ -82,6 +82,26 @@ fn cache_clear_removes_only_the_isolated_cceroby_root() {
     );
 }
 
+#[test]
+fn cache_clear_is_an_exact_success_when_the_parent_is_missing() {
+    let home = tempdir().unwrap_or_else(|error| panic!("cannot create temporary home: {error}"));
+    let root = cache_root_for_test(home.path());
+    assert!(!root.parent().is_some_and(std::path::Path::exists));
+
+    let output = isolated_command(home.path())
+        .args(["cache", "clear"])
+        .output()
+        .unwrap_or_else(|error| panic!("cannot run cceroby: {error}"));
+
+    assert!(output.status.success());
+    assert_eq!(output.stderr, b"");
+    assert_eq!(
+        String::from_utf8(output.stdout)
+            .unwrap_or_else(|error| panic!("stdout is not UTF-8: {error}")),
+        format!("Removed 0 cache files from {}.\n", root.display())
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn cache_clear_reports_permission_failure_without_false_success() {
