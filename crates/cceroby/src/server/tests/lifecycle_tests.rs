@@ -75,6 +75,38 @@ async fn quit_rejects_wrong_authority_before_it_notifies_shutdown() {
         );
     }
 
+    for (request, expected) in [
+        (
+            Request::builder()
+                .method("POST")
+                .uri("/quit")
+                .body(Body::empty())
+                .expect("request is valid"),
+            StatusCode::FORBIDDEN,
+        ),
+        (
+            Request::builder()
+                .method("GET")
+                .uri("/quit")
+                .header(header::HOST, "127.0.0.1:45123")
+                .body(Body::empty())
+                .expect("request is valid"),
+            StatusCode::METHOD_NOT_ALLOWED,
+        ),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(request)
+            .await
+            .expect("request succeeds");
+        assert_eq!(response.status(), expected);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(1), quit.notified())
+                .await
+                .is_err()
+        );
+    }
+
     let accepted = app
         .oneshot(
             Request::builder()
