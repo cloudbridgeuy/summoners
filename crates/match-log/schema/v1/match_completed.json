@@ -1,0 +1,71 @@
+{
+  "$defs": {
+    "loss_reason": {
+      "enum": [
+        "third_main_loss",
+        "no_promotion_available",
+        "empty_deck_draw"
+      ],
+      "type": "string"
+    },
+    "match_completed_record_kind": {
+      "const": "match_completed",
+      "type": "string"
+    },
+    "player_id": {
+      "enum": [
+        "one",
+        "two"
+      ],
+      "type": "string"
+    }
+  },
+  "$id": "urn:summoners:match-log:v1:match_completed",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Wire contract for one match completion record.",
+  "properties": {
+    "event_count": {
+      "format": "uint64",
+      "maximum": 18446744073709551615,
+      "minimum": 0,
+      "type": "integer"
+    },
+    "reason": {
+      "$ref": "#/$defs/loss_reason"
+    },
+    "record": {
+      "$ref": "#/$defs/match_completed_record_kind"
+    },
+    "sequence": {
+      "format": "uint64",
+      "maximum": 18446744073709551615,
+      "minimum": 0,
+      "type": "integer"
+    },
+    "state_digest": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "step_count": {
+      "format": "uint64",
+      "maximum": 18446744073709551615,
+      "minimum": 0,
+      "type": "integer"
+    },
+    "winner": {
+      "$ref": "#/$defs/player_id"
+    }
+  },
+  "required": [
+    "sequence",
+    "record",
+    "step_count",
+    "event_count",
+    "state_digest",
+    "winner",
+    "reason"
+  ],
+  "title": "Summoners match log match completion record, version 1",
+  "type": "object"
+}

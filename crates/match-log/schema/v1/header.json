@@ -1,0 +1,42 @@
+{
+  "$defs": {
+    "header_record_kind": {
+      "const": "header",
+      "type": "string"
+    }
+  },
+  "$id": "urn:summoners:match-log:v1:header",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Wire contract for one header record.",
+  "properties": {
+    "format": {
+      "const": "summoners_match"
+    },
+    "format_version": {
+      "const": 1
+    },
+    "metadata": {
+      "additionalProperties": true,
+      "type": "object"
+    },
+    "record": {
+      "$ref": "#/$defs/header_record_kind"
+    },
+    "sequence": {
+      "format": "uint64",
+      "maximum": 18446744073709551615,
+      "minimum": 0,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "sequence",
+    "record",
+    "format",
+    "format_version",
+    "metadata"
+  ],
+  "title": "Summoners match log header record, version 1",
+  "type": "object"
+}

@@ -1,0 +1,48 @@
+{
+  "$defs": {
+    "step_completed_record_kind": {
+      "const": "step_completed",
+      "type": "string"
+    }
+  },
+  "$id": "urn:summoners:match-log:v1:step_completed",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Wire contract for one accepted step result record.",
+  "properties": {
+    "event_count": {
+      "format": "uint64",
+      "maximum": 18446744073709551615,
+      "minimum": 0,
+      "type": "integer"
+    },
+    "record": {
+      "$ref": "#/$defs/step_completed_record_kind"
+    },
+    "sequence": {
+      "format": "uint64",
+      "maximum": 18446744073709551615,
+      "minimum": 0,
+      "type": "integer"
+    },
+    "state_digest": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "step": {
+      "format": "uint64",
+      "maximum": 18446744073709551615,
+      "minimum": 0,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "sequence",
+    "record",
+    "step",
+    "event_count",
+    "state_digest"
+  ],
+  "title": "Summoners match log accepted step result record, version 1",
+  "type": "object"
+}
