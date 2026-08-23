@@ -148,9 +148,20 @@ fn accepted_case(
     panic!("the accepted step must exist");
 }
 
+fn prepared_action(step: &TranscriptStepV1) -> PreparedAction {
+    let action =
+        GameAction::try_from(step.action.action.clone()).expect("the fixture action converts");
+    PreparedAction {
+        step: step.action.step,
+        action,
+    }
+}
+
 fn replayed(transcript: &TranscriptV1, catalog: &BuiltInCatalog) -> (GameState, ReplayFacts) {
+    let actions: Vec<PreparedAction> = transcript.steps.iter().map(prepared_action).collect();
     replay_steps_with(
         &transcript.steps,
+        &actions,
         initial_state(transcript, catalog),
         |state, action| apply(state, action),
     )
@@ -295,6 +306,97 @@ fn malformed_initial_projection_is_a_state_rebuild_error() {
 }
 
 #[test]
+fn prepare_scenario_rejects_a_set_revision_mismatch() {
+    let (catalog, bytes) = fixture();
+    let mut transcript = parsed(&bytes);
+    transcript.match_created.required_sets[0].revision += 1;
+
+    let error = prepare_scenario(&transcript, catalog.library())
+        .expect_err("the mismatched revision must be rejected");
+
+    assert!(matches!(
+        assert_divergence(
+            error,
+            ReplayPhase::Requirements,
+            None,
+            "match_created.required_sets.revision"
+        ),
+        ReplayDivergenceKind::SetRevision { .. }
+    ));
+}
+
+#[test]
+fn prepare_scenario_rejects_a_state_rebuild_failure() {
+    let (catalog, bytes) = fixture();
+    let mut transcript = parsed(&bytes);
+    transcript
+        .match_created
+        .initial_state
+        .players
+        .one
+        .main
+        .as_mut()
+        .expect("main")
+        .chain
+        .layers
+        .clear();
+
+    let error = prepare_scenario(&transcript, catalog.library())
+        .expect_err("an empty upgrade chain cannot rebuild");
+
+    assert!(matches!(error, ReplayError::StateRebuild { .. }));
+    assert_eq!(
+        error.location().expect("rebuild location").path,
+        "match_created.initial_state"
+    );
+}
+
+#[test]
+fn prepare_scenario_rejects_an_initial_digest_mismatch() {
+    let (catalog, bytes) = fixture();
+    let mut transcript = parsed(&bytes);
+    transcript.match_created.state_digest = fake_digest();
+
+    let error = prepare_scenario(&transcript, catalog.library()).expect_err("the digest changed");
+
+    assert!(matches!(
+        assert_divergence(
+            error,
+            ReplayPhase::InitialState,
+            None,
+            "match_created.state_digest"
+        ),
+        ReplayDivergenceKind::StateDigest { .. }
+    ));
+}
+
+#[test]
+fn prepare_scenario_converts_every_action_eagerly() {
+    let (catalog, bytes) = fixture();
+    let transcript = parsed(&bytes);
+
+    let scenario =
+        prepare_scenario(&transcript, catalog.library()).expect("the fixture transcript prepares");
+
+    let expected_steps: Vec<u64> = transcript
+        .steps
+        .iter()
+        .map(|step| step.action.step)
+        .collect();
+    let actual_steps: Vec<u64> = scenario
+        .actions
+        .iter()
+        .map(|prepared| prepared.step)
+        .collect();
+    assert_eq!(actual_steps, expected_steps);
+    assert_eq!(
+        scenario.required_sets,
+        transcript.match_created.required_sets
+    );
+    assert_eq!(scenario.metadata, transcript.header.metadata);
+}
+
+#[test]
 fn accepted_step_detects_changed_result_and_every_event_shape() {
     let (catalog, bytes) = fixture();
     let transcript = parsed(&bytes);
@@ -304,11 +406,14 @@ fn accepted_step_detects_changed_result_and_every_event_shape() {
         .find(|step| step.action.step == 2)
         .expect("step two")
         .clone();
-    let result_error =
-        replay_steps_with(&[accepted], initial_state(&transcript, &catalog), |_, _| {
-            Err(ActionError::WrongPhase)
-        })
-        .expect_err("the accepted result changed");
+    let accepted_action = prepared_action(&accepted);
+    let result_error = replay_steps_with(
+        &[accepted],
+        &[accepted_action],
+        initial_state(&transcript, &catalog),
+        |_, _| Err(ActionError::WrongPhase),
+    )
+    .expect_err("the accepted result changed");
     assert!(matches!(
         assert_divergence(result_error, ReplayPhase::Step, Some(2), "result"),
         ReplayDivergenceKind::StepResult { .. }
@@ -364,11 +469,15 @@ fn rejected_step_detects_changed_error_state_digest_and_card_pool() {
     let (catalog, bytes) = fixture();
     let transcript = parsed(&bytes);
     let rejected = transcript.steps[0].clone();
+    let rejected_action = prepared_action(&rejected);
     let initial = initial_state(&transcript, &catalog);
 
-    let error = replay_steps_with(std::slice::from_ref(&rejected), initial.clone(), |_, _| {
-        Err(ActionError::WrongPhase)
-    })
+    let error = replay_steps_with(
+        std::slice::from_ref(&rejected),
+        std::slice::from_ref(&rejected_action),
+        initial.clone(),
+        |_, _| Err(ActionError::WrongPhase),
+    )
     .expect_err("the typed rejection changed");
     assert!(matches!(
         assert_divergence(error, ReplayPhase::Step, Some(1), "error"),
@@ -377,6 +486,7 @@ fn rejected_step_detects_changed_error_state_digest_and_card_pool() {
 
     let error = replay_steps_with(
         std::slice::from_ref(&rejected),
+        std::slice::from_ref(&rejected_action),
         initial.clone(),
         |state, _| {
             state.coin = Some(Coin);
@@ -391,6 +501,7 @@ fn rejected_step_detects_changed_error_state_digest_and_card_pool() {
 
     let error = replay_steps_with(
         std::slice::from_ref(&rejected),
+        std::slice::from_ref(&rejected_action),
         initial.clone(),
         |state, _| {
             state.cards = Arc::new(CardSet::new(vec![]));
@@ -408,7 +519,7 @@ fn rejected_step_detects_changed_error_state_digest_and_card_pool() {
         panic!("step one is rejected");
     };
     rejection.state_digest = fake_digest();
-    let error = replay_steps_with(&[changed_digest], initial, |_, _| {
+    let error = replay_steps_with(&[changed_digest], &[rejected_action], initial, |_, _| {
         Err(ActionError::NotYourDecision)
     })
     .expect_err("the rejected digest changed");

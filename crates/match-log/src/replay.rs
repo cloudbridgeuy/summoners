@@ -15,8 +15,8 @@ use summoners_core::{
 };
 
 use crate::{
-    CanonicalStateError, ParseError, StateDigestV1, StateProjectionV1, StateRebuildError,
-    TranscriptStepResultV1, TranscriptStepV1, TranscriptV1, WireConversionError,
+    CanonicalStateError, HeaderMetadataV1, ParseError, StateDigestV1, StateProjectionV1,
+    StateRebuildError, TranscriptStepResultV1, TranscriptStepV1, TranscriptV1, WireConversionError,
     wire::{
         ErrorV1, EventV1, GameOutcomeV1, LossReasonV1, MatchCompletedV1, PlayerIdV1,
         SetRequirementV1,
@@ -333,6 +333,44 @@ fn verify_parsed_transcript(
     transcript: &TranscriptV1,
     library: &CardLibrary,
 ) -> Result<(), ReplayError> {
+    let scenario = prepare_scenario(transcript, library)?;
+    let (state, facts) = replay_steps_with(
+        &transcript.steps,
+        &scenario.actions,
+        scenario.initial_state,
+        |state, action| apply(state, action),
+    )?;
+    verify_completion(transcript, &state, &facts)
+}
+
+/// One recorded action, strictly converted, paired with its step number.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PreparedAction {
+    pub step: u64,
+    pub action: GameAction,
+}
+
+/// The engine-ready scenario derived from one parsed transcript: the
+/// requirements it names, the rebuilt initial state, and every recorded
+/// action, strictly converted, paired with its step number.
+#[derive(Debug, Clone)]
+pub struct PreparedScenario {
+    pub metadata: HeaderMetadataV1,
+    pub required_sets: Vec<SetRequirementV1>,
+    pub initial_state: GameState,
+    pub actions: Vec<PreparedAction>,
+}
+
+/// Validate a transcript's requirements and initial state against the
+/// current catalog, then strictly convert every recorded action.
+///
+/// This performs the same requirements check, state rebuild, and initial
+/// state verification as `prepare_initial_state_with`, in the same order,
+/// returning the identical `ReplayError` for each failure.
+pub fn prepare_scenario(
+    transcript: &TranscriptV1,
+    library: &CardLibrary,
+) -> Result<PreparedScenario, ReplayError> {
     let initial_state = prepare_initial_state_with(
         &transcript.match_created.required_sets,
         &transcript.match_created.initial_state,
@@ -340,10 +378,28 @@ fn verify_parsed_transcript(
         |set| library.set_revision(set),
         || library.core_cards(),
     )?;
-    let (state, facts) = replay_steps_with(&transcript.steps, initial_state, |state, action| {
-        apply(state, action)
-    })?;
-    verify_completion(transcript, &state, &facts)
+    let actions = transcript
+        .steps
+        .iter()
+        .map(|step| {
+            let step_number = step.action.step;
+            GameAction::try_from(step.action.action.clone())
+                .map(|action| PreparedAction {
+                    step: step_number,
+                    action,
+                })
+                .map_err(|error| ReplayError::WireConversion {
+                    location: ReplayLocation::step(step_number, None, "action"),
+                    error,
+                })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(PreparedScenario {
+        metadata: transcript.header.metadata.clone(),
+        required_sets: transcript.match_created.required_sets.clone(),
+        initial_state,
+        actions,
+    })
 }
 
 fn prepare_initial_state_with(
@@ -416,6 +472,7 @@ struct ReplayFacts {
 
 fn replay_steps_with(
     steps: &[TranscriptStepV1],
+    actions: &[PreparedAction],
     mut state: GameState,
     mut engine: impl FnMut(&mut GameState, &GameAction) -> Result<ActionOutcome, ActionError>,
 ) -> Result<(GameState, ReplayFacts), ReplayError> {
@@ -425,17 +482,11 @@ fn replay_steps_with(
         ReplayLocation::initial("match_created.state_digest"),
     )?;
 
-    for step in steps {
-        let step_number = step.action.step;
-        let action = GameAction::try_from(step.action.action.clone()).map_err(|error| {
-            ReplayError::WireConversion {
-                location: ReplayLocation::step(step_number, None, "action"),
-                error,
-            }
-        })?;
+    for (step, prepared) in steps.iter().zip(actions) {
+        let step_number = prepared.step;
         let before = state.clone();
         let before_digest = digest.clone();
-        let result = engine(&mut state, &action);
+        let result = engine(&mut state, &prepared.action);
 
         match (&step.result, result) {
             (TranscriptStepResultV1::Accepted { events, completion }, Ok(outcome)) => {
