@@ -104,45 +104,65 @@ fn parse_smithsonian_id(raw: &str) -> Option<SmithsonianArtworkId> {
     .then(|| SmithsonianArtworkId(raw.to_owned()))
 }
 
-/// Format the mandatory ready-to-print attribution from trusted provider data.
-#[must_use]
-pub fn format_attribution(artwork: &Artwork) -> String {
-    let work = artwork
+fn format_work(artwork: &Artwork) -> String {
+    artwork
         .creator
         .as_deref()
         .filter(|creator| !creator.trim().is_empty())
         .map_or_else(
             || format!("“{}”", artwork.title),
             |creator| format!("“{}” — {creator}", artwork.title),
-        );
-    let mut parts = vec![work];
+        )
+}
+
+fn append_sentence(output: &mut String, part: &str) {
+    if !output.is_empty() {
+        output.push(' ');
+    }
+    output.push_str(part);
+    let trimmed = part.trim_end();
+    let terminal_candidate = trimmed.strip_suffix('”').unwrap_or(trimmed);
+    if !matches!(
+        terminal_candidate.chars().next_back(),
+        Some('.' | '!' | '?')
+    ) {
+        output.push('.');
+    }
+}
+
+/// Format a compact, URL-free credit for a printed card.
+#[must_use]
+pub fn format_card_credit(artwork: &Artwork) -> String {
+    let mut card_credit = String::new();
+    append_sentence(&mut card_credit, &format_work(artwork));
     if let Some(credit) = artwork
         .provider_credit
         .as_deref()
         .filter(|credit| !credit.trim().is_empty())
     {
-        parts.push(credit.to_owned());
+        append_sentence(&mut card_credit, credit);
     }
-    parts.push(format!(
-        "{} ({})",
-        artwork.license.label(),
-        artwork.license.url()
-    ));
-    parts.push(format!("Source: {}", artwork.object_url));
+    append_sentence(&mut card_credit, artwork.license.label());
+    card_credit
+}
+
+/// Format the mandatory full attribution from trusted provider data.
+#[must_use]
+pub fn format_attribution(artwork: &Artwork) -> String {
     let mut attribution = String::new();
-    for part in parts {
-        if !attribution.is_empty() {
-            attribution.push(' ');
-        }
-        attribution.push_str(&part);
-        let terminal_candidate = part.trim_end().strip_suffix('”').unwrap_or(part.trim_end());
-        if !matches!(
-            terminal_candidate.chars().next_back(),
-            Some('.' | '!' | '?')
-        ) {
-            attribution.push('.');
-        }
+    append_sentence(&mut attribution, &format_work(artwork));
+    if let Some(credit) = artwork
+        .provider_credit
+        .as_deref()
+        .filter(|credit| !credit.trim().is_empty())
+    {
+        append_sentence(&mut attribution, credit);
     }
+    append_sentence(
+        &mut attribution,
+        &format!("{} ({})", artwork.license.label(), artwork.license.url()),
+    );
+    append_sentence(&mut attribution, &format!("Source: {}", artwork.object_url));
     attribution
 }
 
@@ -386,5 +406,135 @@ mod tests {
             format_attribution(&artwork),
             "“Ceremonial Mask”. Public domain (https://creativecommons.org/publicdomain/mark/1.0/). Source: https://example.test/artworks/1001."
         );
+    }
+
+    #[test]
+    fn card_credit_formats_complete_artwork_without_provenance_urls() {
+        assert_eq!(
+            format_card_credit(&complete_artwork()),
+            "“Ceremonial Mask” — Maker unknown. Gift of A & B. Public domain."
+        );
+    }
+
+    #[test]
+    fn card_credit_omits_missing_creator() {
+        let mut artwork = complete_artwork();
+        artwork.creator = None;
+
+        assert_eq!(
+            format_card_credit(&artwork),
+            "“Ceremonial Mask”. Gift of A & B. Public domain."
+        );
+    }
+
+    #[test]
+    fn card_credit_omits_missing_provider_credit() {
+        let mut artwork = complete_artwork();
+        artwork.provider_credit = None;
+
+        assert_eq!(
+            format_card_credit(&artwork),
+            "“Ceremonial Mask” — Maker unknown. Public domain."
+        );
+    }
+
+    #[test]
+    fn card_credit_omits_blank_optional_text() {
+        let mut artwork = complete_artwork();
+        artwork.creator = Some(" \t".into());
+        artwork.provider_credit = Some("  ".into());
+
+        assert_eq!(
+            format_card_credit(&artwork),
+            "“Ceremonial Mask”. Public domain."
+        );
+    }
+
+    #[test]
+    fn card_credit_does_not_duplicate_terminal_punctuation() {
+        let cases = [
+            ("Maker unknown.", "Gift of A & B", "Maker unknown. Gift"),
+            ("Maker unknown?", "Gift of A & B", "Maker unknown? Gift"),
+            ("Maker unknown", "Gift of A & B.", "Gift of A & B. Public"),
+            ("Maker unknown", "Gift of A & B!", "Gift of A & B! Public"),
+        ];
+
+        for (creator, credit, expected_boundary) in cases {
+            let mut artwork = complete_artwork();
+            artwork.creator = Some(creator.into());
+            artwork.provider_credit = Some(credit.into());
+            let card_credit = format_card_credit(&artwork);
+
+            assert!(
+                card_credit.contains(expected_boundary),
+                "{creator} / {credit}"
+            );
+            assert!(!card_credit.contains(".."), "{creator} / {credit}");
+            assert!(!card_credit.contains("?."), "{creator} / {credit}");
+            assert!(!card_credit.contains("!."), "{creator} / {credit}");
+        }
+    }
+
+    #[test]
+    fn card_credit_uses_each_short_license_label() {
+        let cases = [
+            (CommercialLicense::Cc0, "CC0."),
+            (CommercialLicense::PublicDomain, "Public domain."),
+            (CommercialLicense::CcBy, "CC BY."),
+        ];
+
+        for (license, expected_end) in cases {
+            let mut artwork = complete_artwork();
+            artwork.license = license;
+
+            assert!(format_card_credit(&artwork).ends_with(expected_end));
+        }
+    }
+
+    #[test]
+    fn card_credit_never_reads_url_provenance() {
+        let mut artwork = complete_artwork();
+        artwork.object_url = "https://object_url.example.test/artwork".into();
+
+        let card_credit = format_card_credit(&artwork);
+        for forbidden in ["http", "Source:", "creativecommons.org", "object_url"] {
+            assert!(!card_credit.contains(forbidden), "found {forbidden}");
+        }
+    }
+
+    #[test]
+    fn card_credit_matches_the_buffalo_mask_contract() {
+        let mut artwork = complete_artwork();
+        artwork.title = "Buffalo Mask".into();
+        artwork.creator = None;
+        artwork.provider_credit = Some("Gift of Katherine C. White".into());
+        artwork.license = CommercialLicense::Cc0;
+
+        assert_eq!(
+            format_card_credit(&artwork),
+            "“Buffalo Mask”. Gift of Katherine C. White. CC0."
+        );
+    }
+
+    #[test]
+    fn card_credit_work_helper_handles_creator_presence_and_blank_values() {
+        let mut artwork = complete_artwork();
+        assert_eq!(format_work(&artwork), "“Ceremonial Mask” — Maker unknown");
+
+        artwork.creator = None;
+        assert_eq!(format_work(&artwork), "“Ceremonial Mask”");
+
+        artwork.creator = Some(" \t".into());
+        assert_eq!(format_work(&artwork), "“Ceremonial Mask”");
+    }
+
+    #[test]
+    fn card_credit_sentence_helper_handles_spacing_and_terminal_punctuation() {
+        let mut output = String::new();
+        for part in ["First", "Second.", "Third?", "Fourth!", "“Quoted”"] {
+            append_sentence(&mut output, part);
+        }
+
+        assert_eq!(output, "First. Second. Third? Fourth! “Quoted”.");
     }
 }

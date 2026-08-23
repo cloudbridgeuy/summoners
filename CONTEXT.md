@@ -36,15 +36,16 @@ browser content, diagnostics, or cache names. Metadata responses stay in the
 user cache for 24 hours. Card and preview image bytes stay in a separate user
 cache for 30 days. Cards use local image and detail routes that accept only a
 known source and object ID. The detail route reconstructs trusted provider
-metadata and shows a local-proxy preview, normalized metadata, the accepted
-license, and the ready-to-print attribution. Provider slots that do not have a
-connection return an unavailable notice, and a connected-provider failure
-returns one failure notice without stopping the page. A corrupt metadata or
-thumbnail cache entry degrades to a cache miss instead of stopping the search.
-Startup removes expired and corrupt cache entries on a best-effort basis. The
-cache commands report the resolved cache path and separate fresh and expired
-file counts and byte totals for metadata and thumbnails, or remove only the
-Cceroby cache root. Cache inspection does not follow symbolic links.
+metadata and shows a local-proxy preview, normalized metadata, a compact
+URL-free card credit, and separate license and source-object links. Provider
+slots that do not have a connection return an unavailable notice, and a
+connected-provider failure returns one failure notice without stopping the
+page. A corrupt metadata or thumbnail cache entry degrades to a cache miss
+instead of stopping the search. Startup removes expired and corrupt cache
+entries on a best-effort basis. The cache commands report the resolved cache
+path and separate fresh and expired file counts and byte totals for metadata
+and thumbnails, or remove only the Cceroby cache root. Cache inspection does
+not follow symbolic links.
 The detail page accepts an editable safe file name and free-form tags. A
 download requires the Host and Origin to match the exact authority assigned to
 the loopback listener. It strictly parses the complete form before provider I/O
@@ -131,7 +132,9 @@ server. Ctrl-C stops either mode and closes open event streams cleanly.
 - **THEN** the server reconstructs the artwork from its known source and object
   ID through the provider and metadata cache
 - **AND** the page shows a full local-proxy preview, title, institution, source
-  ID, accepted license, source object, and ready-to-print attribution
+  ID, and compact card credit without raw URLs
+- **AND** separate License and Source object rows link to the accepted license
+  and trusted source object
 - **AND** creator, date, and culture or region appear when available
 - **AND** the Back link returns to the accumulated search results
 

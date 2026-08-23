@@ -1,6 +1,6 @@
 //! Pure complete-page HTML rendering.
 
-use crate::artwork::ArtworkKey;
+use crate::artwork::{ArtworkKey, format_card_credit};
 use crate::core::{Artwork, ProviderNotice, SearchView, SourceKind};
 use crate::download::DownloadNotice;
 
@@ -18,13 +18,10 @@ const PAGE_LIFECYCLE_SCRIPT: &str = r#"<script>
 </script>"#;
 
 /// Trusted data rendered on the artwork detail page.
-///
-/// A later download must pass `attribution` unchanged to XMP construction.
 #[derive(Debug, Clone, Copy)]
 pub struct DetailView<'a> {
     pub artwork: &'a Artwork,
     pub key: &'a ArtworkKey,
-    pub attribution: &'a str,
     pub slug: &'a str,
     pub tags: &'a str,
     pub notice: Option<&'a DownloadNotice>,
@@ -144,10 +141,11 @@ pub fn render_search_page(view: SearchView<'_>) -> String {
     with_page_lifecycle(html)
 }
 
-/// Render one trusted artwork and its exact attribution.
+/// Render one trusted artwork and its compact card credit.
 #[must_use]
 pub fn render_detail_page(view: DetailView<'_>) -> String {
     let artwork = view.artwork;
+    let card_credit = format_card_credit(artwork);
     let preview_url = escape_html(&artwork_route_url("/preview", view.key));
     let optional_rows = [
         ("Creator", artwork.creator.as_deref()),
@@ -185,7 +183,7 @@ pub fn render_detail_page(view: DetailView<'_>) -> String {
     dl {{ display: grid; gap: .65rem; }}
     dl div {{ display: grid; grid-template-columns: minmax(8rem, 12rem) 1fr; gap: .75rem; }}
     dt {{ font-weight: 700; }} dd {{ margin: 0; }}
-    .attribution {{ padding: 1rem; border: 1px solid #8886; border-radius: .6rem; }}
+    .card-credit {{ padding: 1rem; border: 1px solid #8886; border-radius: .6rem; }}
     .download-form {{ display: grid; gap: .8rem; padding: 1rem; border: 1px solid #8886; border-radius: .6rem; }}
     .download-form input, .download-form textarea {{ box-sizing: border-box; width: 100%; padding: .7rem; }}
     .download-form textarea {{ min-height: 7rem; }}
@@ -204,7 +202,7 @@ pub fn render_detail_page(view: DetailView<'_>) -> String {
       <div><dt>License</dt><dd><a href="{license_url}">{license}</a></dd></div>
       <div><dt>Source object</dt><dd><a href="{object_url}">{object_url}</a></dd></div>
     </dl>
-    <section><h2>Ready-to-print attribution</h2><p class="attribution">{attribution}</p></section>
+    <section><h2>Card credit</h2><p class="card-credit">{card_credit}</p></section>
     <section>
       <h2>Download JPEG</h2>
       {notice}
@@ -224,7 +222,7 @@ pub fn render_detail_page(view: DetailView<'_>) -> String {
         source_id = escape_html(&artwork.source_id),
         form_id = escape_html(view.key.id().as_str()),
         license = artwork.license.label(),
-        attribution = escape_html(view.attribution),
+        card_credit = escape_html(&card_credit),
         source = artwork.source.key(),
         slug = escape_html(view.slug),
         tags = escape_html(view.tags),
@@ -271,7 +269,7 @@ fn escape_html(raw: &str) -> String {
 mod tests {
     #![allow(clippy::expect_used)]
 
-    use crate::artwork::format_attribution;
+    use crate::artwork::{format_attribution, format_card_credit};
     use crate::core::{
         CommercialLicense, Culture, ImageUrls, ProviderOutcome, ProviderPage, QueryText,
         SearchQuery, SourceSet, merge_page,
@@ -405,14 +403,12 @@ mod tests {
     }
 
     #[test]
-    fn detail_renderer_shows_preview_metadata_license_attribution_and_back_navigation() {
+    fn detail_renderer_shows_preview_metadata_license_card_credit_and_back_navigation() {
         let artwork = artwork();
         let key = ArtworkKey::try_from_parts("aic", "1001").expect("key is valid");
-        let attribution = format_attribution(&artwork);
         let html = render_detail_page(DetailView {
             artwork: &artwork,
             key: &key,
-            attribution: &attribution,
             slug: "mask-one",
             tags: "",
             notice: None,
@@ -435,22 +431,39 @@ mod tests {
     }
 
     #[test]
-    fn displayed_attribution_uses_the_exact_future_xmp_value() {
+    fn displayed_card_credit_is_url_free_and_keeps_separate_provenance_links() {
         let mut artwork = artwork();
         artwork.title = "Mask One".into();
         artwork.provider_credit = Some("Museum gift".into());
         artwork.object_url = "https://example.test/object/1001".into();
         let key = ArtworkKey::try_from_parts("aic", "1001").expect("key is valid");
         let future_xmp_value = format_attribution(&artwork);
+        let card_credit = format_card_credit(&artwork);
         let html = render_detail_page(DetailView {
             artwork: &artwork,
             key: &key,
-            attribution: &future_xmp_value,
             slug: "mask-one",
             tags: "",
             notice: None,
         });
-        assert!(html.contains(&format!("<p class=\"attribution\">{future_xmp_value}</p>")));
+        assert!(html.contains("<h2>Card credit</h2>"));
+        assert!(html.contains(&format!("<p class=\"card-credit\">{card_credit}</p>")));
+        assert!(!html.contains("Ready-to-print attribution"));
+        let paragraph = format!("<p class=\"card-credit\">{card_credit}</p>");
+        for forbidden in ["http", "creativecommons.org", "Source:"] {
+            assert!(!paragraph.contains(forbidden), "found {forbidden}");
+        }
+        let license_anchor = concat!(
+            "<a href=\"https://creativecommons.org/publicdomain/mark/1.0/\">",
+            "Public domain</a>"
+        );
+        let source_anchor = concat!(
+            "<a href=\"https://example.test/object/1001\">",
+            "https://example.test/object/1001</a>"
+        );
+        assert_eq!(html.matches(license_anchor).count(), 1);
+        assert_eq!(html.matches(source_anchor).count(), 1);
+        assert!(!html.contains(&future_xmp_value));
     }
 
     #[test]
@@ -460,11 +473,9 @@ mod tests {
         artwork.date = None;
         artwork.culture = None;
         let key = ArtworkKey::try_from_parts("aic", "1001").expect("key is valid");
-        let attribution = format_attribution(&artwork);
         let html = render_detail_page(DetailView {
             artwork: &artwork,
             key: &key,
-            attribution: &attribution,
             slug: "mask-one",
             tags: "",
             notice: None,
@@ -478,11 +489,9 @@ mod tests {
     fn detail_page_has_the_same_browser_lifecycle_script() {
         let artwork = artwork();
         let key = ArtworkKey::try_from_parts("aic", "1001").expect("key is valid");
-        let attribution = format_attribution(&artwork);
         let html = render_detail_page(DetailView {
             artwork: &artwork,
             key: &key,
-            attribution: &attribution,
             slug: "mask-one",
             tags: "",
             notice: None,
@@ -497,14 +506,12 @@ mod tests {
     fn detail_download_form_exposes_only_identity_slug_tags_and_a_typed_notice() {
         let artwork = artwork();
         let key = ArtworkKey::try_from_parts("aic", "1001").expect("key is valid");
-        let attribution = format_attribution(&artwork);
         let notice = DownloadNotice::Replaced {
             path: "assets/mask.jpg".into(),
         };
         let html = render_detail_page(DetailView {
             artwork: &artwork,
             key: &key,
-            attribution: &attribution,
             slug: "mask&lt;hostile",
             tags: "ritual & blue",
             notice: Some(&notice),
