@@ -2,16 +2,19 @@
 
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 
 use axum::Router;
 use axum::body::Bytes;
 use axum::extract::{RawQuery, State};
 use axum::http::{HeaderMap, StatusCode, header};
+use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::{get, post};
+use futures::Stream;
 use thiserror::Error;
 use tokio::net::TcpListener;
-use tokio::sync::{Mutex, RwLock, broadcast};
+use tokio::sync::{Mutex, Notify, RwLock, broadcast, watch};
 
 use crate::artwork::{ArtworkKey, ArtworkKeyError, format_attribution};
 use crate::core::{OutputDirectory, SearchParams, SearchQuery, SearchSession, merge_page};
@@ -29,6 +32,8 @@ pub struct AppState {
     authority: ListenerAuthority,
     search_gate: Arc<Mutex<()>>,
     shutdown: broadcast::Sender<()>,
+    live: LiveConnections,
+    quit: Arc<Notify>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -61,12 +66,91 @@ impl AppState {
             authority: ListenerAuthority::from_address(authority),
             search_gate: Arc::new(Mutex::new(())),
             shutdown,
+            live: LiveConnections::new(),
+            quit: Arc::new(Notify::new()),
         }
     }
 
     #[must_use]
     pub fn shutdown_sender(&self) -> broadcast::Sender<()> {
         self.shutdown.clone()
+    }
+
+    #[must_use]
+    pub fn live_connections(&self) -> LiveConnections {
+        self.live.clone()
+    }
+
+    #[must_use]
+    pub fn quit_notifier(&self) -> Arc<Notify> {
+        Arc::clone(&self.quit)
+    }
+}
+
+/// One consistent view of browser connection activity.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct LiveSnapshot {
+    pub active: usize,
+    pub ever_connected: bool,
+    pub(crate) generation: u64,
+}
+
+/// Shared browser connection state with lossless change notification.
+#[derive(Debug, Clone)]
+pub struct LiveConnections {
+    sender: watch::Sender<LiveSnapshot>,
+}
+
+impl LiveConnections {
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            sender: watch::channel(LiveSnapshot::default()).0,
+        }
+    }
+
+    #[must_use]
+    pub fn snapshot(&self) -> LiveSnapshot {
+        *self.sender.borrow()
+    }
+
+    pub(crate) fn subscribe(&self) -> watch::Receiver<LiveSnapshot> {
+        self.sender.subscribe()
+    }
+}
+
+impl Default for LiveConnections {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// One live SSE connection. Dropping it records the disconnect exactly once.
+#[derive(Debug)]
+pub struct LiveGuard {
+    sender: watch::Sender<LiveSnapshot>,
+}
+
+impl LiveGuard {
+    #[must_use]
+    pub fn new(live: &LiveConnections) -> Self {
+        live.sender.send_modify(|snapshot| {
+            snapshot.active = snapshot.active.saturating_add(1);
+            snapshot.ever_connected = true;
+            snapshot.generation = snapshot.generation.wrapping_add(1);
+        });
+        Self {
+            sender: live.sender.clone(),
+        }
+    }
+}
+
+impl Drop for LiveGuard {
+    fn drop(&mut self) {
+        self.sender.send_modify(|snapshot| {
+            snapshot.active = snapshot.active.saturating_sub(1);
+            snapshot.generation = snapshot.generation.wrapping_add(1);
+        });
     }
 }
 
@@ -78,6 +162,8 @@ pub fn router(state: AppState) -> Router {
         .route("/preview", get(preview))
         .route("/detail", get(detail))
         .route("/download", post(download))
+        .route("/live", get(live))
+        .route("/quit", post(quit))
         .with_state(state)
 }
 
@@ -223,6 +309,44 @@ async fn download(State(state): State<AppState>, headers: HeaderMap, body: Bytes
         notice: Some(&notice),
     }))
     .into_response()
+}
+
+async fn live(
+    State(state): State<AppState>,
+) -> Sse<impl Stream<Item = Result<Event, std::convert::Infallible>>> {
+    let guard = LiveGuard::new(&state.live);
+    let shutdown = state.shutdown.subscribe();
+    let stream = futures::stream::unfold(
+        (guard, shutdown, true),
+        |(guard, mut shutdown, first)| async move {
+            if first {
+                return Some((
+                    Ok(Event::default().event("heartbeat").data("connected")),
+                    (guard, shutdown, false),
+                ));
+            }
+            tokio::select! {
+                _ = tokio::time::sleep(Duration::from_secs(30)) => Some((
+                    Ok(Event::default().event("heartbeat").data("connected")),
+                    (guard, shutdown, false),
+                )),
+                _ = shutdown.recv() => None,
+            }
+        },
+    );
+    Sse::new(stream).keep_alive(
+        KeepAlive::new()
+            .interval(Duration::from_secs(5))
+            .text("heartbeat"),
+    )
+}
+
+async fn quit(State(state): State<AppState>, headers: HeaderMap) -> StatusCode {
+    if !is_same_origin(&state.authority, &headers) {
+        return StatusCode::FORBIDDEN;
+    }
+    state.quit.notify_one();
+    StatusCode::NO_CONTENT
 }
 
 #[must_use]
@@ -827,6 +951,23 @@ mod tests {
         assert_eq!(unavailable.status(), StatusCode::NOT_FOUND);
     }
 
+    #[test]
+    fn live_guard_counts_each_connection_and_cannot_underflow() {
+        let live = LiveConnections::new();
+        assert_eq!(live.snapshot(), LiveSnapshot::default());
+        let first = LiveGuard::new(&live);
+        let second = LiveGuard::new(&live);
+        assert_eq!(live.snapshot().active, 2);
+        assert!(live.snapshot().ever_connected);
+        drop(first);
+        assert_eq!(live.snapshot().active, 1);
+        drop(second);
+        assert_eq!(live.snapshot().active, 0);
+    }
+
     #[path = "download_tests.rs"]
     mod download_tests;
+
+    #[path = "lifecycle_tests.rs"]
+    mod lifecycle_tests;
 }

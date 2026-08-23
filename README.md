@@ -16,7 +16,9 @@ additional source slots remain unavailable.
   artwork previews, exact attribution, a 24-hour metadata cache, a 30-day image
   cache, and a trusted self-contained JPEG download path. Cleveland downloads
   use valid absolute HTTP(S) full TIFF originals when available and the best
-  valid absolute HTTP(S) JPEG otherwise.
+  valid absolute HTTP(S) JPEG otherwise. The CLI can inspect or clear its cache.
+  A transient browser session stops after its last tab closes; `--serve` keeps
+  it available until Ctrl-C.
 - `xtask`: repository lint and Git hook automation.
 
 ## Design inputs
@@ -47,6 +49,22 @@ Run the workspace tests directly with:
 ```sh
 cargo test --workspace --all-targets
 ```
+
+Inspect or clear Cceroby's user cache with:
+
+```sh
+cargo run -p cceroby -- cache info
+cargo run -p cceroby -- cache clear
+```
+
+On Unix, cache access and pruning use no-follow file handles. On Apple
+platforms, Linux, and Android, cache removal first detaches the exact cache
+root. Thus, a new cache that a running search creates remains. A removal error
+returns a failure and does not print a success report. If the detached root or
+a nested entry changes during removal, Cceroby stops and does not delete the
+replacement. A platform without the required atomic rename refuses cache
+removal. On non-Unix platforms, Cceroby keeps search work available without
+cache I/O.
 
 ## License
 

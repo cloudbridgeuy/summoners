@@ -37,12 +37,22 @@ license, and the ready-to-print attribution. Provider slots that do not have a
 connection return an unavailable notice, and a connected-provider failure
 returns one failure notice without stopping the page. A corrupt metadata or
 thumbnail cache entry degrades to a cache miss instead of stopping the search.
+Startup removes expired and corrupt cache entries on a best-effort basis. The
+cache commands report the resolved cache path and separate fresh and expired
+file counts and byte totals for metadata and thumbnails, or remove only the
+Cceroby cache root. Cache inspection does not follow symbolic links.
 The detail page accepts an editable safe file name and free-form tags. A
 download requires the Host and Origin to match the exact authority assigned to
 the loopback listener. It strictly parses the complete form before provider I/O
 and reconstructs all policy and remote-request data from the provider, keeps
 native JPEG scan data, converts TIFF input once, embeds attribution and tags as
 standard XMP, and atomically writes one JPEG in the selected output directory.
+Each complete search or detail page holds one local event stream while its tab
+is open. Without `--serve`, the server stops after a same-authority POST quit
+request or after the last connected tab stays disconnected for 10 seconds. It
+does not stop before a page has connected, and a reconnect restarts the grace
+period. With `--serve`, browser quit and disconnect events do not stop the
+server. Ctrl-C stops either mode and closes open event streams cleanly.
 
 #### Scenario: A valid local search starts
 
@@ -168,6 +178,34 @@ standard XMP, and atomically writes one JPEG in the selected output directory.
   best-effort basis
 - **AND** the provider request can continue
 
+#### Scenario: A user inspects or clears the cache
+
+- **WHEN** the user runs `cceroby cache info`
+- **THEN** the command reports the resolved cache path
+- **AND** it reports fresh and expired file counts and byte totals separately
+  for metadata and thumbnails
+- **WHEN** the user runs `cceroby cache clear`
+- **THEN** the command reports the number of removed files
+- **AND** on Apple platforms, Linux, and Android it atomically detaches and
+  removes only the Cceroby cache root without following symbolic links
+- **AND** a cache root that a writer creates after the detach operation remains
+- **AND** if the detached root or a nested entry changes identity, the command
+  fails without deleting the replacement
+- **AND** a permission, inspection, count, or removal error makes the command
+  fail without a success report
+- **AND** a missing or disabled cache is a safe no-op
+- **AND** on a platform without the required atomic no-replace rename, the
+  command refuses removal
+
+#### Scenario: Startup prunes old cache entries
+
+- **WHEN** a search starts with expired or corrupt metadata or thumbnails
+- **THEN** on Unix startup removes those entries on a best-effort basis with
+  handle-relative operations that do not follow symbolic links
+- **AND** a cache I/O error does not stop normal search work
+- **AND** on a platform without safe handle-relative cache operations, normal
+  search work continues without cache reads, writes, or pruning
+
 #### Scenario: A connected provider fails
 
 - **WHEN** a selected connected provider cannot complete its search
@@ -180,10 +218,28 @@ standard XMP, and atomically writes one JPEG in the selected output directory.
   available directory
 - **THEN** the command reports the input error before it starts the server
 
-#### Scenario: The user stops the local server
+#### Scenario: A browser controls a transient server
+
+- **WHEN** the first search or detail page connects to the local event stream
+  and all connected pages then stay disconnected for 10 seconds
+- **THEN** the server completes graceful shutdown
+- **WHEN** a page reconnects during the 10-second grace period
+- **THEN** the server stays available and restarts the full grace period after
+  the next disconnect
+- **WHEN** no page has connected
+- **THEN** the disconnect timer does not stop the server
+- **WHEN** the user presses Esc on a search or detail page
+- **THEN** the page sends a POST quit request with the same exact Host and
+  Origin authority required by trusted downloads
+- **AND** a missing, hostile, or mismatched authority cannot request shutdown
+
+#### Scenario: The user keeps or stops the local server
 
 - **WHEN** the local server receives Ctrl-C
 - **THEN** it completes graceful shutdown and the command exits
+- **WHEN** the user starts the search with `--serve`
+- **THEN** tab disconnects and browser quit requests do not stop the server
+- **AND** Ctrl-C remains available
 
 ### Requirement: Complete local quality gate
 

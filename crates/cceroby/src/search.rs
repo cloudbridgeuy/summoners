@@ -1,13 +1,15 @@
 //! Listener, browser, and process-signal shell for local search.
 
+use std::future::Future;
 use std::net::SocketAddr;
-use std::time::SystemTime;
+use std::sync::Arc;
+use std::time::{Duration, SystemTime};
 
 use color_eyre::eyre::{Result, WrapErr};
 use futures::future::join_all;
 use thiserror::Error;
 use tokio::net::TcpListener;
-use tokio::sync::broadcast;
+use tokio::sync::{Notify, broadcast};
 
 use crate::artwork::ArtworkKey;
 use crate::asset_writer::write_atomic_replace;
@@ -23,7 +25,7 @@ use crate::providers::{
     ProviderConfigError, ProviderEntry, ProviderSet,
 };
 use crate::rate_limit::RateLimiters;
-use crate::server::{self, AppState};
+use crate::server::{self, AppState, LiveConnections};
 use crate::xmp::{build_xmp_packet, embed_xmp};
 
 /// Provider I/O dependencies shared by startup and form searches.
@@ -278,20 +280,101 @@ pub async fn run(seed: SearchSeed) -> Result<()> {
         eprintln!("Could not open the default browser. Open {url} manually.");
     }
 
-    let signal = shutdown_signal(state.shutdown_sender());
+    let signal = shutdown_signal(
+        state.live_connections(),
+        state.quit_notifier(),
+        seed.serve,
+        state.shutdown_sender(),
+    );
     let server = server::run(listener, state, receiver);
     let (signal_result, server_result) = tokio::join!(signal, server);
     signal_result?;
     server_result.wrap_err("the local search server stopped with an error")
 }
 
-/// Wait for Ctrl-C and notify all local server tasks.
-pub async fn shutdown_signal(shutdown: broadcast::Sender<()>) -> Result<()> {
-    tokio::signal::ctrl_c()
-        .await
-        .wrap_err("cannot install the Ctrl-C handler")?;
+/// The event that selected transient or persistent shutdown.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShutdownReason {
+    CtrlC,
+    BrowserQuit,
+    BrowserClosed,
+}
+
+/// Wait for the selected lifecycle event and notify all local server tasks.
+pub async fn shutdown_signal(
+    live: LiveConnections,
+    quit: Arc<Notify>,
+    persistent: bool,
+    shutdown: broadcast::Sender<()>,
+) -> Result<()> {
+    let reason = select_shutdown(live, quit, persistent, async {
+        tokio::signal::ctrl_c()
+            .await
+            .wrap_err("cannot install the Ctrl-C handler")
+    })
+    .await?;
+    eprintln!("{}", shutdown_message(reason));
     let _ = shutdown.send(());
     Ok(())
+}
+
+/// Select the lifecycle event. The Ctrl-C future is injected for direct tests.
+pub async fn select_shutdown<F>(
+    live: LiveConnections,
+    quit: Arc<Notify>,
+    persistent: bool,
+    ctrl_c: F,
+) -> Result<ShutdownReason>
+where
+    F: Future<Output = Result<()>>,
+{
+    if persistent {
+        ctrl_c.await?;
+        return Ok(ShutdownReason::CtrlC);
+    }
+
+    tokio::select! {
+        result = ctrl_c => {
+            result?;
+            Ok(ShutdownReason::CtrlC)
+        }
+        () = quit.notified() => Ok(ShutdownReason::BrowserQuit),
+        () = browser_closed(live) => Ok(ShutdownReason::BrowserClosed),
+    }
+}
+
+async fn browser_closed(live: LiveConnections) {
+    const GRACE: Duration = Duration::from_secs(10);
+
+    let mut changes = live.subscribe();
+    loop {
+        let snapshot = *changes.borrow_and_update();
+        if !snapshot.ever_connected || snapshot.active > 0 {
+            let _ = changes.changed().await;
+            continue;
+        }
+        let generation = snapshot.generation;
+        tokio::select! {
+            _ = tokio::time::sleep(GRACE) => {
+                let current = live.snapshot();
+                if current.active == 0 && current.generation == generation {
+                    return;
+                }
+            }
+            result = changes.changed() => {
+                let _ = result;
+            }
+        }
+    }
+}
+
+#[must_use]
+const fn shutdown_message(reason: ShutdownReason) -> &'static str {
+    match reason {
+        ShutdownReason::CtrlC => "Stopping after Ctrl-C.",
+        ShutdownReason::BrowserQuit => "Stopping after the browser request.",
+        ShutdownReason::BrowserClosed => "Stopping after the browser closed.",
+    }
 }
 
 fn serving_url(address: SocketAddr) -> String {
@@ -481,5 +564,145 @@ mod tests {
         assert_eq!(page.artworks.len(), 1);
         assert_eq!(requests.load(Ordering::SeqCst), 2);
         task.abort();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn transient_never_connected_state_does_not_stop() {
+        let live = LiveConnections::new();
+        let task = tokio::spawn(select_shutdown(
+            live,
+            Arc::new(Notify::new()),
+            false,
+            futures::future::pending::<Result<()>>(),
+        ));
+        tokio::task::yield_now().await;
+        tokio::time::advance(Duration::from_secs(60)).await;
+        tokio::task::yield_now().await;
+
+        assert!(!task.is_finished());
+        task.abort();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn transient_disconnect_stops_at_the_grace_boundary() {
+        let live = LiveConnections::new();
+        drop(crate::server::LiveGuard::new(&live));
+        let task = tokio::spawn(select_shutdown(
+            live,
+            Arc::new(Notify::new()),
+            false,
+            futures::future::pending::<Result<()>>(),
+        ));
+        tokio::task::yield_now().await;
+        tokio::time::advance(Duration::from_secs(9)).await;
+        tokio::task::yield_now().await;
+        assert!(!task.is_finished());
+
+        tokio::time::advance(Duration::from_secs(1)).await;
+        let reason = task
+            .await
+            .expect("shutdown task completes")
+            .expect("shutdown selection succeeds");
+        assert_eq!(reason, ShutdownReason::BrowserClosed);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn reconnect_during_grace_restarts_the_full_interval() {
+        let live = LiveConnections::new();
+        drop(crate::server::LiveGuard::new(&live));
+        let task = tokio::spawn(select_shutdown(
+            live.clone(),
+            Arc::new(Notify::new()),
+            false,
+            futures::future::pending::<Result<()>>(),
+        ));
+        tokio::task::yield_now().await;
+        tokio::time::advance(Duration::from_secs(9)).await;
+        let reconnected = crate::server::LiveGuard::new(&live);
+        tokio::task::yield_now().await;
+        tokio::time::advance(Duration::from_secs(2)).await;
+        assert!(!task.is_finished());
+
+        drop(reconnected);
+        tokio::task::yield_now().await;
+        tokio::time::advance(Duration::from_secs(9)).await;
+        tokio::task::yield_now().await;
+        assert!(!task.is_finished());
+        tokio::time::advance(Duration::from_secs(1)).await;
+        assert_eq!(
+            task.await
+                .expect("shutdown task completes")
+                .expect("shutdown selection succeeds"),
+            ShutdownReason::BrowserClosed
+        );
+    }
+
+    #[tokio::test]
+    async fn browser_quit_and_ctrl_c_have_direct_selection_paths() {
+        let quit = Arc::new(Notify::new());
+        quit.notify_one();
+        assert_eq!(
+            select_shutdown(
+                LiveConnections::new(),
+                quit,
+                false,
+                futures::future::pending::<Result<()>>()
+            )
+            .await
+            .expect("browser quit selection succeeds"),
+            ShutdownReason::BrowserQuit
+        );
+        assert_eq!(
+            select_shutdown(
+                LiveConnections::new(),
+                Arc::new(Notify::new()),
+                false,
+                futures::future::ready(Ok(()))
+            )
+            .await
+            .expect("Ctrl-C selection succeeds"),
+            ShutdownReason::CtrlC
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn persistent_serve_ignores_browser_disconnect_and_quit() {
+        let live = LiveConnections::new();
+        drop(crate::server::LiveGuard::new(&live));
+        let quit = Arc::new(Notify::new());
+        quit.notify_one();
+        let (send_ctrl_c, receive_ctrl_c) = tokio::sync::oneshot::channel();
+        let task = tokio::spawn(select_shutdown(live, quit, true, async {
+            let _ = receive_ctrl_c.await;
+            Ok(())
+        }));
+        tokio::task::yield_now().await;
+        tokio::time::advance(Duration::from_secs(60)).await;
+        tokio::task::yield_now().await;
+        assert!(!task.is_finished());
+
+        send_ctrl_c.send(()).expect("Ctrl-C seam remains open");
+        assert_eq!(
+            task.await
+                .expect("shutdown task completes")
+                .expect("shutdown selection succeeds"),
+            ShutdownReason::CtrlC
+        );
+    }
+
+    #[test]
+    fn shutdown_messages_cover_each_reason() {
+        assert_eq!(
+            shutdown_message(ShutdownReason::CtrlC),
+            "Stopping after Ctrl-C."
+        );
+        assert_eq!(
+            shutdown_message(ShutdownReason::BrowserQuit),
+            "Stopping after the browser request."
+        );
+        assert_eq!(
+            shutdown_message(ShutdownReason::BrowserClosed),
+            "Stopping after the browser closed."
+        );
     }
 }
