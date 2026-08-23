@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::SystemTime;
 
 use axum::Router;
-use axum::extract::State;
+use axum::extract::{RawQuery, State};
 use axum::http::StatusCode;
 use axum::routing::get;
 use img_parts::Bytes;
@@ -132,33 +132,54 @@ fn metadata_cache_filename_does_not_contain_the_key() {
 #[test]
 fn search_request_maps_all_regions_and_paging() {
     let cases = [
+        (None, vec!["online_media_type:Images"]),
         (
-            "Africa",
+            Some("Africa"),
             vec!["online_media_type:Images", "unit_code:NMAfA"],
         ),
         (
-            "Asian",
+            Some("Asian"),
             vec!["online_media_type:Images", "unit_code:FSG OR unit_code:FSA"],
         ),
         (
-            "pre-Columbian",
+            Some("pre-Columbian"),
             vec!["online_media_type:Images", "unit_code:NMAI"],
         ),
     ];
     for (culture, expected_filters) in cases {
-        let request = provider(Some(SECRET)).search_request(&query(Some(culture)), Some("40"));
+        let request = provider(Some(SECRET)).search_request(&query(culture), Some("40"));
         let pairs = query_map(&request);
         assert_eq!(pairs.get("q").map(String::as_str), Some("ritual mask"));
         assert_eq!(pairs.get("start").map(String::as_str), Some("40"));
         assert_eq!(pairs.get("rows").map(String::as_str), Some("20"));
         assert_eq!(pairs.get("type").map(String::as_str), Some("edanmdm"));
         assert_eq!(pairs.get("row_group").map(String::as_str), Some("objects"));
+        assert_eq!(
+            request
+                .url()
+                .query_pairs()
+                .filter(|(key, value)| key == "sort" && value == "id")
+                .count(),
+            1
+        );
         let filters: Vec<String> =
             serde_json::from_str(pairs.get("fqs").expect("filter query exists"))
                 .expect("filter query is JSON");
         assert_eq!(filters, expected_filters);
         assert!(!pairs.contains_key("api_key"));
     }
+    let endpoint = Url::parse("https://example.test/search?retain=one&sort=score&sort=date")
+        .expect("endpoint is valid");
+    let request =
+        SmithsonianProvider::new(endpoint, Some(SECRET.into())).search_request(&query(None), None);
+    let pairs = query_map(&request);
+    assert_eq!(pairs.get("retain").map(String::as_str), Some("one"));
+    let sorts = request
+        .url()
+        .query_pairs()
+        .filter(|(key, _)| key == "sort")
+        .collect::<Vec<_>>();
+    assert_eq!(sorts, vec![("sort".into(), "id".into())]);
 }
 
 #[test]
@@ -223,7 +244,7 @@ fn mixed_media_selects_only_the_cc0_image_and_normalizes_metadata() {
     assert_eq!(artwork.provider_credit.as_deref(), Some("Gift of A & B"));
     assert_eq!(
         artwork.object_url,
-        "https://www.si.edu/object/face-mask:nmafa_2005-6-189"
+        "https://n2t.net/ark:/65665/3bc6d9d7-3ec4-4b29-9d47-0de8d9dd6d3a"
     );
     assert_eq!(artwork.license, CommercialLicense::Cc0);
     assert!(artwork.image_urls.thumbnail.contains("NMAfA-2005-6-189"));
@@ -232,6 +253,68 @@ fn mixed_media_selects_only_the_cc0_image_and_normalizes_metadata() {
         artwork.image_urls.original.as_deref(),
         Some("https://ids.si.edu/ids/deliveryService?id=NMAfA-2005-6-189")
     );
+}
+
+#[test]
+fn smithsonian_object_url_preserves_a_secure_record_link_before_guid() {
+    assert_eq!(
+        smithsonian_object_url(
+            Some("https://www.si.edu/object/face-mask:nmafa_2005-6-189"),
+            Some("http://n2t.net/ark:/65665/fallback"),
+        ),
+        Some("https://www.si.edu/object/face-mask:nmafa_2005-6-189".into())
+    );
+    let guid = "http://n2t.net/ark:/65665/example";
+    for record_link in [None, Some(""), Some(" \t ")] {
+        assert_eq!(
+            smithsonian_object_url(record_link, Some(guid)),
+            Some("https://n2t.net/ark:/65665/example".into())
+        );
+    }
+    for record_link in [
+        "http://example.test/object",
+        "not a URL",
+        "ftp://www.si.edu/object/example",
+    ] {
+        assert_eq!(smithsonian_object_url(Some(record_link), Some(guid)), None);
+    }
+}
+
+#[test]
+fn smithsonian_ark_url_accepts_only_safe_http_or_https_arks() {
+    let accepted = [
+        (
+            "http://n2t.net/ark:/65665/example",
+            "https://n2t.net/ark:/65665/example",
+        ),
+        (
+            "http://n2t.net:80/ark:/65665/example",
+            "https://n2t.net/ark:/65665/example",
+        ),
+        (
+            "https://n2t.net/ark:/65665/example",
+            "https://n2t.net/ark:/65665/example",
+        ),
+        (
+            "https://n2t.net:443/ark:/65665/example",
+            "https://n2t.net/ark:/65665/example",
+        ),
+    ];
+    for (guid, expected) in accepted {
+        assert_eq!(smithsonian_ark_url(guid), Some(expected.into()));
+    }
+    for guid in [
+        "not a URL",
+        "ftp://n2t.net/ark:/65665/example",
+        "https://example.test/ark:/65665/example",
+        "https://n2t.net/not-an-ark",
+        "https://user:password@n2t.net/ark:/65665/example",
+        "https://n2t.net:8443/ark:/65665/example",
+        "https://n2t.net/ark:/65665/example?query=true",
+        "https://n2t.net/ark:/65665/example#fragment",
+    ] {
+        assert_eq!(smithsonian_ark_url(guid), None, "{guid}");
+    }
 }
 
 #[test]
@@ -353,7 +436,7 @@ fn record_fallbacks_and_required_fields_are_directly_checked() {
         (
             [
                 "content.descriptiveNonRepeating.record_link",
-                "content.descriptiveNonRepeating.record_link",
+                "content.descriptiveNonRepeating.guid",
             ],
             ArtworkDropReason::MissingSourceId,
         ),
@@ -379,6 +462,7 @@ fn record_fallbacks_and_required_fields_are_directly_checked() {
     let mut public_http_object = base;
     public_http_object["content"]["descriptiveNonRepeating"]["record_link"] =
         serde_json::Value::String("http://example.test/object".into());
+    public_http_object["content"]["descriptiveNonRepeating"]["guid"] = serde_json::Value::Null;
     assert_eq!(
         provider(Some(SECRET)).parse_artwork(
             &ProviderCandidate {
@@ -634,6 +718,7 @@ fn native_jpeg() -> Vec<u8> {
 struct MockState {
     base: String,
     search_requests: Arc<AtomicUsize>,
+    bad_search_requests: Arc<AtomicUsize>,
     detail_requests: Arc<AtomicUsize>,
     image_requests: Arc<AtomicUsize>,
 }
@@ -652,7 +737,7 @@ fn mock_record(base: &str) -> serde_json::Value {
             "descriptiveNonRepeating": {
                 "record_ID":"fsg_F1900.1",
                 "data_source":"National Museum of African Art",
-                "record_link":"https://www.si.edu/object/face-mask:nmafa_2005-6-189",
+                "guid":"http://n2t.net/ark:/65665/3bc6d9d7-3ec4-4b29-9d47-0de8d9dd6d3a",
                 "online_media":{"media":[{
                     "type":"Images",
                     "content":format!("{base}/image"),
@@ -666,12 +751,24 @@ fn mock_record(base: &str) -> serde_json::Value {
 
 #[tokio::test]
 async fn common_v4_paths_search_detail_display_and_download_with_xmp() {
-    async fn search(State(state): State<MockState>) -> String {
+    async fn search(
+        State(state): State<MockState>,
+        RawQuery(raw_query): RawQuery,
+    ) -> (StatusCode, String) {
         state.search_requests.fetch_add(1, Ordering::SeqCst);
-        serde_json::json!({
-            "response":{"rowCount":1,"rows":[mock_record(&state.base)]}
-        })
-        .to_string()
+        let has_sort =
+            raw_query.is_some_and(|query| query.split('&').any(|pair| pair == "sort=id"));
+        if !has_sort {
+            state.bad_search_requests.fetch_add(1, Ordering::SeqCst);
+            return (StatusCode::BAD_REQUEST, "missing deterministic sort".into());
+        }
+        (
+            StatusCode::OK,
+            serde_json::json!({
+                "response":{"rowCount":1,"rows":[mock_record(&state.base)]}
+            })
+            .to_string(),
+        )
     }
     async fn detail(State(state): State<MockState>) -> String {
         state.detail_requests.fetch_add(1, Ordering::SeqCst);
@@ -683,6 +780,7 @@ async fn common_v4_paths_search_detail_display_and_download_with_xmp() {
     }
 
     let search_requests = Arc::new(AtomicUsize::new(0));
+    let bad_search_requests = Arc::new(AtomicUsize::new(0));
     let detail_requests = Arc::new(AtomicUsize::new(0));
     let image_requests = Arc::new(AtomicUsize::new(0));
     let listener = TcpListener::bind("127.0.0.1:0")
@@ -693,6 +791,7 @@ async fn common_v4_paths_search_detail_display_and_download_with_xmp() {
     let state = MockState {
         base: base.clone(),
         search_requests: search_requests.clone(),
+        bad_search_requests: bad_search_requests.clone(),
         detail_requests: detail_requests.clone(),
         image_requests: image_requests.clone(),
     };
@@ -732,6 +831,11 @@ async fn common_v4_paths_search_detail_display_and_download_with_xmp() {
         .await
         .expect("display image loads");
     assert_eq!(display.media_type, DisplayMediaType::Jpeg);
+    let preview = services
+        .load_display_image(&key, DisplayImageSize::Preview)
+        .await
+        .expect("preview image loads");
+    assert_eq!(preview.media_type, DisplayMediaType::Jpeg);
     let attribution = format_attribution(&detail_artwork);
     let slug = Slug::parse("smithsonian-mask").expect("slug is valid");
     let tags = Tags::parse("mask, africa");
@@ -757,7 +861,8 @@ async fn common_v4_paths_search_detail_display_and_download_with_xmp() {
     assert!(xmp.contains("Gift of A &amp; B"));
     assert!(xmp.contains("mask"));
     assert_eq!(search_requests.load(Ordering::SeqCst), 1);
+    assert_eq!(bad_search_requests.load(Ordering::SeqCst), 0);
     assert_eq!(detail_requests.load(Ordering::SeqCst), 1);
-    assert_eq!(image_requests.load(Ordering::SeqCst), 2);
+    assert_eq!(image_requests.load(Ordering::SeqCst), 3);
     task.abort();
 }
