@@ -110,7 +110,7 @@ impl SearchServices {
             .await
             .map_err(|_| ArtworkLoadError::ArtworkUnavailable)?;
         provider
-            .parse_artwork_response(&bytes)
+            .parse_artwork_response_for_key(key, &bytes)
             .map_err(|_| ArtworkLoadError::ArtworkUnavailable)
     }
 

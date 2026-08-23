@@ -183,6 +183,17 @@ pub trait Provider: Send + Sync {
     ) -> Result<Artwork, ArtworkDropReason>;
     fn artwork_request(&self, key: &ArtworkKey) -> Result<HttpRequest, ProviderError>;
     fn parse_artwork_response(&self, bytes: &[u8]) -> Result<Artwork, ProviderError>;
+
+    fn parse_artwork_response_for_key(
+        &self,
+        key: &ArtworkKey,
+        bytes: &[u8],
+    ) -> Result<Artwork, ProviderError> {
+        let artwork = self.parse_artwork_response(bytes)?;
+        (artwork.source == key.source() && artwork.source_id == key.id().as_str())
+            .then_some(artwork)
+            .ok_or(ProviderError::ArtworkUnavailable)
+    }
     fn display_image_request(
         &self,
         artwork: &Artwork,

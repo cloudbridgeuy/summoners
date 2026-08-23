@@ -17,9 +17,11 @@ use super::{
 
 const OFFICIAL_ENDPOINT: &str = "https://commons.wikimedia.org/w/api.php";
 const PAGE_SIZE: u32 = 20;
-const COMMONS_USER_AGENT: HeaderValue = HeaderValue::from_static(
-    "cceroby/0.1.0 (https://github.com/cloudbridgeuy/summoners; contact: https://github.com/cloudbridgeuy)",
-);
+const COMMONS_USER_AGENT: HeaderValue = HeaderValue::from_static(concat!(
+    "cceroby/",
+    env!("CARGO_PKG_VERSION"),
+    " (https://github.com/cloudbridgeuy/summoners; contact: https://github.com/cloudbridgeuy)"
+));
 const MNAV_CATEGORY: &str = "Files provided by Museo Nacional de Artes Visuales de Uruguay";
 const CDF_CATEGORY: &str = "Files provided by Centro de Fotografía de Montevideo";
 
@@ -76,7 +78,7 @@ impl Provider for CommonsProvider {
         pairs.append_pair("iiprop", "url|mime|thumbmime|extmetadata");
         pairs.append_pair("iiurlwidth", "843");
         if let Some(offset) = cursor.offset {
-            pairs.append_pair("continue", "-||");
+            pairs.append_pair("continue", "gsroffset||");
             pairs.append_pair("gsroffset", &offset.to_string());
         }
         drop(pairs);
@@ -121,7 +123,7 @@ impl Provider for CommonsProvider {
     }
     fn artwork_request(&self, key: &ArtworkKey) -> Result<HttpRequest, ProviderError> {
         let title = key.id().as_str();
-        if !title.starts_with("File:") {
+        if !title.starts_with("File:") || title.contains('|') {
             return Err(ProviderError::ArtworkUnavailable);
         }
         Ok(detail_request(self.endpoint.clone(), title))
@@ -129,10 +131,14 @@ impl Provider for CommonsProvider {
     fn parse_artwork_response(&self, bytes: &[u8]) -> Result<Artwork, ProviderError> {
         let response: CommonsResponse =
             serde_json::from_slice(bytes).map_err(|_| ProviderError::MalformedResponse)?;
-        let page = response
+        let mut pages = response
             .query
-            .and_then(|query| query.pages.into_values().next())
+            .map(|query| query.pages.into_values())
             .ok_or(ProviderError::MalformedResponse)?;
+        let page = pages.next().ok_or(ProviderError::MalformedResponse)?;
+        if pages.next().is_some() {
+            return Err(ProviderError::MalformedResponse);
+        }
         normalize_page(page).map_err(drop_reason_to_provider_error)
     }
     fn display_image_request(
@@ -263,7 +269,9 @@ fn normalize_page(page: CommonsPage) -> Result<Artwork, ArtworkDropReason> {
         .as_deref()
         .and_then(canonical_trusted_url)
         .ok_or(ArtworkDropReason::MissingImage)?;
-    if !downloadable_original_mime(info.mime.as_deref()) || !display_mime(info.thumbmime.as_deref())
+    if !downloadable_original_mime(info.mime.as_deref())
+        || !display_mime(info.thumbmime.as_deref())
+        || !thumbnail_mime_matches_url(info.thumbmime.as_deref(), &display)
     {
         return Err(ArtworkDropReason::MissingImage);
     }
@@ -322,18 +330,50 @@ fn license_from_metadata(metadata: &CommonsMetadata) -> Option<CommercialLicense
 }
 
 fn commons_license_url(raw: &str) -> Option<CommercialLicense> {
-    let url = Url::parse(raw).ok()?;
-    if !matches!(url.scheme(), "https" | "http") || url.host_str()? != "creativecommons.org" {
+    let authority = raw.split_once("://")?.1.split('/').next()?;
+    if authority.contains('@') || authority.contains(':') {
         return None;
     }
-    let path = url.path().trim_end_matches('/');
-    match path {
-        "/publicdomain/zero/1.0" | "/publicdomain/zero/1.0/deed.en" => Some(CommercialLicense::Cc0),
-        "/publicdomain/mark/1.0" | "/publicdomain/mark/1.0/deed.en" => {
-            Some(CommercialLicense::PublicDomain)
-        }
-        "/licenses/by/1.0" | "/licenses/by/2.0" | "/licenses/by/2.5" | "/licenses/by/3.0"
-        | "/licenses/by/4.0" => Some(CommercialLicense::CcBy),
+    let url = Url::parse(raw).ok()?;
+    if !matches!(url.scheme(), "https" | "http")
+        || url.host_str()? != "creativecommons.org"
+        || url.username() != ""
+        || url.password().is_some()
+        || url.port().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        return None;
+    }
+    match url.path() {
+        "/publicdomain/zero/1.0"
+        | "/publicdomain/zero/1.0/"
+        | "/publicdomain/zero/1.0/deed.en"
+        | "/publicdomain/zero/1.0/deed.en/" => Some(CommercialLicense::Cc0),
+        "/publicdomain/mark/1.0"
+        | "/publicdomain/mark/1.0/"
+        | "/publicdomain/mark/1.0/deed.en"
+        | "/publicdomain/mark/1.0/deed.en/" => Some(CommercialLicense::PublicDomain),
+        "/licenses/by/1.0"
+        | "/licenses/by/1.0/"
+        | "/licenses/by/1.0/deed.en"
+        | "/licenses/by/1.0/deed.en/"
+        | "/licenses/by/2.0"
+        | "/licenses/by/2.0/"
+        | "/licenses/by/2.0/deed.en"
+        | "/licenses/by/2.0/deed.en/"
+        | "/licenses/by/2.5"
+        | "/licenses/by/2.5/"
+        | "/licenses/by/2.5/deed.en"
+        | "/licenses/by/2.5/deed.en/"
+        | "/licenses/by/3.0"
+        | "/licenses/by/3.0/"
+        | "/licenses/by/3.0/deed.en"
+        | "/licenses/by/3.0/deed.en/"
+        | "/licenses/by/4.0"
+        | "/licenses/by/4.0/"
+        | "/licenses/by/4.0/deed.en"
+        | "/licenses/by/4.0/deed.en/" => Some(CommercialLicense::CcBy),
         _ => None,
     }
 }
@@ -402,16 +442,31 @@ fn downloadable_original_mime(value: Option<&str>) -> bool {
     matches!(value, Some("image/jpeg" | "image/tiff"))
 }
 fn media_type_from_url(raw: &str) -> DisplayMediaType {
+    media_type_from_extension(raw).unwrap_or(DisplayMediaType::Jpeg)
+}
+
+fn media_type_from_extension(raw: &str) -> Option<DisplayMediaType> {
     let extension = Url::parse(raw).ok().and_then(|url| {
         url.path()
             .rsplit_once('.')
             .map(|(_, extension)| extension.to_ascii_lowercase())
     });
     match extension.as_deref() {
-        Some("png") => DisplayMediaType::Png,
-        Some("webp") => DisplayMediaType::Webp,
-        _ => DisplayMediaType::Jpeg,
+        Some("jpg" | "jpeg") => Some(DisplayMediaType::Jpeg),
+        Some("png") => Some(DisplayMediaType::Png),
+        Some("webp") => Some(DisplayMediaType::Webp),
+        _ => None,
     }
+}
+
+fn thumbnail_mime_matches_url(mime: Option<&str>, url: &str) -> bool {
+    let expected = match mime {
+        Some("image/jpeg") => DisplayMediaType::Jpeg,
+        Some("image/png") => DisplayMediaType::Png,
+        Some("image/webp") => DisplayMediaType::Webp,
+        _ => return false,
+    };
+    media_type_from_extension(url) == Some(expected)
 }
 fn canonical_trusted_url(raw: &str) -> Option<String> {
     trusted_remote_url(raw).map(Into::into)
@@ -556,8 +611,20 @@ mod tests {
             .query_pairs()
             .collect::<std::collections::HashMap<_, _>>();
         assert_eq!(request.headers().get(USER_AGENT), Some(&COMMONS_USER_AGENT));
+        assert_eq!(
+            COMMONS_USER_AGENT.to_str().expect("user agent is valid"),
+            concat!(
+                "cceroby/",
+                env!("CARGO_PKG_VERSION"),
+                " (https://github.com/cloudbridgeuy/summoners; contact: https://github.com/cloudbridgeuy)"
+            )
+        );
         assert_eq!(pairs.get("gsrlimit").map(AsRef::as_ref), Some("20"));
         assert_eq!(pairs.get("gsrnamespace").map(AsRef::as_ref), Some("6"));
+        assert_eq!(
+            pairs.get("continue").map(AsRef::as_ref),
+            Some("gsroffset||")
+        );
         assert_eq!(pairs.get("gsroffset").map(AsRef::as_ref), Some("20"));
         assert!(
             pairs
@@ -584,6 +651,36 @@ mod tests {
             normalize_page(invalid),
             Err(ArtworkDropReason::MissingImage)
         );
+        let mut mismatched_thumbnail = page("CC0");
+        mismatched_thumbnail.imageinfo[0].thumbmime = Some("image/png".into());
+        assert_eq!(
+            normalize_page(mismatched_thumbnail),
+            Err(ArtworkDropReason::MissingImage)
+        );
+    }
+
+    #[test]
+    fn thumbnail_media_type_requires_matching_url_extension() {
+        assert!(thumbnail_mime_matches_url(
+            Some("image/png"),
+            "https://upload.wikimedia.org/thumb/mask.png"
+        ));
+        assert!(thumbnail_mime_matches_url(
+            Some("image/webp"),
+            "https://upload.wikimedia.org/thumb/mask.webp"
+        ));
+        assert!(!thumbnail_mime_matches_url(
+            Some("image/png"),
+            "https://upload.wikimedia.org/thumb/mask.jpg"
+        ));
+        assert!(!thumbnail_mime_matches_url(
+            Some("image/webp"),
+            "https://upload.wikimedia.org/thumb/mask"
+        ));
+        assert_eq!(
+            media_type_from_url("https://upload.wikimedia.org/thumb/mask.webp"),
+            DisplayMediaType::Webp
+        );
     }
     #[test]
     fn continuation_is_strict() {
@@ -604,6 +701,27 @@ mod tests {
             .is_err()
         );
     }
+
+    #[test]
+    fn license_urls_allow_only_exact_official_forms() {
+        for raw in [
+            "http://creativecommons.org/publicdomain/zero/1.0/deed.en",
+            "https://creativecommons.org/publicdomain/mark/1.0/",
+            "https://creativecommons.org/licenses/by/4.0/deed.en",
+        ] {
+            assert!(commons_license_url(raw).is_some(), "{raw}");
+        }
+        for raw in [
+            "https://user@creativecommons.org/licenses/by/4.0/",
+            "https://creativecommons.org:443/licenses/by/4.0/",
+            "https://creativecommons.org/licenses/by/4.0/?x=1",
+            "https://creativecommons.org/licenses/by/4.0/#terms",
+            "https://creativecommons.org/licenses/by/4.0//",
+            "https://creativecommons.org/licenses/by/4.0/deed.fr",
+        ] {
+            assert_eq!(commons_license_url(raw), None, "{raw}");
+        }
+    }
     #[test]
     fn malformed_json_and_required_fields_are_rejected() {
         let provider = CommonsProvider::official().expect("endpoint is valid");
@@ -622,25 +740,115 @@ mod tests {
         );
     }
 
-    #[rustfmt::skip]
+    #[test]
+    fn detail_response_binds_to_one_exact_typed_key() {
+        let provider = CommonsProvider::official().expect("endpoint is valid");
+        let key = ArtworkKey::try_from_parts("wikimedia", "File:Mask.jpg").expect("key is valid");
+        let page_value = serde_json::to_value(page("CC0")).expect("page serializes");
+        let exact = serde_json::json!({ "query": { "pages": { "1": page_value } } });
+        let exact = serde_json::to_vec(&exact).expect("detail response serializes");
+        assert!(
+            provider
+                .parse_artwork_response_for_key(&key, &exact)
+                .is_ok()
+        );
+
+        let mismatch = ArtworkKey::try_from_parts("wikimedia", "File:Other.jpg")
+            .expect("different key is valid");
+        assert_eq!(
+            provider.parse_artwork_response_for_key(&mismatch, &exact),
+            Err(ProviderError::ArtworkUnavailable)
+        );
+
+        let mut other = page("CC0");
+        other.title = Some("File:Other.jpg".into());
+        let multiple = serde_json::json!({
+            "query": { "pages": {
+                "1": serde_json::to_value(page("CC0")).expect("page serializes"),
+                "2": serde_json::to_value(other).expect("other page serializes")
+            }}
+        });
+        let multiple = serde_json::to_vec(&multiple).expect("detail response serializes");
+        assert_eq!(
+            provider.parse_artwork_response_for_key(&key, &multiple),
+            Err(ProviderError::MalformedResponse)
+        );
+        let separator = ArtworkKey::try_from_parts("wikimedia", "File:Mask.jpg|evil")
+            .expect("typed key accepts a provider-specific candidate");
+        assert_eq!(
+            provider.artwork_request(&separator),
+            Err(ProviderError::ArtworkUnavailable)
+        );
+    }
+
     #[test]
     fn live_shape_uses_gsroffset_thumbmime_and_generator_index() {
         let provider = CommonsProvider::official().expect("endpoint is valid");
-        let bytes = br#"{"continue":{"gsroffset":2,"continue":"gsroffset||"},"query":{"pages":{"7":{"index":1,"title":"File:Second.jpg","imageinfo":[{"url":"https://upload.wikimedia.org/second.jpg","thumburl":"https://upload.wikimedia.org/thumb/second.jpg","descriptionurl":"https://commons.wikimedia.org/wiki/File:Second.jpg","mime":"image/jpeg","thumbmime":"image/jpeg","extmetadata":{"LicenseShortName":{"value":"CC0"},"LicenseUrl":{"value":"http://creativecommons.org/publicdomain/zero/1.0/deed.en"}}}]},"4":{"index":0,"title":"File:First.jpg","imageinfo":[{"url":"https://upload.wikimedia.org/first.jpg","thumburl":"https://upload.wikimedia.org/thumb/first.jpg","descriptionurl":"https://commons.wikimedia.org/wiki/File:First.jpg","mime":"image/jpeg","thumbmime":"image/jpeg","extmetadata":{"LicenseShortName":{"value":"CC BY 4.0"},"LicenseUrl":{"value":"https://creativecommons.org/licenses/by/4.0/"}}}]}}}}"#;
-        let parsed = provider.parse_search(bytes, None).expect("live shape parses");
+        let first = serde_json::json!({
+            "index": 0,
+            "title": "File:First.jpg",
+            "imageinfo": [{
+                "url": "https://upload.wikimedia.org/first.jpg",
+                "thumburl": "https://upload.wikimedia.org/thumb/first.jpg",
+                "descriptionurl": "https://commons.wikimedia.org/wiki/File:First.jpg",
+                "mime": "image/jpeg",
+                "thumbmime": "image/jpeg",
+                "extmetadata": {
+                    "LicenseShortName": { "value": "CC BY 4.0" },
+                    "LicenseUrl": { "value": "https://creativecommons.org/licenses/by/4.0/" }
+                }
+            }]
+        });
+        let second = serde_json::json!({
+            "index": 1,
+            "title": "File:Second.jpg",
+            "imageinfo": [{
+                "url": "https://upload.wikimedia.org/second.jpg",
+                "thumburl": "https://upload.wikimedia.org/thumb/second.jpg",
+                "descriptionurl": "https://commons.wikimedia.org/wiki/File:Second.jpg",
+                "mime": "image/jpeg",
+                "thumbmime": "image/jpeg",
+                "extmetadata": {
+                    "LicenseShortName": { "value": "CC0" },
+                    "LicenseUrl": { "value": "http://creativecommons.org/publicdomain/zero/1.0/deed.en" }
+                }
+            }]
+        });
+        let response = serde_json::json!({
+            "continue": { "gsroffset": 2, "continue": "gsroffset||" },
+            "query": { "pages": { "7": second, "4": first } }
+        });
+        let bytes = serde_json::to_vec(&response).expect("live shape serializes");
+        let parsed = provider
+            .parse_search(&bytes, None)
+            .expect("live shape parses");
         assert_eq!(parsed.next_cursor.as_deref(), Some("2"));
-        let titles = parsed.candidates.iter().map(|candidate| provider.parse_artwork(candidate, None).expect("accepted").source_id).collect::<Vec<_>>();
+        let titles = parsed
+            .candidates
+            .iter()
+            .map(|candidate| {
+                provider
+                    .parse_artwork(candidate, None)
+                    .expect("accepted")
+                    .source_id
+            })
+            .collect::<Vec<_>>();
         assert_eq!(titles, vec!["File:First.jpg", "File:Second.jpg"]);
     }
 
-    #[rustfmt::skip]
     #[test]
     fn conflicting_license_metadata_and_non_downloadable_original_are_rejected() {
         let mut conflict = page("CC BY-SA 4.0");
-        assert_eq!(normalize_page(conflict), Err(ArtworkDropReason::NotPublicDomain));
+        assert_eq!(
+            normalize_page(conflict),
+            Err(ArtworkDropReason::NotPublicDomain)
+        );
         conflict = page("CC BY 4.0");
         conflict.imageinfo[0].mime = Some("image/png".into());
-        assert_eq!(normalize_page(conflict), Err(ArtworkDropReason::MissingImage));
+        assert_eq!(
+            normalize_page(conflict),
+            Err(ArtworkDropReason::MissingImage)
+        );
     }
 
     #[test]
@@ -695,8 +903,9 @@ mod tests {
     #[tokio::test]
     async fn live_search_parses_accepted_artwork_count() {
         let provider = CommonsProvider::official().expect("endpoint is valid");
+        let client = reqwest::Client::new();
         let request = provider.search_request(&query(None), None);
-        let response = reqwest::Client::new()
+        let response = client
             .get(request.url().clone())
             .headers(request.headers().clone())
             .send()
@@ -704,18 +913,40 @@ mod tests {
             .expect("Commons request succeeds");
         assert!(response.status().is_success());
         let bytes = response.bytes().await.expect("Commons body is readable");
-        let page = provider
+        let first = provider
             .parse_search(&bytes, None)
             .expect("Commons page parses");
-        let accepted = page
+        let first_accepted = first
+            .candidates
+            .iter()
+            .filter(|candidate| provider.parse_artwork(candidate, None).is_ok())
+            .count();
+        let cursor = first.next_cursor.as_deref().expect("first page continues");
+        let request = provider.search_request(&query(None), Some(cursor));
+        let response = client
+            .get(request.url().clone())
+            .headers(request.headers().clone())
+            .send()
+            .await
+            .expect("second Commons request succeeds");
+        assert!(response.status().is_success());
+        let bytes = response
+            .bytes()
+            .await
+            .expect("second Commons body is readable");
+        let second = provider
+            .parse_search(&bytes, Some(cursor))
+            .expect("second Commons page parses");
+        let second_accepted = second
             .candidates
             .iter()
             .filter(|candidate| provider.parse_artwork(candidate, None).is_ok())
             .count();
         eprintln!(
-            "Commons live candidates: {}; accepted: {accepted}",
-            page.candidates.len()
+            "Commons live first page: {} candidates, {first_accepted} accepted; second page: {} candidates, {second_accepted} accepted",
+            first.candidates.len(),
+            second.candidates.len()
         );
-        assert!(accepted > 0);
+        assert!(first_accepted + second_accepted > 0);
     }
 }

@@ -28,6 +28,7 @@ const LOAD_MORE_SCRIPT: &str = r#"<script>
     button.disabled = true;
     button.textContent = 'Loading more…';
     fetch('/more', { credentials: 'same-origin' }).then(function (response) {
+      if (!response.ok) throw new Error('load more failed');
       var hasMore = response.headers.get('X-Has-More') === 'true';
       return response.text().then(function (markup) { return { hasMore: hasMore, markup: markup }; });
     }).then(function (result) {
@@ -451,6 +452,7 @@ mod tests {
         assert!(html.contains("id=\"load-more\""));
         assert!(html.contains("fetch('/more', { credentials: 'same-origin' })"));
         assert!(html.contains("X-Has-More"));
+        assert!(html.contains("if (!response.ok) throw new Error('load more failed');"));
         assert!(html.contains("createContextualFragment"));
         assert!(!LOAD_MORE_SCRIPT.contains("innerHTML"));
         assert_eq!(html.matches(PAGE_LIFECYCLE_SCRIPT).count(), 1);
