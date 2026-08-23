@@ -107,11 +107,21 @@ impl Provider for SmithsonianProvider {
     fn search_request(&self, query: &SearchQuery, cursor: Option<&str>) -> HttpRequest {
         let start = parse_offset(cursor).unwrap_or(0);
         let mut url = self.endpoint.clone();
+        let retained = url
+            .query_pairs()
+            .filter(|(key, _)| key != "sort")
+            .map(|(key, value)| (key.into_owned(), value.into_owned()))
+            .collect::<Vec<_>>();
+        url.set_query(None);
         {
             let mut pairs = url.query_pairs_mut();
+            for (key, value) in retained {
+                pairs.append_pair(&key, &value);
+            }
             pairs.append_pair("q", query.query.as_str());
             pairs.append_pair("start", &start.to_string());
             pairs.append_pair("rows", &PAGE_SIZE.to_string());
+            pairs.append_pair("sort", "id");
             pairs.append_pair("type", "edanmdm");
             pairs.append_pair("row_group", "objects");
             pairs.append_pair("fqs", &filter_queries(query));
@@ -230,6 +240,7 @@ struct Descriptive {
     data_source: Option<String>,
     #[serde(rename = "record_link")]
     record_link: Option<String>,
+    guid: Option<String>,
     #[serde(rename = "online_media")]
     online_media: Option<OnlineMedia>,
 }
@@ -368,9 +379,11 @@ fn normalize_record(raw: SmithsonianRecord) -> Result<Artwork, ArtworkDropReason
         .as_ref()
         .and_then(|online| select_image(&online.media))
         .ok_or(ArtworkDropReason::MissingImage)?;
-    let object_url = nonempty(raw.content.descriptive.record_link)
-        .and_then(|value| https_url(&value))
-        .ok_or(ArtworkDropReason::MissingSourceId)?;
+    let object_url = smithsonian_object_url(
+        raw.content.descriptive.record_link.as_deref(),
+        raw.content.descriptive.guid.as_deref(),
+    )
+    .ok_or(ArtworkDropReason::MissingSourceId)?;
     let culture = record_culture(&raw.content.freetext, &raw.content.indexed);
     Ok(Artwork {
         source: SourceKind::Smithsonian,
@@ -390,6 +403,35 @@ fn normalize_record(raw: SmithsonianRecord) -> Result<Artwork, ArtworkDropReason
         provider_credit: first_text(&raw.content.freetext.credit_line),
         object_url,
     })
+}
+
+fn smithsonian_object_url(record_link: Option<&str>, guid: Option<&str>) -> Option<String> {
+    match record_link.filter(|value| !value.trim().is_empty()) {
+        Some(value) => https_url(value),
+        None => guid.and_then(smithsonian_ark_url),
+    }
+}
+
+fn smithsonian_ark_url(raw: &str) -> Option<String> {
+    let mut url = Url::parse(raw).ok()?;
+    let default_port = match url.scheme() {
+        "http" => 80,
+        "https" => 443,
+        _ => return None,
+    };
+    if url.host_str() != Some("n2t.net")
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.port().is_some_and(|port| port != default_port)
+        || url.query().is_some()
+        || url.fragment().is_some()
+        || !url.path().starts_with("/ark:/")
+    {
+        return None;
+    }
+    url.set_scheme("https").ok()?;
+    url.set_port(None).ok()?;
+    Some(url.into())
 }
 
 fn select_image(media: &[Media]) -> Option<SelectedImage> {
