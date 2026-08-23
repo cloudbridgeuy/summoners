@@ -15,7 +15,8 @@ additional source slots remain unavailable.
   Art Institute of Chicago and CC0 Cleveland Museum results, locally proxied
   artwork previews, exact attribution, a 24-hour metadata cache, a 30-day image
   cache, and a trusted self-contained JPEG download path. Cleveland downloads
-  use full TIFF originals when available and the best JPEG otherwise.
+  use valid absolute HTTP(S) full TIFF originals when available and the best
+  valid absolute HTTP(S) JPEG otherwise.
 - `xtask`: repository lint and Git hook automation.
 
 ## Design inputs

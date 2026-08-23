@@ -67,7 +67,7 @@ impl Provider for ClevelandProvider {
         {
             let mut pairs = url.query_pairs_mut();
             pairs.append_pair("q", query.query.as_str());
-            pairs.append_pair("cc0", "");
+            pairs.append_key_only("cc0");
             if let Some(culture) = &query.culture {
                 pairs.append_pair("culture", culture.as_str());
             }
@@ -136,10 +136,10 @@ impl Provider for ClevelandProvider {
             DisplayImageSize::Card => &artwork.image_urls.thumbnail,
             DisplayImageSize::Preview => &artwork.image_urls.display,
         };
-        Url::parse(raw)
+        parse_remote_url(raw)
             .map(cleveland_request)
             .map(|request| DisplayImageRequest::new(request, DisplayMediaType::Jpeg))
-            .map_err(|_| ProviderError::InvalidImageRequest)
+            .ok_or(ProviderError::InvalidImageRequest)
     }
 
     fn best_image_request(&self, artwork: &Artwork) -> Result<HttpRequest, ProviderError> {
@@ -148,7 +148,7 @@ impl Provider for ClevelandProvider {
             .original
             .as_deref()
             .ok_or(ProviderError::MissingImageService)
-            .and_then(|raw| Url::parse(raw).map_err(|_| ProviderError::InvalidImageRequest))
+            .and_then(|raw| parse_remote_url(raw).ok_or(ProviderError::InvalidImageRequest))
             .map(cleveland_request)
     }
 }
@@ -183,6 +183,12 @@ fn json_u64(value: &serde_json::Value) -> Option<u64> {
         .or_else(|| value.as_str().and_then(|raw| raw.parse().ok()))
 }
 
+fn parse_remote_url(raw: &str) -> Option<Url> {
+    Url::parse(raw.trim())
+        .ok()
+        .filter(|url| matches!(url.scheme(), "http" | "https") && url.host_str().is_some())
+}
+
 fn normalize_artwork(raw: ClevelandArtwork) -> Result<Artwork, ArtworkDropReason> {
     let license = parse_license(raw.share_license_status.as_deref())?;
     let source_id = raw
@@ -195,7 +201,11 @@ fn normalize_artwork(raw: ClevelandArtwork) -> Result<Artwork, ArtworkDropReason
         .as_ref()
         .and_then(select_images)
         .ok_or(ArtworkDropReason::MissingImage)?;
-    let object_url = nonempty(raw.url).ok_or(ArtworkDropReason::MissingSourceId)?;
+    let object_url = raw
+        .url
+        .as_deref()
+        .and_then(parse_remote_url)
+        .ok_or(ArtworkDropReason::MissingSourceId)?;
 
     Ok(Artwork {
         source: SourceKind::ClevelandMuseum,
@@ -206,13 +216,13 @@ fn normalize_artwork(raw: ClevelandArtwork) -> Result<Artwork, ArtworkDropReason
         culture: raw.culture.as_deref().and_then(join_culture),
         license,
         image_urls: ImageUrls {
-            thumbnail: images.thumbnail,
-            display: images.display,
-            original: Some(images.original),
+            thumbnail: images.thumbnail.to_string(),
+            display: images.display.to_string(),
+            original: Some(images.original.to_string()),
         },
         institution: SourceKind::ClevelandMuseum.label().into(),
         provider_credit: nonempty(raw.creditline),
-        object_url,
+        object_url: object_url.to_string(),
     })
 }
 
@@ -249,9 +259,9 @@ fn join_nonempty<'a>(values: impl Iterator<Item = &'a str>) -> Option<String> {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct SelectedImages {
-    thumbnail: String,
-    display: String,
-    original: String,
+    thumbnail: Url,
+    display: Url,
+    original: Url,
 }
 
 fn select_images(images: &ClevelandImages) -> Option<SelectedImages> {
@@ -260,31 +270,31 @@ fn select_images(images: &ClevelandImages) -> Option<SelectedImages> {
         images.print.as_ref(),
         images.full.as_ref(),
     ];
-    let best_jpeg = assets
-        .iter()
+    let valid_assets = assets
+        .into_iter()
         .flatten()
-        .filter(|asset| asset.media_type() == Some(RemoteMediaType::Jpeg))
-        .filter(|asset| asset.usable_url().is_some())
-        .max_by_key(|asset| asset.pixel_area())?;
+        .filter_map(|asset| asset.usable_url().map(|url| (asset, url)))
+        .collect::<Vec<_>>();
+    let best_jpeg = valid_assets
+        .iter()
+        .filter(|(asset, _)| asset.media_type() == Some(RemoteMediaType::Jpeg))
+        .max_by_key(|(asset, _)| asset.pixel_area())?;
     let thumbnail = images
         .web
         .as_ref()
         .filter(|asset| asset.media_type() == Some(RemoteMediaType::Jpeg))
         .and_then(ClevelandImage::usable_url)
-        .unwrap_or_else(|| best_jpeg.url.clone());
-    let original = assets
+        .unwrap_or_else(|| best_jpeg.1.clone());
+    let original = valid_assets
         .iter()
-        .flatten()
-        .filter(|asset| asset.media_type() == Some(RemoteMediaType::Tiff))
-        .filter(|asset| asset.usable_url().is_some())
-        .max_by_key(|asset| asset.pixel_area())
+        .filter(|(asset, _)| asset.media_type() == Some(RemoteMediaType::Tiff))
+        .max_by_key(|(asset, _)| asset.pixel_area())
         .unwrap_or(best_jpeg)
-        .url
         .clone();
     Some(SelectedImages {
         thumbnail,
-        display: best_jpeg.url.clone(),
-        original,
+        display: best_jpeg.1.clone(),
+        original: original.1,
     })
 }
 
@@ -359,8 +369,8 @@ struct ClevelandImage {
 }
 
 impl ClevelandImage {
-    fn usable_url(&self) -> Option<String> {
-        (!self.url.trim().is_empty()).then(|| self.url.clone())
+    fn usable_url(&self) -> Option<Url> {
+        parse_remote_url(&self.url)
     }
 
     fn pixel_area(&self) -> u64 {
@@ -443,6 +453,10 @@ mod tests {
         }
     }
 
+    fn remote_url(raw: &str) -> Url {
+        parse_remote_url(raw).expect("test URL is valid")
+    }
+
     #[test]
     fn cleveland_provider_is_available() {
         let provider = provider();
@@ -462,6 +476,9 @@ mod tests {
         assert_eq!(pairs.get("limit").map(String::as_str), Some("20"));
         assert_eq!(pairs.get("fields").map(String::as_str), Some(SEARCH_FIELDS));
         assert!(!pairs.contains_key("culture"));
+        let raw_query = request.url().query().expect("query is present");
+        assert!(raw_query.split('&').any(|segment| segment == "cc0"));
+        assert!(!raw_query.split('&').any(|segment| segment == "cc0="));
         assert_eq!(
             provider.rate_policy(),
             RatePolicy::TokenBucket(TokenBucketPolicy::new(
@@ -685,11 +702,35 @@ mod tests {
     }
 
     #[test]
+    fn remote_url_parser_normalizes_http_and_rejects_other_values() {
+        assert_eq!(
+            parse_remote_url(" HTTPS://Example.TEST:443/a/../image.jpg ")
+                .map(|url| url.to_string()),
+            Some("https://example.test/image.jpg".into())
+        );
+        assert_eq!(
+            parse_remote_url("http://example.test/image.jpg").map(|url| url.to_string()),
+            Some("http://example.test/image.jpg".into())
+        );
+        for invalid in [
+            "",
+            "not a URL",
+            "/relative.jpg",
+            "file:///tmp/image.jpg",
+            "data:image/jpeg;base64,AA==",
+            "javascript:alert(1)",
+            "ftp://example.test/image.jpg",
+        ] {
+            assert_eq!(parse_remote_url(invalid), None, "URL: {invalid}");
+        }
+    }
+
+    #[test]
     fn image_helpers_classify_formats_measure_pixels_and_reject_blank_urls() {
         let jpeg = image("https://example.test/image", "40", "50", "IMAGE.JPEG");
         assert_eq!(
-            jpeg.usable_url().as_deref(),
-            Some("https://example.test/image")
+            jpeg.usable_url().map(|url| url.to_string()),
+            Some("https://example.test/image".into())
         );
         assert_eq!(jpeg.pixel_area(), 2_000);
         assert_eq!(jpeg.media_type(), Some(RemoteMediaType::Jpeg));
@@ -727,9 +768,9 @@ mod tests {
         assert_eq!(
             select_images(&images),
             Some(SelectedImages {
-                thumbnail: "https://example.test/web.jpg".into(),
-                display: "https://example.test/print.jpg".into(),
-                original: "https://example.test/full.tif".into(),
+                thumbnail: remote_url("https://example.test/web.jpg"),
+                display: remote_url("https://example.test/print.jpg"),
+                original: remote_url("https://example.test/full.tif"),
             })
         );
         let no_display = ClevelandImages {
@@ -744,6 +785,87 @@ mod tests {
             )),
         };
         assert_eq!(select_images(&no_display), None);
+    }
+
+    #[test]
+    fn selection_rejects_invalid_card_preview_and_original_urls() {
+        let invalid_card = ClevelandImages {
+            _annotation: None,
+            web: Some(image("/web.jpg", "900", "600", "web.jpg")),
+            print: Some(image(
+                "https://example.test/print.jpg",
+                "3400",
+                "2200",
+                "print.jpg",
+            )),
+            full: Some(image(
+                "https://example.test/full.tif",
+                "6000",
+                "4000",
+                "full.tif",
+            )),
+        };
+        assert_eq!(
+            select_images(&invalid_card),
+            Some(SelectedImages {
+                thumbnail: remote_url("https://example.test/print.jpg"),
+                display: remote_url("https://example.test/print.jpg"),
+                original: remote_url("https://example.test/full.tif"),
+            })
+        );
+
+        let invalid_preview = ClevelandImages {
+            _annotation: None,
+            web: Some(image(
+                "https://example.test/web.jpg",
+                "900",
+                "600",
+                "web.jpg",
+            )),
+            print: Some(image("file:///print.jpg", "3400", "2200", "print.jpg")),
+            full: None,
+        };
+        assert_eq!(
+            select_images(&invalid_preview),
+            Some(SelectedImages {
+                thumbnail: remote_url("https://example.test/web.jpg"),
+                display: remote_url("https://example.test/web.jpg"),
+                original: remote_url("https://example.test/web.jpg"),
+            })
+        );
+
+        let invalid_tiff = ClevelandImages {
+            _annotation: None,
+            web: Some(image(
+                "https://example.test/web.jpg",
+                "900",
+                "600",
+                "web.jpg",
+            )),
+            print: None,
+            full: Some(image("javascript:full.tif", "6000", "4000", "full.tif")),
+        };
+        assert_eq!(
+            select_images(&invalid_tiff),
+            Some(SelectedImages {
+                thumbnail: remote_url("https://example.test/web.jpg"),
+                display: remote_url("https://example.test/web.jpg"),
+                original: remote_url("https://example.test/web.jpg"),
+            })
+        );
+
+        let invalid_jpeg = ClevelandImages {
+            _annotation: None,
+            web: Some(image(
+                "data:image/jpeg;base64,AA==",
+                "900",
+                "600",
+                "web.jpg",
+            )),
+            print: None,
+            full: None,
+        };
+        assert_eq!(select_images(&invalid_jpeg), None);
     }
 
     #[test]
@@ -795,9 +917,19 @@ mod tests {
         let mut artwork = provider()
             .parse_artwork(&page.candidates[0], None)
             .expect("artwork is valid");
-        artwork.image_urls.display = "not a URL".into();
+        artwork.image_urls.thumbnail = "file:///tmp/card.jpg".into();
+        assert_eq!(
+            provider().display_image_request(&artwork, DisplayImageSize::Card),
+            Err(ProviderError::InvalidImageRequest)
+        );
+        artwork.image_urls.display = "data:image/jpeg;base64,AA==".into();
         assert_eq!(
             provider().display_image_request(&artwork, DisplayImageSize::Preview),
+            Err(ProviderError::InvalidImageRequest)
+        );
+        artwork.image_urls.original = Some("javascript:download()".into());
+        assert_eq!(
+            provider().best_image_request(&artwork),
             Err(ProviderError::InvalidImageRequest)
         );
         artwork.image_urls.original = None;
@@ -837,5 +969,32 @@ mod tests {
             normalize_artwork(missing_images),
             Err(ArtworkDropReason::MissingImage)
         );
+    }
+
+    #[test]
+    fn normalization_rejects_missing_blank_malformed_and_non_http_object_urls() {
+        let page = provider()
+            .parse_search(SEARCH_PAGE_1)
+            .expect("fixture page is valid");
+        let raw = page.candidates[0].raw.clone();
+        for invalid in [
+            None,
+            Some("   "),
+            Some("not a URL"),
+            Some("/art/1949.158"),
+            Some("file:///art/1949.158"),
+            Some("data:text/plain,art"),
+            Some("javascript:alert(1)"),
+            Some("ftp://clevelandart.org/art/1949.158"),
+        ] {
+            let mut artwork: ClevelandArtwork =
+                serde_json::from_value(raw.clone()).expect("fixture shape is valid");
+            artwork.url = invalid.map(str::to_owned);
+            assert_eq!(
+                normalize_artwork(artwork),
+                Err(ArtworkDropReason::MissingSourceId),
+                "object URL must be rejected: {invalid:?}"
+            );
+        }
     }
 }

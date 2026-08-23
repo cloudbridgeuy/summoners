@@ -67,8 +67,8 @@ standard XMP, and atomically writes one JPEG in the selected output directory.
   optional culture filter
 - **THEN** the page shows normalized records with the museum's exact object URL
   and credit line
-- **AND** records with a missing ID, title, display image, or exact CC0 state do
-  not appear
+- **AND** records with a missing ID, title, exact CC0 state, absolute HTTP(S)
+  object URL, or valid absolute HTTP(S) display image do not appear
 - **AND** card and preview requests use the best available JPEG sizes
 - **AND** a download uses the highest-resolution TIFF when available or the best
   JPEG otherwise

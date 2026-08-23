@@ -1,4 +1,4 @@
-//! Deterministic Cleveland search, detail, preview, and TIFF download evidence.
+//! Deterministic Cleveland search, card, detail, preview, and TIFF download evidence.
 #![deny(clippy::unwrap_used, clippy::expect_used)]
 
 use std::path::Path;
@@ -37,6 +37,7 @@ const LISTENER_AUTHORITY: &str = "127.0.0.1:45123";
 struct MockState {
     base: String,
     bad_headers: Arc<AtomicUsize>,
+    card_requests: Arc<AtomicUsize>,
     full_requests: Arc<AtomicUsize>,
 }
 
@@ -117,6 +118,15 @@ async fn jpeg(State(state): State<MockState>, headers: HeaderMap) -> Response {
     native_jpeg().into_response()
 }
 
+async fn card_jpeg(State(state): State<MockState>, headers: HeaderMap) -> Response {
+    if !has_provider_header(&headers) {
+        state.bad_headers.fetch_add(1, Ordering::SeqCst);
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    state.card_requests.fetch_add(1, Ordering::SeqCst);
+    native_jpeg().into_response()
+}
+
 async fn tiff(State(state): State<MockState>, headers: HeaderMap) -> Response {
     if !has_provider_header(&headers) {
         state.bad_headers.fetch_add(1, Ordering::SeqCst);
@@ -139,12 +149,13 @@ async fn mock_endpoint() -> (Url, MockState, tokio::task::JoinHandle<()>) {
     let state = MockState {
         base: base.clone(),
         bad_headers: Arc::new(AtomicUsize::new(0)),
+        card_requests: Arc::new(AtomicUsize::new(0)),
         full_requests: Arc::new(AtomicUsize::new(0)),
     };
     let app = Router::new()
         .route("/api/artworks/", get(search))
         .route("/api/artworks/126730", get(detail))
-        .route("/images/web.jpg", get(jpeg))
+        .route("/images/web.jpg", get(card_jpeg))
         .route("/images/print.jpg", get(jpeg))
         .route("/images/full.tif", get(tiff))
         .with_state(state.clone());
@@ -184,16 +195,22 @@ fn cleveland_query() -> SearchQuery {
 }
 
 async fn body(app: Router, request: Request<Body>) -> (StatusCode, Vec<u8>) {
+    let (status, _, bytes) = response_parts(app, request).await;
+    (status, bytes)
+}
+
+async fn response_parts(app: Router, request: Request<Body>) -> (StatusCode, HeaderMap, Vec<u8>) {
     let response = match app.oneshot(request).await {
         Ok(response) => response,
         Err(error) => panic!("route must respond: {error}"),
     };
     let status = response.status();
+    let headers = response.headers().clone();
     let bytes = match to_bytes(response.into_body(), usize::MAX).await {
         Ok(bytes) => bytes.to_vec(),
         Err(error) => panic!("body must be readable: {error}"),
     };
-    (status, bytes)
+    (status, headers, bytes)
 }
 
 fn request(method: &str, uri: &str, body: Body) -> Request<Body> {
@@ -261,6 +278,20 @@ async fn mocked_cleveland_tiff_download_writes_exact_xmp_and_does_not_cache_full
     assert!(search_html.contains("Loaded 1 results."), "{search_html}");
     assert!(search_html.contains("Gigaku Mask"));
 
+    let (status, headers, card) = response_parts(
+        app.clone(),
+        request("GET", "/thumb?source=cleveland&id=126730", Body::empty()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        headers
+            .get(CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok()),
+        Some("image/jpeg")
+    );
+    assert_eq!(card, native_jpeg());
+
     let (status, detail_html) = body(
         app.clone(),
         request("GET", "/detail?source=cleveland&id=126730", Body::empty()),
@@ -285,6 +316,7 @@ async fn mocked_cleveland_tiff_download_writes_exact_xmp_and_does_not_cache_full
     let (status, second_html) = body(app, download_request()).await;
     assert_eq!(status, StatusCode::OK);
     assert!(String::from_utf8_lossy(&second_html).contains("Replaced"));
+    assert_eq!(mock.card_requests.load(Ordering::SeqCst), 1);
     assert_eq!(mock.full_requests.load(Ordering::SeqCst), 2);
     assert_eq!(mock.bad_headers.load(Ordering::SeqCst), 0);
 
