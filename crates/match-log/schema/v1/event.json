@@ -1,0 +1,1471 @@
+{
+  "$defs": {
+    "battlefield_target": {
+      "additionalProperties": false,
+      "properties": {
+        "controller": {
+          "$ref": "#/$defs/player_id"
+        },
+        "position": {
+          "$ref": "#/$defs/position"
+        }
+      },
+      "required": [
+        "controller",
+        "position"
+      ],
+      "type": "object"
+    },
+    "bench_slot": {
+      "enum": [
+        "first",
+        "second",
+        "third"
+      ],
+      "type": "string"
+    },
+    "card_ref": {
+      "additionalProperties": false,
+      "properties": {
+        "definition": {
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "type": "string"
+        },
+        "instance": {
+          "format": "uint32",
+          "maximum": 4294967295,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "instance",
+        "definition"
+      ],
+      "type": "object"
+    },
+    "damage_addition": {
+      "additionalProperties": false,
+      "properties": {
+        "amount": {
+          "format": "uint32",
+          "maximum": 4294967295,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "condition": {
+          "$ref": "#/$defs/effect_condition"
+        }
+      },
+      "required": [
+        "amount",
+        "condition"
+      ],
+      "type": "object"
+    },
+    "damage_constraint": {
+      "enum": [
+        "unincreasable",
+        "unpreventable"
+      ],
+      "type": "string"
+    },
+    "damage_constraints": {
+      "additionalProperties": false,
+      "properties": {
+        "unincreasable": {
+          "type": "boolean"
+        },
+        "unpreventable": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "unincreasable",
+        "unpreventable"
+      ],
+      "type": "object"
+    },
+    "damage_context": {
+      "additionalProperties": false,
+      "properties": {
+        "source": {
+          "$ref": "#/$defs/damage_source"
+        },
+        "target": {
+          "$ref": "#/$defs/battlefield_target"
+        }
+      },
+      "required": [
+        "source",
+        "target"
+      ],
+      "type": "object"
+    },
+    "damage_effect": {
+      "additionalProperties": false,
+      "properties": {
+        "additions": {
+          "items": {
+            "$ref": "#/$defs/damage_addition"
+          },
+          "type": "array"
+        },
+        "base": {
+          "format": "uint32",
+          "maximum": 4294967295,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "constraints": {
+          "$ref": "#/$defs/damage_constraints"
+        }
+      },
+      "required": [
+        "base",
+        "constraints",
+        "additions"
+      ],
+      "type": "object"
+    },
+    "damage_operation": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "amount": {
+              "format": "uint32",
+              "maximum": 4294967295,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "kind": {
+              "const": "add",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "amount"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "amount": {
+              "format": "uint32",
+              "maximum": 4294967295,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "kind": {
+              "const": "reduce",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "amount"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "clamp_to_zero",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "damage_origin": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "ability": {
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+              "type": "string"
+            },
+            "kind": {
+              "const": "printed_ability",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "ability"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "card": {
+              "format": "uint32",
+              "maximum": 4294967295,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "kind": {
+              "const": "persistent_card",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "card"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "damage_source": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "ability": {
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+              "type": "string"
+            },
+            "controller": {
+              "$ref": "#/$defs/player_id"
+            },
+            "kind": {
+              "const": "attack",
+              "type": "string"
+            },
+            "position": {
+              "$ref": "#/$defs/position"
+            }
+          },
+          "required": [
+            "kind",
+            "controller",
+            "position",
+            "ability"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "card": {
+              "format": "uint32",
+              "maximum": 4294967295,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "controller": {
+              "$ref": "#/$defs/player_id"
+            },
+            "definition": {
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+              "type": "string"
+            },
+            "kind": {
+              "const": "spell",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "controller",
+            "card",
+            "definition"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "ability": {
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+              "type": "string"
+            },
+            "controller": {
+              "$ref": "#/$defs/player_id"
+            },
+            "kind": {
+              "const": "skill",
+              "type": "string"
+            },
+            "position": {
+              "$ref": "#/$defs/position"
+            }
+          },
+          "required": [
+            "kind",
+            "controller",
+            "position",
+            "ability"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "ability": {
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+              "type": "string"
+            },
+            "controller": {
+              "$ref": "#/$defs/player_id"
+            },
+            "kind": {
+              "const": "trigger",
+              "type": "string"
+            },
+            "position": {
+              "$ref": "#/$defs/position"
+            }
+          },
+          "required": [
+            "kind",
+            "controller",
+            "position",
+            "ability"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "damage_stage": {
+      "enum": [
+        "addition",
+        "persistent_reduction",
+        "clamp",
+        "commit"
+      ],
+      "type": "string"
+    },
+    "effect_condition": {
+      "enum": [
+        "defender_entered_main_this_turn",
+        "spell_played_this_turn"
+      ],
+      "type": "string"
+    },
+    "effect_leaf": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "damage": {
+              "$ref": "#/$defs/damage_effect"
+            },
+            "kind": {
+              "const": "deal_damage",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "damage"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "amount": {
+              "format": "uint32",
+              "maximum": 4294967295,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "kind": {
+              "const": "heal",
+              "type": "string"
+            },
+            "target": {
+              "$ref": "#/$defs/effect_target"
+            }
+          },
+          "required": [
+            "kind",
+            "amount",
+            "target"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "move_summon",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "swap_positions",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "block": {
+              "$ref": "#/$defs/response_block"
+            },
+            "condition": {
+              "$ref": "#/$defs/effect_condition"
+            },
+            "kind": {
+              "const": "block_responses",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "condition",
+            "block"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "return_spell_from_discard",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "look_at_prizes",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "amount": {
+              "format": "uint32",
+              "maximum": 4294967295,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "kind": {
+              "const": "draw_cards",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "amount"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "return_spell_to_deck_top",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "produce_mana",
+              "type": "string"
+            },
+            "target": {
+              "$ref": "#/$defs/effect_target"
+            }
+          },
+          "required": [
+            "kind",
+            "target"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "cannot_be_moved_by_opponent",
+              "type": "string"
+            },
+            "target": {
+              "$ref": "#/$defs/effect_target"
+            }
+          },
+          "required": [
+            "kind",
+            "target"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "ready_summon",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "swap_opposing_positions",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "effect_target": {
+      "enum": [
+        "selected",
+        "source"
+      ],
+      "type": "string"
+    },
+    "event": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "turn_began",
+              "type": "string"
+            },
+            "player": {
+              "$ref": "#/$defs/player_id"
+            }
+          },
+          "required": [
+            "kind",
+            "player"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "summons_readied",
+              "type": "string"
+            },
+            "player": {
+              "$ref": "#/$defs/player_id"
+            },
+            "positions": {
+              "items": {
+                "$ref": "#/$defs/position"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "kind",
+            "player",
+            "positions"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "card": {
+              "format": "uint32",
+              "maximum": 4294967295,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "kind": {
+              "const": "card_drawn",
+              "type": "string"
+            },
+            "player": {
+              "$ref": "#/$defs/player_id"
+            }
+          },
+          "required": [
+            "kind",
+            "player",
+            "card"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "mana_produced",
+              "type": "string"
+            },
+            "mana_type": {
+              "$ref": "#/$defs/mana_type"
+            },
+            "player": {
+              "$ref": "#/$defs/player_id"
+            },
+            "source": {
+              "$ref": "#/$defs/mana_source"
+            }
+          },
+          "required": [
+            "kind",
+            "player",
+            "source",
+            "mana_type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "card": {
+              "format": "uint32",
+              "maximum": 4294967295,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "kind": {
+              "const": "summon_played",
+              "type": "string"
+            },
+            "player": {
+              "$ref": "#/$defs/player_id"
+            },
+            "slot": {
+              "$ref": "#/$defs/bench_slot"
+            }
+          },
+          "required": [
+            "kind",
+            "player",
+            "card",
+            "slot"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "card": {
+              "format": "uint32",
+              "maximum": 4294967295,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "kind": {
+              "const": "summon_upgraded",
+              "type": "string"
+            },
+            "player": {
+              "$ref": "#/$defs/player_id"
+            },
+            "position": {
+              "$ref": "#/$defs/position"
+            }
+          },
+          "required": [
+            "kind",
+            "player",
+            "card",
+            "position"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "card": {
+              "format": "uint32",
+              "maximum": 4294967295,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "kind": {
+              "const": "spell_cast",
+              "type": "string"
+            },
+            "player": {
+              "$ref": "#/$defs/player_id"
+            },
+            "targets": {
+              "items": {
+                "$ref": "#/$defs/position"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "kind",
+            "player",
+            "card",
+            "targets"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "ability": {
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+              "type": "string"
+            },
+            "kind": {
+              "const": "skill_activated",
+              "type": "string"
+            },
+            "player": {
+              "$ref": "#/$defs/player_id"
+            },
+            "position": {
+              "$ref": "#/$defs/position"
+            }
+          },
+          "required": [
+            "kind",
+            "player",
+            "position",
+            "ability"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "attack_declared",
+              "type": "string"
+            },
+            "player": {
+              "$ref": "#/$defs/player_id"
+            },
+            "target": {
+              "$ref": "#/$defs/position"
+            }
+          },
+          "required": [
+            "kind",
+            "player",
+            "target"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "priority_passed",
+              "type": "string"
+            },
+            "player": {
+              "$ref": "#/$defs/player_id"
+            }
+          },
+          "required": [
+            "kind",
+            "player"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "item": {
+              "$ref": "#/$defs/stack_item"
+            },
+            "kind": {
+              "const": "stack_item_resolved",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "item"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "base": {
+              "format": "uint32",
+              "maximum": 4294967295,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "constraints": {
+              "$ref": "#/$defs/damage_constraints"
+            },
+            "context": {
+              "$ref": "#/$defs/damage_context"
+            },
+            "kind": {
+              "const": "damage_calculation_started",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "context",
+            "base",
+            "constraints"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "context": {
+              "$ref": "#/$defs/damage_context"
+            },
+            "input": {
+              "format": "uint32",
+              "maximum": 4294967295,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "kind": {
+              "const": "damage_adjustment_applied",
+              "type": "string"
+            },
+            "operation": {
+              "$ref": "#/$defs/damage_operation"
+            },
+            "origin": {
+              "$ref": "#/$defs/damage_origin"
+            },
+            "output": {
+              "format": "uint32",
+              "maximum": 4294967295,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "stage": {
+              "$ref": "#/$defs/damage_stage"
+            }
+          },
+          "required": [
+            "kind",
+            "context",
+            "stage",
+            "operation",
+            "origin",
+            "input",
+            "output"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "constraint": {
+              "$ref": "#/$defs/damage_constraint"
+            },
+            "context": {
+              "$ref": "#/$defs/damage_context"
+            },
+            "input": {
+              "format": "uint32",
+              "maximum": 4294967295,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "kind": {
+              "const": "damage_adjustment_skipped",
+              "type": "string"
+            },
+            "operation": {
+              "$ref": "#/$defs/damage_operation"
+            },
+            "origin": {
+              "$ref": "#/$defs/damage_origin"
+            },
+            "stage": {
+              "$ref": "#/$defs/damage_stage"
+            }
+          },
+          "required": [
+            "kind",
+            "context",
+            "stage",
+            "operation",
+            "origin",
+            "input",
+            "constraint"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "after": {
+              "format": "uint32",
+              "maximum": 4294967295,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "amount": {
+              "format": "uint32",
+              "maximum": 4294967295,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "before": {
+              "format": "uint32",
+              "maximum": 4294967295,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "context": {
+              "$ref": "#/$defs/damage_context"
+            },
+            "kind": {
+              "const": "damage_applied",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "context",
+            "amount",
+            "before",
+            "after"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "amount": {
+              "format": "uint32",
+              "maximum": 4294967295,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "kind": {
+              "const": "healed",
+              "type": "string"
+            },
+            "position": {
+              "$ref": "#/$defs/position"
+            }
+          },
+          "required": [
+            "kind",
+            "position",
+            "amount"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "summon_destroyed",
+              "type": "string"
+            },
+            "owner": {
+              "$ref": "#/$defs/player_id"
+            },
+            "position": {
+              "$ref": "#/$defs/position"
+            }
+          },
+          "required": [
+            "kind",
+            "position",
+            "owner"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "card": {
+              "format": "uint32",
+              "maximum": 4294967295,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "kind": {
+              "const": "prize_recovered",
+              "type": "string"
+            },
+            "player": {
+              "$ref": "#/$defs/player_id"
+            }
+          },
+          "required": [
+            "kind",
+            "player",
+            "card"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "prizes_viewed",
+              "type": "string"
+            },
+            "player": {
+              "$ref": "#/$defs/player_id"
+            },
+            "prizes": {
+              "items": {
+                "format": "uint32",
+                "maximum": 4294967295,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "kind",
+            "player",
+            "prizes"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "from": {
+              "$ref": "#/$defs/bench_slot"
+            },
+            "kind": {
+              "const": "summon_promoted",
+              "type": "string"
+            },
+            "player": {
+              "$ref": "#/$defs/player_id"
+            }
+          },
+          "required": [
+            "kind",
+            "player",
+            "from"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "summons_swapped",
+              "type": "string"
+            },
+            "main": {
+              "$ref": "#/$defs/bench_slot"
+            },
+            "player": {
+              "$ref": "#/$defs/player_id"
+            }
+          },
+          "required": [
+            "kind",
+            "player",
+            "main"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "ability": {
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+              "type": "string"
+            },
+            "controller": {
+              "$ref": "#/$defs/player_id"
+            },
+            "event": {
+              "$ref": "#/$defs/trigger_event"
+            },
+            "kind": {
+              "const": "trigger_fired",
+              "type": "string"
+            },
+            "position": {
+              "$ref": "#/$defs/position"
+            }
+          },
+          "required": [
+            "kind",
+            "controller",
+            "position",
+            "event",
+            "ability"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "coin_converted",
+              "type": "string"
+            },
+            "mana_type": {
+              "$ref": "#/$defs/mana_type"
+            },
+            "player": {
+              "$ref": "#/$defs/player_id"
+            }
+          },
+          "required": [
+            "kind",
+            "player",
+            "mana_type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "amount": {
+              "format": "uint32",
+              "maximum": 4294967295,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "kind": {
+              "const": "mana_deducted",
+              "type": "string"
+            },
+            "mana_type": {
+              "$ref": "#/$defs/mana_type"
+            },
+            "player": {
+              "$ref": "#/$defs/player_id"
+            }
+          },
+          "required": [
+            "kind",
+            "player",
+            "mana_type",
+            "amount"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "game_ended",
+              "type": "string"
+            },
+            "reason": {
+              "$ref": "#/$defs/loss_reason"
+            },
+            "winner": {
+              "$ref": "#/$defs/player_id"
+            }
+          },
+          "required": [
+            "kind",
+            "winner",
+            "reason"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "event_record_kind": {
+      "const": "event",
+      "type": "string"
+    },
+    "loss_reason": {
+      "enum": [
+        "third_main_loss",
+        "no_promotion_available",
+        "empty_deck_draw"
+      ],
+      "type": "string"
+    },
+    "mana_source": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "player",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "summon",
+              "type": "string"
+            },
+            "position": {
+              "$ref": "#/$defs/position"
+            }
+          },
+          "required": [
+            "kind",
+            "position"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "mana_type": {
+      "enum": [
+        "matter",
+        "mind",
+        "spirit"
+      ],
+      "type": "string"
+    },
+    "player_id": {
+      "enum": [
+        "one",
+        "two"
+      ],
+      "type": "string"
+    },
+    "position": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "main",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "bench",
+              "type": "string"
+            },
+            "slot": {
+              "$ref": "#/$defs/bench_slot"
+            }
+          },
+          "required": [
+            "kind",
+            "slot"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "response_block": {
+      "const": "attack_spells",
+      "type": "string"
+    },
+    "stack_item": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "attacker": {
+              "$ref": "#/$defs/player_id"
+            },
+            "kind": {
+              "const": "attack",
+              "type": "string"
+            },
+            "target": {
+              "$ref": "#/$defs/position"
+            }
+          },
+          "required": [
+            "kind",
+            "attacker",
+            "target"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "card": {
+              "$ref": "#/$defs/card_ref"
+            },
+            "caster": {
+              "$ref": "#/$defs/player_id"
+            },
+            "kind": {
+              "const": "spell",
+              "type": "string"
+            },
+            "targets": {
+              "items": {
+                "$ref": "#/$defs/position"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "kind",
+            "caster",
+            "card",
+            "targets"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "ability": {
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+              "type": "string"
+            },
+            "controller": {
+              "$ref": "#/$defs/player_id"
+            },
+            "effects": {
+              "items": {
+                "$ref": "#/$defs/effect_leaf"
+              },
+              "type": "array"
+            },
+            "event": {
+              "$ref": "#/$defs/trigger_event"
+            },
+            "kind": {
+              "const": "trigger",
+              "type": "string"
+            },
+            "source": {
+              "$ref": "#/$defs/position"
+            },
+            "targets": {
+              "items": {
+                "$ref": "#/$defs/position"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "kind",
+            "controller",
+            "source",
+            "ability",
+            "event",
+            "targets",
+            "effects"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "trigger_event": {
+      "enum": [
+        "your_upkeep",
+        "enters_main",
+        "enters_bench",
+        "leaves_main",
+        "leaves_bench",
+        "any_summon_destroyed"
+      ],
+      "type": "string"
+    }
+  },
+  "$id": "urn:summoners:match-log:v1:event",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Wire contract for one event record.",
+  "properties": {
+    "event": {
+      "$ref": "#/$defs/event"
+    },
+    "index": {
+      "format": "uint64",
+      "maximum": 18446744073709551615,
+      "minimum": 0,
+      "type": "integer"
+    },
+    "record": {
+      "$ref": "#/$defs/event_record_kind"
+    },
+    "sequence": {
+      "format": "uint64",
+      "maximum": 18446744073709551615,
+      "minimum": 0,
+      "type": "integer"
+    },
+    "step": {
+      "format": "uint64",
+      "maximum": 18446744073709551615,
+      "minimum": 0,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "sequence",
+    "record",
+    "step",
+    "index",
+    "event"
+  ],
+  "title": "Summoners match log event record, version 1",
+  "type": "object"
+}

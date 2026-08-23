@@ -1,0 +1,1342 @@
+{
+  "$defs": {
+    "bench_slot": {
+      "enum": [
+        "first",
+        "second",
+        "third"
+      ],
+      "type": "string"
+    },
+    "breakage": {
+      "additionalProperties": false,
+      "properties": {
+        "entity": {
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "type": "string"
+        },
+        "expected": {
+          "$ref": "#/$defs/component_kind"
+        },
+        "rule": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "rule",
+        "entity",
+        "expected"
+      ],
+      "type": "object"
+    },
+    "card_ref": {
+      "additionalProperties": false,
+      "properties": {
+        "definition": {
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "type": "string"
+        },
+        "instance": {
+          "format": "uint32",
+          "maximum": 4294967295,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "instance",
+        "definition"
+      ],
+      "type": "object"
+    },
+    "component_kind": {
+      "enum": [
+        "name",
+        "accounting_id",
+        "life",
+        "retreat_cost",
+        "form",
+        "produces",
+        "tags",
+        "cost",
+        "skill",
+        "attack",
+        "trigger",
+        "effect",
+        "passive",
+        "timing",
+        "event",
+        "respondable",
+        "persistent"
+      ],
+      "type": "string"
+    },
+    "damage_addition": {
+      "additionalProperties": false,
+      "properties": {
+        "amount": {
+          "format": "uint32",
+          "maximum": 4294967295,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "condition": {
+          "$ref": "#/$defs/effect_condition"
+        }
+      },
+      "required": [
+        "amount",
+        "condition"
+      ],
+      "type": "object"
+    },
+    "damage_constraints": {
+      "additionalProperties": false,
+      "properties": {
+        "unincreasable": {
+          "type": "boolean"
+        },
+        "unpreventable": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "unincreasable",
+        "unpreventable"
+      ],
+      "type": "object"
+    },
+    "damage_effect": {
+      "additionalProperties": false,
+      "properties": {
+        "additions": {
+          "items": {
+            "$ref": "#/$defs/damage_addition"
+          },
+          "type": "array"
+        },
+        "base": {
+          "format": "uint32",
+          "maximum": 4294967295,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "constraints": {
+          "$ref": "#/$defs/damage_constraints"
+        }
+      },
+      "required": [
+        "base",
+        "constraints",
+        "additions"
+      ],
+      "type": "object"
+    },
+    "duration_marker": {
+      "const": "cannot_be_moved_by_opponent",
+      "type": "string"
+    },
+    "effect_condition": {
+      "enum": [
+        "defender_entered_main_this_turn",
+        "spell_played_this_turn"
+      ],
+      "type": "string"
+    },
+    "effect_leaf": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "damage": {
+              "$ref": "#/$defs/damage_effect"
+            },
+            "kind": {
+              "const": "deal_damage",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "damage"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "amount": {
+              "format": "uint32",
+              "maximum": 4294967295,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "kind": {
+              "const": "heal",
+              "type": "string"
+            },
+            "target": {
+              "$ref": "#/$defs/effect_target"
+            }
+          },
+          "required": [
+            "kind",
+            "amount",
+            "target"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "move_summon",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "swap_positions",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "block": {
+              "$ref": "#/$defs/response_block"
+            },
+            "condition": {
+              "$ref": "#/$defs/effect_condition"
+            },
+            "kind": {
+              "const": "block_responses",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "condition",
+            "block"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "return_spell_from_discard",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "look_at_prizes",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "amount": {
+              "format": "uint32",
+              "maximum": 4294967295,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "kind": {
+              "const": "draw_cards",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "amount"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "return_spell_to_deck_top",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "produce_mana",
+              "type": "string"
+            },
+            "target": {
+              "$ref": "#/$defs/effect_target"
+            }
+          },
+          "required": [
+            "kind",
+            "target"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "cannot_be_moved_by_opponent",
+              "type": "string"
+            },
+            "target": {
+              "$ref": "#/$defs/effect_target"
+            }
+          },
+          "required": [
+            "kind",
+            "target"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "ready_summon",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "swap_opposing_positions",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "effect_target": {
+      "enum": [
+        "selected",
+        "source"
+      ],
+      "type": "string"
+    },
+    "game_outcome": {
+      "additionalProperties": false,
+      "properties": {
+        "reason": {
+          "$ref": "#/$defs/loss_reason"
+        },
+        "winner": {
+          "$ref": "#/$defs/player_id"
+        }
+      },
+      "required": [
+        "winner",
+        "reason"
+      ],
+      "type": "object"
+    },
+    "game_status": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "playing",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "ended",
+              "type": "string"
+            },
+            "outcome": {
+              "$ref": "#/$defs/game_outcome"
+            }
+          },
+          "required": [
+            "kind",
+            "outcome"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "breakage": {
+              "$ref": "#/$defs/breakage"
+            },
+            "kind": {
+              "const": "broken",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "breakage"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "loss_reason": {
+      "enum": [
+        "third_main_loss",
+        "no_promotion_available",
+        "empty_deck_draw"
+      ],
+      "type": "string"
+    },
+    "mana_bank": {
+      "additionalProperties": false,
+      "properties": {
+        "matter": {
+          "format": "uint32",
+          "maximum": 4294967295,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "mind": {
+          "format": "uint32",
+          "maximum": 4294967295,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "spirit": {
+          "format": "uint32",
+          "maximum": 4294967295,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "matter",
+        "mind",
+        "spirit"
+      ],
+      "type": "object"
+    },
+    "mana_source": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "player",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "summon",
+              "type": "string"
+            },
+            "position": {
+              "$ref": "#/$defs/position"
+            }
+          },
+          "required": [
+            "kind",
+            "position"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "match_created_record_kind": {
+      "const": "match_created",
+      "type": "string"
+    },
+    "movement_step": {
+      "enum": [
+        "leaving_main",
+        "entering_bench",
+        "leaving_bench",
+        "entering_main"
+      ],
+      "type": "string"
+    },
+    "pending_input": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "mana_production",
+              "type": "string"
+            },
+            "player": {
+              "$ref": "#/$defs/player_id"
+            },
+            "source": {
+              "$ref": "#/$defs/mana_source"
+            }
+          },
+          "required": [
+            "kind",
+            "player",
+            "source"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "promotion",
+              "type": "string"
+            },
+            "player": {
+              "$ref": "#/$defs/player_id"
+            }
+          },
+          "required": [
+            "kind",
+            "player"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "chooser": {
+              "$ref": "#/$defs/player_id"
+            },
+            "kind": {
+              "const": "prize_pick",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "chooser"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "per_player_bool": {
+      "additionalProperties": false,
+      "properties": {
+        "one": {
+          "type": "boolean"
+        },
+        "two": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "one",
+        "two"
+      ],
+      "type": "object"
+    },
+    "phase": {
+      "enum": [
+        "upkeep",
+        "main",
+        "combat"
+      ],
+      "type": "string"
+    },
+    "player_id": {
+      "enum": [
+        "one",
+        "two"
+      ],
+      "type": "string"
+    },
+    "player_state": {
+      "additionalProperties": false,
+      "properties": {
+        "bench": {
+          "items": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/summon_instance"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "type": "array"
+        },
+        "deck": {
+          "items": {
+            "$ref": "#/$defs/card_ref"
+          },
+          "type": "array"
+        },
+        "discard": {
+          "items": {
+            "$ref": "#/$defs/card_ref"
+          },
+          "type": "array"
+        },
+        "enchantments": {
+          "items": {
+            "$ref": "#/$defs/card_ref"
+          },
+          "type": "array"
+        },
+        "hand": {
+          "items": {
+            "$ref": "#/$defs/card_ref"
+          },
+          "type": "array"
+        },
+        "main": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/summon_instance"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "main_losses": {
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "mana": {
+          "$ref": "#/$defs/mana_bank"
+        },
+        "prizes": {
+          "items": {
+            "$ref": "#/$defs/card_ref"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "bench",
+        "deck",
+        "hand",
+        "prizes",
+        "discard",
+        "mana",
+        "main_losses",
+        "enchantments"
+      ],
+      "type": "object"
+    },
+    "players": {
+      "additionalProperties": false,
+      "properties": {
+        "one": {
+          "$ref": "#/$defs/player_state"
+        },
+        "two": {
+          "$ref": "#/$defs/player_state"
+        }
+      },
+      "required": [
+        "one",
+        "two"
+      ],
+      "type": "object"
+    },
+    "position": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "main",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "bench",
+              "type": "string"
+            },
+            "slot": {
+              "$ref": "#/$defs/bench_slot"
+            }
+          },
+          "required": [
+            "kind",
+            "slot"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "readiness": {
+      "enum": [
+        "ready",
+        "exhausted"
+      ],
+      "type": "string"
+    },
+    "response_block": {
+      "const": "attack_spells",
+      "type": "string"
+    },
+    "set_requirement": {
+      "additionalProperties": false,
+      "properties": {
+        "revision": {
+          "format": "uint32",
+          "maximum": 4294967295,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "set": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "set",
+        "revision"
+      ],
+      "type": "object"
+    },
+    "stack_item": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "attacker": {
+              "$ref": "#/$defs/player_id"
+            },
+            "kind": {
+              "const": "attack",
+              "type": "string"
+            },
+            "target": {
+              "$ref": "#/$defs/position"
+            }
+          },
+          "required": [
+            "kind",
+            "attacker",
+            "target"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "card": {
+              "$ref": "#/$defs/card_ref"
+            },
+            "caster": {
+              "$ref": "#/$defs/player_id"
+            },
+            "kind": {
+              "const": "spell",
+              "type": "string"
+            },
+            "targets": {
+              "items": {
+                "$ref": "#/$defs/position"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "kind",
+            "caster",
+            "card",
+            "targets"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "ability": {
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+              "type": "string"
+            },
+            "controller": {
+              "$ref": "#/$defs/player_id"
+            },
+            "effects": {
+              "items": {
+                "$ref": "#/$defs/effect_leaf"
+              },
+              "type": "array"
+            },
+            "event": {
+              "$ref": "#/$defs/trigger_event"
+            },
+            "kind": {
+              "const": "trigger",
+              "type": "string"
+            },
+            "source": {
+              "$ref": "#/$defs/position"
+            },
+            "targets": {
+              "items": {
+                "$ref": "#/$defs/position"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "kind",
+            "controller",
+            "source",
+            "ability",
+            "event",
+            "targets",
+            "effects"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "stack_window": {
+      "additionalProperties": false,
+      "properties": {
+        "holder": {
+          "$ref": "#/$defs/player_id"
+        },
+        "prior_pass": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "holder",
+        "prior_pass"
+      ],
+      "type": "object"
+    },
+    "state_projection": {
+      "additionalProperties": false,
+      "properties": {
+        "coin": {
+          "type": "boolean"
+        },
+        "pending": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/pending_input"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "players": {
+          "$ref": "#/$defs/players"
+        },
+        "stack": {
+          "items": {
+            "$ref": "#/$defs/stack_item"
+          },
+          "type": "array"
+        },
+        "stack_segment_bases": {
+          "items": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": "array"
+        },
+        "status": {
+          "$ref": "#/$defs/game_status"
+        },
+        "turn": {
+          "$ref": "#/$defs/turn_state"
+        },
+        "work": {
+          "items": {
+            "$ref": "#/$defs/work_item"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "players",
+        "coin",
+        "turn",
+        "stack",
+        "stack_segment_bases",
+        "work",
+        "status"
+      ],
+      "type": "object"
+    },
+    "summon_instance": {
+      "additionalProperties": false,
+      "properties": {
+        "chain": {
+          "$ref": "#/$defs/upgrade_chain"
+        },
+        "controller": {
+          "$ref": "#/$defs/player_id"
+        },
+        "damage": {
+          "format": "uint32",
+          "maximum": 4294967295,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "duration_markers": {
+          "items": {
+            "$ref": "#/$defs/duration_marker"
+          },
+          "type": "array"
+        },
+        "owner": {
+          "$ref": "#/$defs/player_id"
+        },
+        "readiness": {
+          "$ref": "#/$defs/readiness"
+        },
+        "turn": {
+          "$ref": "#/$defs/summon_turn_record"
+        }
+      },
+      "required": [
+        "chain",
+        "damage",
+        "readiness",
+        "owner",
+        "controller",
+        "duration_markers",
+        "turn"
+      ],
+      "type": "object"
+    },
+    "summon_turn_record": {
+      "additionalProperties": false,
+      "properties": {
+        "entered_main": {
+          "type": "boolean"
+        },
+        "upgrade": {
+          "$ref": "#/$defs/upgrade_activity"
+        }
+      },
+      "required": [
+        "upgrade",
+        "entered_main"
+      ],
+      "type": "object"
+    },
+    "trigger_event": {
+      "enum": [
+        "your_upkeep",
+        "enters_main",
+        "enters_bench",
+        "leaves_main",
+        "leaves_bench",
+        "any_summon_destroyed"
+      ],
+      "type": "string"
+    },
+    "turn_state": {
+      "additionalProperties": false,
+      "properties": {
+        "active_player": {
+          "$ref": "#/$defs/player_id"
+        },
+        "normal_attack_used": {
+          "type": "boolean"
+        },
+        "normal_retreat_used": {
+          "type": "boolean"
+        },
+        "phase": {
+          "$ref": "#/$defs/phase"
+        },
+        "spell_played_this_turn": {
+          "$ref": "#/$defs/per_player_bool"
+        },
+        "window": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/stack_window"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "active_player",
+        "phase",
+        "normal_attack_used",
+        "normal_retreat_used",
+        "spell_played_this_turn"
+      ],
+      "type": "object"
+    },
+    "upgrade_activity": {
+      "enum": [
+        "available",
+        "played_this_turn",
+        "upgraded_this_turn"
+      ],
+      "type": "string"
+    },
+    "upgrade_chain": {
+      "additionalProperties": false,
+      "properties": {
+        "layers": {
+          "items": {
+            "$ref": "#/$defs/card_ref"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "layers"
+      ],
+      "type": "object"
+    },
+    "work_item": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "destruction_check",
+              "type": "string"
+            },
+            "position": {
+              "$ref": "#/$defs/position"
+            }
+          },
+          "required": [
+            "kind",
+            "position"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "discard_destroyed_chain",
+              "type": "string"
+            },
+            "position": {
+              "$ref": "#/$defs/position"
+            }
+          },
+          "required": [
+            "kind",
+            "position"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "record_main_loss",
+              "type": "string"
+            },
+            "player": {
+              "$ref": "#/$defs/player_id"
+            }
+          },
+          "required": [
+            "kind",
+            "player"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "recover_prize",
+              "type": "string"
+            },
+            "player": {
+              "$ref": "#/$defs/player_id"
+            }
+          },
+          "required": [
+            "kind",
+            "player"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "promote_bench_summon",
+              "type": "string"
+            },
+            "player": {
+              "$ref": "#/$defs/player_id"
+            }
+          },
+          "required": [
+            "kind",
+            "player"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "resolve_movement_consequences",
+              "type": "string"
+            },
+            "player": {
+              "$ref": "#/$defs/player_id"
+            }
+          },
+          "required": [
+            "kind",
+            "player"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "movement_trigger",
+              "type": "string"
+            },
+            "player": {
+              "$ref": "#/$defs/player_id"
+            },
+            "position": {
+              "$ref": "#/$defs/position"
+            },
+            "step": {
+              "$ref": "#/$defs/movement_step"
+            }
+          },
+          "required": [
+            "kind",
+            "step",
+            "player",
+            "position"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "ability": {
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+              "type": "string"
+            },
+            "event": {
+              "$ref": "#/$defs/trigger_event"
+            },
+            "kind": {
+              "const": "fire_trigger",
+              "type": "string"
+            },
+            "player": {
+              "$ref": "#/$defs/player_id"
+            },
+            "position": {
+              "$ref": "#/$defs/position"
+            }
+          },
+          "required": [
+            "kind",
+            "player",
+            "position",
+            "event",
+            "ability"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "loss_check",
+              "type": "string"
+            },
+            "player": {
+              "$ref": "#/$defs/player_id"
+            }
+          },
+          "required": [
+            "kind",
+            "player"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "ready_all",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "draw_card",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "produce_mana",
+              "type": "string"
+            },
+            "player": {
+              "$ref": "#/$defs/player_id"
+            },
+            "source": {
+              "$ref": "#/$defs/mana_source"
+            }
+          },
+          "required": [
+            "kind",
+            "player",
+            "source"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "begin_main_phase",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        }
+      ]
+    }
+  },
+  "$id": "urn:summoners:match-log:v1:match_created",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Wire contract for one match creation record.",
+  "properties": {
+    "initial_state": {
+      "$ref": "#/$defs/state_projection"
+    },
+    "record": {
+      "$ref": "#/$defs/match_created_record_kind"
+    },
+    "required_sets": {
+      "items": {
+        "$ref": "#/$defs/set_requirement"
+      },
+      "type": "array"
+    },
+    "sequence": {
+      "format": "uint64",
+      "maximum": 18446744073709551615,
+      "minimum": 0,
+      "type": "integer"
+    },
+    "state_digest": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    }
+  },
+  "required": [
+    "sequence",
+    "record",
+    "required_sets",
+    "initial_state",
+    "state_digest"
+  ],
+  "title": "Summoners match log match creation record, version 1",
+  "type": "object"
+}

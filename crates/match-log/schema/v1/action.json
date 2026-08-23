@@ -1,0 +1,424 @@
+{
+  "$defs": {
+    "action": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "card": {
+              "format": "uint32",
+              "maximum": 4294967295,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "kind": {
+              "const": "play_summon",
+              "type": "string"
+            },
+            "player": {
+              "$ref": "#/$defs/player_id"
+            },
+            "slot": {
+              "$ref": "#/$defs/bench_slot"
+            }
+          },
+          "required": [
+            "kind",
+            "player",
+            "card",
+            "slot"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "card": {
+              "format": "uint32",
+              "maximum": 4294967295,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "kind": {
+              "const": "upgrade_summon",
+              "type": "string"
+            },
+            "player": {
+              "$ref": "#/$defs/player_id"
+            },
+            "position": {
+              "$ref": "#/$defs/position"
+            }
+          },
+          "required": [
+            "kind",
+            "player",
+            "card",
+            "position"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "card": {
+              "format": "uint32",
+              "maximum": 4294967295,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "kind": {
+              "const": "cast_spell",
+              "type": "string"
+            },
+            "mana_hint": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/mana_type"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "player": {
+              "$ref": "#/$defs/player_id"
+            },
+            "targets": {
+              "items": {
+                "$ref": "#/$defs/position"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "kind",
+            "player",
+            "card",
+            "targets"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "ability": {
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+              "type": "string"
+            },
+            "kind": {
+              "const": "activate_skill",
+              "type": "string"
+            },
+            "mana_hint": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/mana_type"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "player": {
+              "$ref": "#/$defs/player_id"
+            },
+            "position": {
+              "$ref": "#/$defs/position"
+            },
+            "targets": {
+              "items": {
+                "$ref": "#/$defs/position"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "kind",
+            "player",
+            "position",
+            "ability",
+            "targets"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "retreat",
+              "type": "string"
+            },
+            "mana_hint": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/mana_type"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "player": {
+              "$ref": "#/$defs/player_id"
+            },
+            "slot": {
+              "$ref": "#/$defs/bench_slot"
+            }
+          },
+          "required": [
+            "kind",
+            "player",
+            "slot"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "declare_attack",
+              "type": "string"
+            },
+            "mana_hint": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/mana_type"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "player": {
+              "$ref": "#/$defs/player_id"
+            },
+            "target": {
+              "$ref": "#/$defs/position"
+            }
+          },
+          "required": [
+            "kind",
+            "player",
+            "target"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "end_turn",
+              "type": "string"
+            },
+            "player": {
+              "$ref": "#/$defs/player_id"
+            }
+          },
+          "required": [
+            "kind",
+            "player"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "pass_priority",
+              "type": "string"
+            },
+            "player": {
+              "$ref": "#/$defs/player_id"
+            }
+          },
+          "required": [
+            "kind",
+            "player"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "convert_coin",
+              "type": "string"
+            },
+            "mana_type": {
+              "$ref": "#/$defs/mana_type"
+            },
+            "player": {
+              "$ref": "#/$defs/player_id"
+            }
+          },
+          "required": [
+            "kind",
+            "player",
+            "mana_type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "choose_mana_type",
+              "type": "string"
+            },
+            "mana_type": {
+              "$ref": "#/$defs/mana_type"
+            },
+            "player": {
+              "$ref": "#/$defs/player_id"
+            }
+          },
+          "required": [
+            "kind",
+            "player",
+            "mana_type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "choose_promotion",
+              "type": "string"
+            },
+            "player": {
+              "$ref": "#/$defs/player_id"
+            },
+            "slot": {
+              "$ref": "#/$defs/bench_slot"
+            }
+          },
+          "required": [
+            "kind",
+            "player",
+            "slot"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "choose_prize",
+              "type": "string"
+            },
+            "player": {
+              "$ref": "#/$defs/player_id"
+            },
+            "prize_index": {
+              "format": "uint64",
+              "maximum": 18446744073709551615,
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "kind",
+            "player",
+            "prize_index"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "action_record_kind": {
+      "const": "action",
+      "type": "string"
+    },
+    "bench_slot": {
+      "enum": [
+        "first",
+        "second",
+        "third"
+      ],
+      "type": "string"
+    },
+    "mana_type": {
+      "enum": [
+        "matter",
+        "mind",
+        "spirit"
+      ],
+      "type": "string"
+    },
+    "player_id": {
+      "enum": [
+        "one",
+        "two"
+      ],
+      "type": "string"
+    },
+    "position": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "main",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "bench",
+              "type": "string"
+            },
+            "slot": {
+              "$ref": "#/$defs/bench_slot"
+            }
+          },
+          "required": [
+            "kind",
+            "slot"
+          ],
+          "type": "object"
+        }
+      ]
+    }
+  },
+  "$id": "urn:summoners:match-log:v1:action",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Wire contract for one action record.",
+  "properties": {
+    "action": {
+      "$ref": "#/$defs/action"
+    },
+    "record": {
+      "$ref": "#/$defs/action_record_kind"
+    },
+    "sequence": {
+      "format": "uint64",
+      "maximum": 18446744073709551615,
+      "minimum": 0,
+      "type": "integer"
+    },
+    "step": {
+      "format": "uint64",
+      "maximum": 18446744073709551615,
+      "minimum": 0,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "sequence",
+    "record",
+    "step",
+    "action"
+  ],
+  "title": "Summoners match log action record, version 1",
+  "type": "object"
+}

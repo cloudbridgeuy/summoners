@@ -109,6 +109,243 @@ pool.
 - **THEN** each caller receives the same cached catalog allocation and core
   card-pool allocation
 
+### Requirement: Durable match-start recording
+
+A caller can start a versioned match recording with a `Write` sink, open
+header metadata, exact Set requirements, and an initial `GameState` with a
+Playing status. An Ended or Broken initial state returns a typed error before
+the recorder writes data. For a Playing state, the recorder writes one compact
+NDJSON `header` record and one `match_created` record, and then it flushes the
+sink before it returns an active handle. A write or flush failure returns a
+typed error and no active handle.
+
+The match-created record contains every semantic state field and a SHA-256
+digest of canonical state JSON. It does not contain loaded card definitions.
+The projection rebuilds the same state with a caller-supplied shared card pool.
+Entity and ability IDs use canonical lowercase, hyphenated UUID text.
+
+#### Scenario: A valid recording starts
+
+- **WHEN** a caller starts a recording with a writable sink and a valid state
+- **THEN** the sink contains exact `header` and `match_created` NDJSON records
+- **AND** the recorder flushes the sink before it returns an active handle
+- **AND** the handle returns the unchanged initial state
+
+#### Scenario: The initial state is rebuilt and verified
+
+- **WHEN** a caller rebuilds the recorded projection with the same shared card
+  pool
+- **THEN** every semantic state field equals the original state
+- **AND** the rebuilt state has the recorded canonical SHA-256 digest
+
+#### Scenario: The initial checkpoint cannot be written
+
+- **WHEN** the sink returns a write or flush failure
+- **THEN** recording start returns the matching typed error and no active
+  handle
+
+#### Scenario: The initial game status is terminal
+
+- **WHEN** a caller starts a recording with an Ended or Broken game state
+- **THEN** recording start returns the matching typed error before it writes
+  any record
+
+### Requirement: Complete action transcript recording
+
+An active match recorder writes each normalized action before it calls the
+game engine. An accepted action writes the engine's events in their exact
+order, the event count, and the digest of the new state. A rejected action
+writes the typed error and the unchanged state digest. Each result is flushed
+as one durable checkpoint.
+
+The action that ends a match writes one `GameEnded` event. The recorder then
+writes the complete final state and one completion record. The final state,
+completion record, and `GameEnded` event have the same winner and loss reason.
+After completion, breakage, or a recording failure, the recorder rejects all
+later actions without a new write or engine call.
+
+#### Scenario: An action is accepted
+
+- **WHEN** the engine accepts an action
+- **THEN** the transcript contains the action, its exact ordered events, the
+  event count, and the new state digest
+- **AND** an accepted action with no events records an event count of zero
+
+#### Scenario: An action is rejected
+
+- **WHEN** the engine rejects an action
+- **THEN** the transcript contains the action, the typed error, and the
+  unchanged state digest, with no event records for that step
+
+#### Scenario: An action ends the match
+
+- **WHEN** an accepted action changes the game status to Ended
+- **THEN** the transcript contains exactly one `GameEnded` event, one complete
+  final state, and one completion record
+- **AND** their winner, loss reason, event count, step count, and final digest
+  agree
+
+#### Scenario: Recording stops
+
+- **WHEN** a write or flush fails, the engine changes the game status to
+  Broken, or terminal events do not agree with the final state
+- **THEN** the recorder returns a typed error and does not write a false
+  completion record
+- **AND** each later submission fails before a write or engine call
+
+### Requirement: Complete match transcript parsing
+
+A **Match transcript** parser accepts only strict version 1 NDJSON with one
+complete record lifecycle. It returns normalized actions, ordered events,
+typed rejections, authoritative states, and completion data as typed values.
+
+#### Scenario: A complete transcript is parsed
+
+- **WHEN** a caller supplies bytes with one valid and complete record lifecycle
+- **THEN** parsing returns all normative values without data loss
+
+#### Scenario: A record is malformed
+
+- **WHEN** a record has invalid UTF-8, malformed JSON, an unknown or missing
+  normative field, an invalid integer, a noncanonical identity, an unknown
+  variant, or an unsupported format version
+- **THEN** parsing returns a typed fault with the available line, record, and
+  JSON path context
+
+#### Scenario: The record lifecycle is invalid or incomplete
+
+- **WHEN** records are missing, repeated, reordered, inconsistent, or truncated
+- **THEN** parsing returns the exact lifecycle fault with the available
+  sequence, step, and event index context
+- **AND** it does not return a **Match transcript** value
+
+### Requirement: Semantic match transcript comparison
+
+A caller can compare two complete **Match transcript** inputs after each input
+passes strict parsing. Comparison uses typed wire values, not JSON text layout.
+It keeps all normative values and array order exact.
+
+#### Scenario: Two inputs have the same normative values
+
+- **WHEN** two valid inputs differ only in JSON whitespace, object key order,
+  or header metadata
+- **THEN** default comparison reports that they are equal
+- **AND** header format and format version remain normative
+
+#### Scenario: Header metadata is included
+
+- **WHEN** a caller enables metadata comparison and the header metadata values
+  differ
+- **THEN** comparison reports the first metadata difference
+
+#### Scenario: A normative value differs
+
+- **WHEN** two valid inputs have a different normative value
+- **THEN** comparison reports the first difference in record, field, and array
+  order
+- **AND** the report contains its sequence, available step and event index,
+  stable path, expected value, and actual value
+
+#### Scenario: One input is invalid
+
+- **WHEN** strict parsing fails for either comparison input
+- **THEN** comparison returns a typed fault that identifies the expected or
+  actual input
+
+### Requirement: Exact match transcript replay
+
+A caller can verify one complete **Match transcript** against an exact card
+library and the current game engine. Verification first uses the strict
+transcript parser. It checks every recorded Set revision before it gets the
+shared card pool or rebuilds the initial state. It then verifies the rebuilt
+initial projection and digest, and submits each normalized action to the real
+engine.
+
+An accepted action must have the exact ordered engine events and resulting
+state digest. A rejected action must have the exact typed engine error and
+must not change any state field, the shared card-pool identity, or the prior
+digest. Completion must have the full final state, exactly one `GameEnded`
+outcome, the same winner and loss reason, the exact step and event counts, and
+the final digest.
+
+#### Scenario: Replay prerequisites do not match
+
+- **WHEN** strict parsing fails, or a required Set is missing or has a wrong
+  revision
+- **THEN** verification returns the matching typed parser fault or Set
+  divergence before it gets the card pool or rebuilds the initial state
+
+#### Scenario: Accepted and rejected actions match
+
+- **WHEN** every normalized action produces its recorded accepted events or
+  recorded rejected error
+- **THEN** verification confirms every accepted digest and confirms that each
+  rejected action kept the complete state and digest unchanged
+
+#### Scenario: One replay value differs
+
+- **WHEN** an action result, ordered event, typed error, state, digest, count,
+  winner, or loss reason differs
+- **THEN** verification returns the first typed divergence with its phase,
+  available step and event index, stable path, expected value, and actual value
+
+#### Scenario: Terminal completion matches
+
+- **WHEN** replay reaches the recorded terminal action
+- **THEN** the engine state, the one `GameEnded` outcome, completion counts,
+  winner, loss reason, and final digests all match the transcript
+
+### Requirement: Reviewed golden match corpus
+
+The repository contains one or more human-reviewed golden **Match
+transcripts**. The corpus test discovers every `.ndjson` file in the fixture
+directory, ignores unrelated files, loads the built-in card catalog, and uses
+the public replay verifier for each match. The test does not provide an update
+or bless operation. A person approves each fixture change through normal code
+review.
+
+#### Scenario: Every reviewed match still replays
+
+- **WHEN** the repository test reads the golden fixture directory
+- **THEN** every `.ndjson` fixture replays with the built-in catalog
+- **AND** unrelated files do not enter the corpus
+
+#### Scenario: The corpus has no reviewed match
+
+- **WHEN** discovery finds no `.ndjson` fixture
+- **THEN** the corpus test fails because at least one reviewed match is
+  required
+
+#### Scenario: One golden match differs
+
+- **WHEN** a fixture does not match the current parser, card data, or engine
+- **THEN** the failure names the fixture before it reports the typed replay
+  error or difference
+
+### Requirement: Deterministic match transcript contract
+
+The version 1 **Match transcript** contract contains exactly one JSON Schema
+for each of its eight record types and one lifecycle document. A caller can
+write this deterministic artifact set to an explicit directory or verify an
+existing directory without changing it.
+
+#### Scenario: The contract is generated
+
+- **WHEN** a caller writes the contract to an explicit target directory
+- **THEN** it receives the same nine artifact paths and bytes on every run
+
+#### Scenario: The checked contract is current
+
+- **WHEN** all expected artifacts and no unexpected paths are present
+- **THEN** verification succeeds and leaves the target directory unchanged
+
+#### Scenario: One or more contract paths differ
+
+- **WHEN** an artifact is missing or stale, or an unexpected path is present
+- **THEN** verification returns a typed error for the first different path in
+  lexical order
+- **AND** it leaves the target directory unchanged
+
 ### Requirement: Turn structure and phase order
 
 A turn moves through Upkeep, Main Phase, and Combat, and phases only move
@@ -437,6 +674,8 @@ types/archetypes document for content-design intent.
 - **Vault:** seven match-play cards outside the 20-card Deck.
 - **Set:** one versioned authored document that owns card definitions and their
   stable identities.
+- **Match transcript:** one versioned, append-only NDJSON record of a match's
+  initial state, actions, engine results, and final outcome.
 
 ## Important relationships
 
