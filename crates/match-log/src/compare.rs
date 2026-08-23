@@ -1,0 +1,1 @@
+//! Semantic transcript comparison boundary.
