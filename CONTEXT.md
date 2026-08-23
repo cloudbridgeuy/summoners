@@ -10,8 +10,9 @@ clock, and uses no random source. Every entry point takes one state value and
 one action, and returns a new state value; it never mutates anything the caller
 still holds. A strict authored-card boundary parses caller-held Set bytes into
 core definitions without file I/O. A separate CLI serves a local museum image
-search form. It connects to the Art Institute of Chicago; the other four
-provider connections are not available yet. There is no game client or runtime
+search form. It connects to the Art Institute of Chicago and the Cleveland
+Museum of Art; the other three provider connections are not available yet.
+There is no game client or runtime
 file loader yet. Detail pages include a trusted self-contained JPEG download
 path for provider image responses. This file is an index of stable product
 language, not an API contract.
@@ -25,7 +26,9 @@ museum sources, an optional culture or region, an output directory, and local
 server options before it starts a loopback-only server on an operating-system
 assigned port. The local page keeps valid query and filter values in its form.
 The Art Institute of Chicago search keeps only records that the response marks
-as public domain, and it shows normalized result cards. Metadata responses stay
+as public domain. The Cleveland Museum of Art search requires exact CC0 records
+with display images and supports a culture filter. Both sources show normalized
+result cards. Metadata responses stay
 in the user cache for 24 hours. Card and preview image bytes stay in a separate
 user cache for 30 days. Cards use local image and detail routes that accept only
 a known source and object ID. The detail route reconstructs trusted provider
@@ -57,6 +60,18 @@ standard XMP, and atomically writes one JPEG in the selected output directory.
 - **AND** each accepted record has a locally proxied thumbnail, detail link,
   title, institution, and public-domain license badge
 - **AND** a record that is not public domain does not appear
+
+#### Scenario: A Cleveland Museum search succeeds
+
+- **WHEN** the Cleveland Museum of Art returns matching CC0 records for an
+  optional culture filter
+- **THEN** the page shows normalized records with the museum's exact object URL
+  and credit line
+- **AND** records with a missing ID, title, exact CC0 state, absolute HTTP(S)
+  object URL, or valid absolute HTTP(S) display image do not appear
+- **AND** card and preview requests use the best available JPEG sizes
+- **AND** a download uses the highest-resolution TIFF when available or the best
+  JPEG otherwise
 
 #### Scenario: A user opens one artwork
 
@@ -141,8 +156,8 @@ standard XMP, and atomically writes one JPEG in the selected output directory.
 
 #### Scenario: A metadata response is still fresh
 
-- **WHEN** the user repeats the same Art Institute of Chicago search less than
-  24 hours after a successful metadata response
+- **WHEN** the user repeats the same connected-provider search less than 24
+  hours after a successful metadata response
 - **THEN** the page uses the cached metadata without a second provider request
 
 #### Scenario: A metadata cache entry is corrupt

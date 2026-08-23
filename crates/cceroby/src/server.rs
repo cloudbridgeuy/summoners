@@ -449,6 +449,8 @@ mod tests {
         let output = tempfile::tempdir().expect("temporary output exists");
         let endpoint =
             Url::parse(&format!("{base}/api/v1/artworks/search")).expect("mock endpoint is valid");
+        let cleveland = crate::providers::cleveland::ClevelandProvider::official_endpoint()
+            .expect("built-in Cleveland endpoint is valid");
         let mut session = SearchSession::new(query);
         merge_page(
             &mut session,
@@ -478,7 +480,7 @@ mod tests {
         let state = AppState::new(
             session,
             SearchServices::new(
-                ProviderSet::with_aic_endpoint(endpoint),
+                ProviderSet::with_endpoints(endpoint, cleveland),
                 Cache::new(cache.path().to_path_buf()),
                 HttpClient::new(),
                 RateLimiters::new(),
@@ -581,7 +583,7 @@ mod tests {
             .await
             .expect("body is readable");
         let html = String::from_utf8(body.to_vec()).expect("body is utf-8");
-        assert_eq!(html.matches("is not available in this build").count(), 4);
+        assert_eq!(html.matches("is not available in this build").count(), 3);
     }
 
     #[tokio::test]

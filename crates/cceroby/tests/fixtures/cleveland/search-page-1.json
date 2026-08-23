@@ -1,0 +1,41 @@
+{
+  "info": {"total": 3, "parameters": {"skip": 0, "limit": 2, "q": "mask", "cc0": "", "culture": "Japan", "has_image": "1"}},
+  "data": [
+    {
+      "id": 126730,
+      "accession_number": "1949.158",
+      "share_license_status": "CC0",
+      "title": "Gigaku Mask of Young Persian Boy (Taikōji)",
+      "creation_date": "710–94",
+      "creators": [],
+      "culture": ["Japan, Nara period (710–94)"],
+      "url": "https://clevelandart.org/art/1949.158",
+      "images": {
+        "annotation": null,
+        "web": {"url": "https://openaccess-cdn.clevelandart.org/1949.158/1949.158_web.jpg", "width": "763", "height": "900", "filesize": "224925", "filename": "1949.158_web.jpg"},
+        "print": {"url": "https://openaccess-cdn.clevelandart.org/1949.158/1949.158_print.jpg", "width": "2884", "height": "3400", "filesize": "2690369", "filename": "1949.158_print.jpg"},
+        "full": {"url": "https://openaccess-cdn.clevelandart.org/1949.158/1949.158_full.tif", "width": "10652", "height": "12558", "filesize": "401332976", "filename": "1949.158_full.tif"}
+      },
+      "creditline": "John L. Severance Fund",
+      "has_conservation_images": false
+    },
+    {
+      "id": 160723,
+      "accession_number": "1998.78",
+      "share_license_status": "CC0",
+      "title": "Eighteen Views of Huzhou",
+      "creation_date": "c. 1588",
+      "creators": [{"id": 22954, "description": "Song Xu (Chinese, 1525-c. 1606)", "role": "artist"}],
+      "culture": ["China, Ming dynasty (1368–1644)", "Wanli reign (1573–1620)"],
+      "url": "https://clevelandart.org/art/1998.78",
+      "images": {
+        "annotation": null,
+        "web": {"url": "https://openaccess-cdn.clevelandart.org/1998.78/1998.78_web.jpg", "width": "987", "height": "893", "filesize": "827763", "filename": "1998.78_web.jpg"},
+        "print": {"url": "https://openaccess-cdn.clevelandart.org/1998.78/1998.78_print.jpg", "width": "3400", "height": "3076", "filesize": "10906563", "filename": "1998.78_print.jpg"},
+        "full": null
+      },
+      "creditline": "The Severance and Greta Millikin Purchase Fund",
+      "has_conservation_images": false
+    }
+  ]
+}
