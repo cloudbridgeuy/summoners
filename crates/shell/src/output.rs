@@ -71,6 +71,35 @@ pub fn same_file(from: Option<&Path>, output: Option<&Path>) -> bool {
     matches!((from, output), (Some(from), Some(output)) if from == output)
 }
 
+/// Refuse to plan an output path that names the same file as an input the
+/// command also reads (a scenario given via `--from`, most often).
+///
+/// Both paths are canonicalized before comparison, so a relative path and
+/// an absolute path naming the same file are still caught. A path that does
+/// not resolve — usually because it does not exist yet — never collides
+/// with anything; a genuinely missing input is left for its own file-system
+/// error instead of being mistaken for a collision. Shared by every command
+/// that both reads a transcript and writes one elsewhere.
+pub fn refuse_same_file(
+    command: &'static str,
+    from: &Path,
+    output: &Path,
+) -> Result<(), ShellError> {
+    let from_resolved = std::fs::canonicalize(from).ok();
+    let output_resolved = std::fs::canonicalize(output).ok();
+
+    if same_file(from_resolved.as_deref(), output_resolved.as_deref()) {
+        let resolved = from_resolved.as_deref().unwrap_or(from);
+        return Err(ShellError::Usage(format!(
+            "{command}: --output must not name the same file as --from: both {} and {} resolve to {}",
+            from.display(),
+            output.display(),
+            resolved.display()
+        )));
+    }
+    Ok(())
+}
+
 /// Rename a completed partial recording to its requested output path.
 ///
 /// Call this only once recording has reached a complete `match_completed`
@@ -169,5 +198,63 @@ mod tests {
         assert!(!same_file(None, Some(resolved)));
         assert!(!same_file(Some(resolved), None));
         assert!(!same_file(None, None));
+    }
+
+    #[test]
+    fn refuse_same_file_accepts_two_different_existing_paths() {
+        let directory = std::env::temp_dir().join(format!(
+            "summoners-shell-output-unit-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        std::fs::create_dir_all(&directory).expect("the temporary directory is created");
+        let from = directory.join("a.ndjson");
+        let output = directory.join("b.ndjson");
+        std::fs::write(&from, b"a").expect("the first file is written");
+        std::fs::write(&output, b"b").expect("the second file is written");
+
+        let result = refuse_same_file(COMMAND, &from, &output);
+
+        assert!(result.is_ok(), "unexpected error: {result:?}");
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn refuse_same_file_rejects_a_path_that_resolves_to_the_same_file() {
+        let directory = std::env::temp_dir().join(format!(
+            "summoners-shell-output-unit-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        std::fs::create_dir_all(&directory).expect("the temporary directory is created");
+        let path = directory.join("a.ndjson");
+        std::fs::write(&path, b"a").expect("the file is written");
+
+        let error = refuse_same_file(COMMAND, &path, &path)
+            .expect_err("the same path used twice must be refused");
+
+        assert!(
+            matches!(error, ShellError::Usage(_)),
+            "unexpected error: {error}"
+        );
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn refuse_same_file_allows_a_from_path_that_does_not_exist_yet() {
+        let directory = std::env::temp_dir().join(format!(
+            "summoners-shell-output-unit-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        let missing = directory.join("missing.ndjson");
+        let output = directory.join("output.ndjson");
+
+        let result = refuse_same_file(COMMAND, &missing, &output);
+
+        assert!(
+            result.is_ok(),
+            "an unresolved path must never be mistaken for a collision: {result:?}"
+        );
     }
 }

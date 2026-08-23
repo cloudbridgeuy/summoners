@@ -9,8 +9,11 @@
 pub mod cli;
 pub mod error;
 pub mod exit;
+pub mod input;
 pub mod output;
+pub mod play;
 pub mod replay;
 pub mod report;
 pub mod session;
 pub mod verify;
+pub mod view;

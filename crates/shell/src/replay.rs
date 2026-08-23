@@ -20,7 +20,7 @@ use summoners_match_log::{
 };
 
 use crate::error::{GameFailure, ShellError};
-use crate::output::{OutputPlan, finish, plan_output, same_file};
+use crate::output::{OutputPlan, finish, plan_output, refuse_same_file};
 use crate::session::{SessionStatus, classify};
 
 const COMMAND: &str = "replay";
@@ -70,7 +70,7 @@ fn run_replay_with(
     library: &CardLibrary,
     transition: impl Fn(&GameState, &GameAction) -> Result<ActionOutcome, ActionError>,
 ) -> Result<ReplaySummary, ShellError> {
-    refuse_same_file(from, output)?;
+    refuse_same_file(COMMAND, from, output)?;
     let transcript = parse_transcript(from)?;
     let scenario =
         prepare_scenario(&transcript, library).map_err(|source| ShellError::Transcript {
@@ -178,32 +178,6 @@ fn start_recording(
         path: partial.to_path_buf(),
         source,
     })
-}
-
-/// Refuse to replay when `--output` would overwrite the very file
-/// `--from` is about to read, before opening either one.
-///
-/// Resolves each path with `std::fs::canonicalize` so a symlink or a
-/// merely textually different path (`./a.ndjson` vs. `a.ndjson`) is still
-/// caught, then hands the two resolved paths to the pure `same_file`
-/// comparison. Canonicalization can fail — most often because a path does
-/// not exist yet — and that failure is not this function's concern: a
-/// missing `from` must still surface as the ordinary "file not found"
-/// error once reading begins, not as an argument error.
-fn refuse_same_file(from: &Path, output: &Path) -> Result<(), ShellError> {
-    let from_resolved = std::fs::canonicalize(from).ok();
-    let output_resolved = std::fs::canonicalize(output).ok();
-
-    if same_file(from_resolved.as_deref(), output_resolved.as_deref()) {
-        let resolved = from_resolved.as_deref().unwrap_or(from);
-        return Err(ShellError::Usage(format!(
-            "{COMMAND}: --output must not name the same file as --from: both {} and {} resolve to {}",
-            from.display(),
-            output.display(),
-            resolved.display()
-        )));
-    }
-    Ok(())
 }
 
 fn parse_transcript(path: &Path) -> Result<TranscriptV1, ShellError> {

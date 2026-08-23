@@ -81,7 +81,14 @@ fn resign(state: &GameState, player: PlayerId) -> ActionOutcome {
 /// Main, a respondable trigger during Upkeep or Main resolution, or a
 /// declared attack in Combat), so this checks `state.turn.window` directly
 /// rather than matching on the phase.
-fn required_actor(state: &GameState) -> PlayerId {
+///
+/// Public so a caller that only needs to know who the engine will accept an
+/// action from — an interactive shell rendering a status line, for example
+/// — can read this one rule instead of re-deriving it from `pending`, the
+/// Stack window, and the active player itself. There is exactly one
+/// definition of this rule; a caller must not duplicate it.
+#[must_use]
+pub fn required_actor(state: &GameState) -> PlayerId {
     if let Some(pending) = &state.pending {
         return pending_actor(pending);
     }
