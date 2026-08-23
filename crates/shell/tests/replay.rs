@@ -161,6 +161,33 @@ fn a_second_run_with_force_succeeds() {
 }
 
 #[test]
+fn an_output_naming_the_same_file_as_from_is_refused_and_leaves_the_input_untouched() {
+    let directory = TemporaryDirectory::new("same-file");
+    let input = directory.join("in.ndjson");
+    fs::copy(golden("resignation.ndjson"), &input).expect("the golden copies into the sandbox");
+    let original = fs::read(&input).expect("the copied input is readable");
+
+    let output = run_replay([
+        "--from".as_ref(),
+        input.as_os_str(),
+        "--output".as_ref(),
+        input.as_os_str(),
+        "--force".as_ref(),
+    ]);
+
+    assert_eq!(output.status.code(), Some(2), "stdout: {}", stdout(&output));
+    let after = fs::read(&input).expect("the input file is still readable");
+    assert_eq!(
+        original, after,
+        "an output that names the same file as the input must leave it byte-identical"
+    );
+    assert!(
+        !directory.join("in.ndjson.partial").exists(),
+        "no partial file must be created for a refused run"
+    );
+}
+
+#[test]
 fn replay_reports_a_missing_input_file_as_exit_four() {
     let directory = TemporaryDirectory::new("missing-input");
     let missing = directory.join("does-not-exist.ndjson");

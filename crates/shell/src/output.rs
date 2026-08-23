@@ -57,6 +57,20 @@ fn partial_path(output: &Path) -> PathBuf {
     PathBuf::from(name)
 }
 
+/// Whether two already-resolved paths name the same file.
+///
+/// Pure: it takes each path already reduced to whatever canonical form
+/// the caller could produce, the same split `plan_output` uses for its
+/// `exists` probe. Pass `None` when resolving a path failed — most often
+/// because it does not exist yet. A path that could not be resolved never
+/// collides with anything, so a genuinely missing input or output is left
+/// for its own file-system error to report instead of being mistaken for
+/// a collision.
+#[must_use]
+pub fn same_file(from: Option<&Path>, output: Option<&Path>) -> bool {
+    matches!((from, output), (Some(from), Some(output)) if from == output)
+}
+
 /// Rename a completed partial recording to its requested output path.
 ///
 /// Call this only once recording has reached a complete `match_completed`
@@ -131,5 +145,29 @@ mod tests {
                 output: PathBuf::from("match.ndjson"),
             }
         );
+    }
+
+    #[test]
+    fn same_file_is_true_when_both_paths_resolved_and_matched() {
+        let resolved = Path::new("/tmp/match.ndjson");
+
+        assert!(same_file(Some(resolved), Some(resolved)));
+    }
+
+    #[test]
+    fn same_file_is_false_when_the_resolved_paths_differ() {
+        assert!(!same_file(
+            Some(Path::new("/tmp/a.ndjson")),
+            Some(Path::new("/tmp/b.ndjson"))
+        ));
+    }
+
+    #[test]
+    fn same_file_is_false_when_either_path_could_not_be_resolved() {
+        let resolved = Path::new("/tmp/match.ndjson");
+
+        assert!(!same_file(None, Some(resolved)));
+        assert!(!same_file(Some(resolved), None));
+        assert!(!same_file(None, None));
     }
 }

@@ -20,19 +20,28 @@ pub fn verify_success(path: &Path, summary: &VerifySummary) -> String {
 
 /// The stdout line for one successful `replay` run whose observed
 /// transcript is semantically equal to the expected one.
+///
+/// Labels both paths with the same `expected`/`observed` vocabulary the
+/// failure line (`replay_difference`) uses, so a reader never has to guess
+/// which path is which.
 #[must_use]
 pub fn replay_success(from: &Path, output: &Path, summary: &ReplaySummary) -> String {
     format!(
-        "replay: {}: ok ({} steps, {} events), matches at {}",
+        "replay: expected {}, observed {}: ok ({} steps, {} events)",
         from.display(),
+        output.display(),
         summary.steps,
-        summary.events,
-        output.display()
+        summary.events
     )
 }
 
 /// The stderr line for one `replay` run whose observed transcript differs
 /// from the expected one.
+///
+/// Labels both paths as `expected` and `observed` so neither reads as part
+/// of the trailing difference message, and carries every field the typed
+/// `TranscriptDifference` has: sequence, step, event index, stable path,
+/// expected value, and actual value.
 #[must_use]
 pub fn replay_difference(
     command: &'static str,
@@ -41,13 +50,13 @@ pub fn replay_difference(
     difference: &TranscriptDifference,
 ) -> String {
     format!(
-        "{command}: {}: {}: transcripts differ at {} (sequence {}, step {}, event {}): expected {}, actual {}",
+        "{command}: expected {}, observed {}: sequence {}, step {}, event {}, path {}: expected {}, found {}",
         expected_path.display(),
         observed_path.display(),
-        difference.path,
         difference.sequence,
         format_optional_step(difference.step),
         format_optional_step(difference.event_index),
+        difference.path,
         format_optional_value(difference.expected.as_ref()),
         format_optional_value(difference.actual.as_ref()),
     )
@@ -122,7 +131,7 @@ mod tests {
                 &PathBuf::from("observed.ndjson"),
                 &summary
             ),
-            "replay: expected.ndjson: ok (4 steps, 5 events), matches at observed.ndjson"
+            "replay: expected expected.ndjson, observed observed.ndjson: ok (4 steps, 5 events)"
         );
     }
 
@@ -138,7 +147,9 @@ mod tests {
         );
 
         assert!(
-            message.starts_with("replay: expected.ndjson: observed.ndjson: transcripts differ at "),
+            message.starts_with(
+                "replay: expected expected.ndjson, observed observed.ndjson: sequence "
+            ),
             "unexpected message: {message}"
         );
         assert!(

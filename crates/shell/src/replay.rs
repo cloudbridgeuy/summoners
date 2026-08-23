@@ -20,7 +20,7 @@ use summoners_match_log::{
 };
 
 use crate::error::{GameFailure, ShellError};
-use crate::output::{OutputPlan, finish, plan_output};
+use crate::output::{OutputPlan, finish, plan_output, same_file};
 use crate::session::{SessionStatus, classify};
 
 const COMMAND: &str = "replay";
@@ -70,6 +70,7 @@ fn run_replay_with(
     library: &CardLibrary,
     transition: impl Fn(&GameState, &GameAction) -> Result<ActionOutcome, ActionError>,
 ) -> Result<ReplaySummary, ShellError> {
+    refuse_same_file(from, output)?;
     let transcript = parse_transcript(from)?;
     let scenario =
         prepare_scenario(&transcript, library).map_err(|source| ShellError::Transcript {
@@ -177,6 +178,32 @@ fn start_recording(
         path: partial.to_path_buf(),
         source,
     })
+}
+
+/// Refuse to replay when `--output` would overwrite the very file
+/// `--from` is about to read, before opening either one.
+///
+/// Resolves each path with `std::fs::canonicalize` so a symlink or a
+/// merely textually different path (`./a.ndjson` vs. `a.ndjson`) is still
+/// caught, then hands the two resolved paths to the pure `same_file`
+/// comparison. Canonicalization can fail — most often because a path does
+/// not exist yet — and that failure is not this function's concern: a
+/// missing `from` must still surface as the ordinary "file not found"
+/// error once reading begins, not as an argument error.
+fn refuse_same_file(from: &Path, output: &Path) -> Result<(), ShellError> {
+    let from_resolved = std::fs::canonicalize(from).ok();
+    let output_resolved = std::fs::canonicalize(output).ok();
+
+    if same_file(from_resolved.as_deref(), output_resolved.as_deref()) {
+        let resolved = from_resolved.as_deref().unwrap_or(from);
+        return Err(ShellError::Usage(format!(
+            "{COMMAND}: --output must not name the same file as --from: both {} and {} resolve to {}",
+            from.display(),
+            output.display(),
+            resolved.display()
+        )));
+    }
+    Ok(())
 }
 
 fn parse_transcript(path: &Path) -> Result<TranscriptV1, ShellError> {
@@ -340,5 +367,45 @@ mod tests {
             "the partial file must be kept for diagnosis"
         );
         assert!(!output.exists(), "no complete output file must be created");
+    }
+
+    #[test]
+    fn same_output_and_from_is_refused_before_any_file_is_touched() {
+        let catalog = built_in_catalog().expect("the built-in catalog loads");
+        let directory = TempDir::new("same-file");
+        let input = directory.join("in.ndjson");
+        fs::copy(golden("resignation.ndjson"), &input).expect("the golden copies into the sandbox");
+        let original = fs::read(&input).expect("the copied input is readable");
+
+        let error = run_replay(&input, &input, true, catalog.library())
+            .expect_err("replaying a transcript onto itself must be refused");
+
+        assert!(
+            matches!(error, ShellError::Usage(_)),
+            "unexpected error: {error}"
+        );
+        assert_eq!(crate::exit::exit_code(&error), 2);
+        let after = fs::read(&input).expect("the input is still readable");
+        assert_eq!(original, after, "the input file must be left untouched");
+        assert!(
+            !directory.join("in.ndjson.partial").exists(),
+            "no partial file must be created for a refused run"
+        );
+    }
+
+    #[test]
+    fn a_missing_input_still_reports_as_a_missing_file_even_when_output_matches() {
+        let catalog = built_in_catalog().expect("the built-in catalog loads");
+        let directory = TempDir::new("same-file-missing");
+        let missing = directory.join("does-not-exist.ndjson");
+
+        let error = run_replay(&missing, &missing, false, catalog.library())
+            .expect_err("a missing input must still be reported as a missing file");
+
+        assert!(
+            matches!(error, ShellError::Io { .. }),
+            "unexpected error: {error}"
+        );
+        assert_eq!(crate::exit::exit_code(&error), 4);
     }
 }
