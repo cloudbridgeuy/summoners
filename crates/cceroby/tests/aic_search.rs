@@ -18,7 +18,7 @@ use cceroby::core::{
     SourceSet,
 };
 use cceroby::http::HttpClient;
-use cceroby::providers::ProviderSet;
+use cceroby::providers::{ProviderEndpoints, ProviderSet};
 use cceroby::rate_limit::RateLimiters;
 use cceroby::search::SearchServices;
 use cceroby::server::{AppState, router};
@@ -69,12 +69,19 @@ fn services(endpoint: Url, cache_root: &TempDir) -> SearchServices {
     };
     SearchServices::new(
         ProviderSet::with_endpoints(
-            endpoint,
-            cleveland,
-            cceroby::providers::met::MetProvider::official_endpoint()
-                .unwrap_or_else(|error| panic!("Met endpoint must be valid: {error}")),
-            cceroby::providers::smithsonian::SmithsonianProvider::official_endpoint()
-                .unwrap_or_else(|error| panic!("Smithsonian endpoint must be valid: {error}")),
+            ProviderEndpoints {
+                aic: endpoint,
+                cleveland,
+                met: cceroby::providers::met::MetProvider::official_endpoint()
+                    .unwrap_or_else(|error| panic!("Met endpoint must be valid: {error}")),
+                smithsonian:
+                    cceroby::providers::smithsonian::SmithsonianProvider::official_endpoint()
+                        .unwrap_or_else(|error| {
+                            panic!("Smithsonian endpoint must be valid: {error}")
+                        }),
+                commons: cceroby::providers::commons::CommonsProvider::official_endpoint()
+                    .unwrap_or_else(|error| panic!("Commons endpoint must be valid: {error}")),
+            },
             None,
         ),
         Cache::new(cache_root.path().to_path_buf()),

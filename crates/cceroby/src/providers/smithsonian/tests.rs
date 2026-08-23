@@ -556,11 +556,18 @@ async fn missing_key_does_not_stop_another_source_search_or_expose_secret_text()
     };
     let temporary = tempdir().expect("temporary directory exists");
     let providers = ProviderSet::with_endpoints(
-        Url::parse(&format!("http://{address}/search")).expect("mock AIC endpoint is valid"),
-        crate::providers::cleveland::ClevelandProvider::official_endpoint()
-            .expect("Cleveland endpoint is valid"),
-        crate::providers::met::MetProvider::official_endpoint().expect("Met endpoint is valid"),
-        SmithsonianProvider::official_endpoint().expect("Smithsonian endpoint is valid"),
+        crate::providers::ProviderEndpoints {
+            aic: Url::parse(&format!("http://{address}/search"))
+                .expect("mock AIC endpoint is valid"),
+            cleveland: crate::providers::cleveland::ClevelandProvider::official_endpoint()
+                .expect("Cleveland endpoint is valid"),
+            met: crate::providers::met::MetProvider::official_endpoint()
+                .expect("Met endpoint is valid"),
+            smithsonian: SmithsonianProvider::official_endpoint()
+                .expect("Smithsonian endpoint is valid"),
+            commons: crate::providers::commons::CommonsProvider::official_endpoint()
+                .expect("Commons endpoint is valid"),
+        },
         None,
     );
     let services = SearchServices::new(
@@ -609,11 +616,18 @@ async fn syntactically_valid_rejected_key_fails_after_one_request() {
     });
     let temporary = tempdir().expect("temporary directory exists");
     let providers = ProviderSet::with_endpoints(
-        crate::providers::aic::AicProvider::official_endpoint().expect("AIC endpoint is valid"),
-        crate::providers::cleveland::ClevelandProvider::official_endpoint()
-            .expect("Cleveland endpoint is valid"),
-        crate::providers::met::MetProvider::official_endpoint().expect("Met endpoint is valid"),
-        Url::parse(&format!("http://{address}/search")).expect("mock endpoint is valid"),
+        crate::providers::ProviderEndpoints {
+            aic: crate::providers::aic::AicProvider::official_endpoint()
+                .expect("AIC endpoint is valid"),
+            cleveland: crate::providers::cleveland::ClevelandProvider::official_endpoint()
+                .expect("Cleveland endpoint is valid"),
+            met: crate::providers::met::MetProvider::official_endpoint()
+                .expect("Met endpoint is valid"),
+            smithsonian: Url::parse(&format!("http://{address}/search"))
+                .expect("mock endpoint is valid"),
+            commons: crate::providers::commons::CommonsProvider::official_endpoint()
+                .expect("Commons endpoint is valid"),
+        },
         Some(SECRET.into()),
     );
     let services = SearchServices::new(
@@ -804,11 +818,17 @@ async fn common_v4_paths_search_detail_display_and_download_with_xmp() {
         axum::serve(listener, app).await.expect("mock server runs");
     });
     let providers = ProviderSet::with_endpoints(
-        crate::providers::aic::AicProvider::official_endpoint().expect("AIC endpoint is valid"),
-        crate::providers::cleveland::ClevelandProvider::official_endpoint()
-            .expect("Cleveland endpoint is valid"),
-        crate::providers::met::MetProvider::official_endpoint().expect("Met endpoint is valid"),
-        Url::parse(&format!("{base}/search")).expect("mock endpoint is valid"),
+        crate::providers::ProviderEndpoints {
+            aic: crate::providers::aic::AicProvider::official_endpoint()
+                .expect("AIC endpoint is valid"),
+            cleveland: crate::providers::cleveland::ClevelandProvider::official_endpoint()
+                .expect("Cleveland endpoint is valid"),
+            met: crate::providers::met::MetProvider::official_endpoint()
+                .expect("Met endpoint is valid"),
+            smithsonian: Url::parse(&format!("{base}/search")).expect("mock endpoint is valid"),
+            commons: crate::providers::commons::CommonsProvider::official_endpoint()
+                .expect("Commons endpoint is valid"),
+        },
         Some(SECRET.into()),
     );
     let temporary = tempdir().expect("temporary directory exists");

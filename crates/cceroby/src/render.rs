@@ -17,6 +17,30 @@ const PAGE_LIFECYCLE_SCRIPT: &str = r#"<script>
 }());
 </script>"#;
 
+const LOAD_MORE_SCRIPT: &str = r#"<script>
+(function () {
+  var button = document.getElementById('load-more');
+  var grid = document.getElementById('artwork-grid');
+  var count = document.getElementById('loaded-count');
+  if (!button || !grid || !count) return;
+  button.addEventListener('click', function () {
+    if (button.disabled) return;
+    button.disabled = true;
+    button.textContent = 'Loading more…';
+    fetch('/more', { credentials: 'same-origin' }).then(function (response) {
+      var hasMore = response.headers.get('X-Has-More') === 'true';
+      return response.text().then(function (markup) { return { hasMore: hasMore, markup: markup }; });
+    }).then(function (result) {
+      var fragment = document.createRange().createContextualFragment(result.markup);
+      grid.appendChild(fragment);
+      count.textContent = String(grid.querySelectorAll('.artwork-card').length);
+      if (result.hasMore) { button.disabled = false; button.textContent = 'Load more'; }
+      else { button.remove(); }
+    }).catch(function () { button.disabled = false; button.textContent = 'Load more'; });
+  });
+}());
+</script>"#;
+
 /// Trusted data rendered on the artwork detail page.
 #[derive(Debug, Clone, Copy)]
 pub struct DetailView<'a> {
@@ -72,30 +96,12 @@ pub fn render_search_page(view: SearchView<'_>) -> String {
     } else {
         format!("<section aria-live=\"polite\"><h2>Source status</h2><ul>{notices}</ul></section>")
     };
-    let cards = view
-        .artworks
-        .iter()
-        .filter_map(|artwork| {
-            let key = ArtworkKey::try_from_parts(artwork.source.key(), &artwork.source_id).ok()?;
-            let detail_url = escape_html(&artwork_route_url("/detail", &key));
-            let thumbnail_url = escape_html(&artwork_route_url("/thumb", &key));
-            Some(format!(
-                concat!(
-                    "<article class=\"artwork-card\">",
-                    "<a href=\"{detail_url}\"><img src=\"{thumbnail_url}\" alt=\"\" loading=\"lazy\"></a>",
-                    "<h3><a href=\"{detail_url}\">{}</a></h3><p>{}</p>",
-                    "<span class=\"license-badge\">{}</span>",
-                    "</article>"
-                ),
-                escape_html(&artwork.title),
-                escape_html(&artwork.institution),
-                artwork.license.label(),
-                detail_url = detail_url,
-                thumbnail_url = thumbnail_url,
-            ))
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
+    let cards = render_cards_fragment(view.artworks);
+    let load_more = if view.has_more {
+        "<button id=\"load-more\" type=\"button\">Load more</button>"
+    } else {
+        ""
+    };
 
     let html = format!(
         r#"<!doctype html>
@@ -130,15 +136,35 @@ pub fn render_search_page(view: SearchView<'_>) -> String {
     {notice_section}
     <section aria-live="polite">
       <h2>Results</h2>
-      <p>Loaded {} results.</p>
-      <div class="artwork-grid">{cards}</div>
+      <p aria-label="Loaded {} results.">Loaded <span id="loaded-count">{}</span> results.</p>
+      <div id="artwork-grid" class="artwork-grid">{cards}</div>
+      {load_more}
     </section>
   </main>
 </body>
 </html>"#,
+        view.artworks.len(),
         view.artworks.len()
     );
-    with_page_lifecycle(html)
+    with_page_scripts(html, LOAD_MORE_SCRIPT)
+}
+
+/// Render trusted local card markup without a document wrapper or script.
+#[must_use]
+pub fn render_cards_fragment(artworks: &[Artwork]) -> String {
+    artworks
+        .iter()
+        .filter_map(|artwork| {
+            let key = ArtworkKey::try_from_parts(artwork.source.key(), &artwork.source_id).ok()?;
+            let detail_url = escape_html(&artwork_route_url("/detail", &key));
+            let thumbnail_url = escape_html(&artwork_route_url("/thumb", &key));
+            Some(format!(
+                concat!("<article class=\"artwork-card\"><a href=\"{detail_url}\"><img src=\"{thumbnail_url}\" alt=\"\" loading=\"lazy\"></a><h3><a href=\"{detail_url}\">{}</a></h3><p>{}</p><span class=\"license-badge\">{}</span></article>"),
+                escape_html(&artwork.title), escape_html(&artwork.institution), artwork.license.label(), detail_url = detail_url, thumbnail_url = thumbnail_url,
+            ))
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// Render one trusted artwork and its compact card credit.
@@ -235,6 +261,13 @@ fn with_page_lifecycle(mut html: String) -> String {
     let position = html.rfind("</body>").unwrap_or(html.len());
     html.insert_str(position, PAGE_LIFECYCLE_SCRIPT);
     html
+}
+
+#[must_use]
+fn with_page_scripts(mut html: String, script: &str) -> String {
+    let position = html.rfind("</body>").unwrap_or(html.len());
+    html.insert_str(position, script);
+    with_page_lifecycle(html)
 }
 
 #[must_use]
@@ -394,12 +427,33 @@ mod tests {
             }),
         );
         let html = render_search_page(session.view());
-        assert!(html.contains("Loaded 1 results."));
+        assert!(html.contains("Loaded <span id=\"loaded-count\">1</span> results."));
         assert!(html.contains("src=\"/thumb?source=aic&amp;id=1001\""));
         assert!(html.contains("href=\"/detail?source=aic&amp;id=1001\""));
         assert!(!html.contains("example.test/thumb.jpg"));
         assert!(html.contains("Mask &lt;One&gt;"));
         assert!(html.contains("AIC &amp; Friends"));
+    }
+
+    #[test]
+    fn card_fragment_has_only_local_cards_without_document_or_scripts() {
+        let fragment = render_cards_fragment(&[artwork()]);
+        assert!(fragment.starts_with("<article class=\"artwork-card\">"));
+        assert!(fragment.contains("/thumb?source=aic&amp;id=1001"));
+        assert!(!fragment.contains("<!doctype"));
+        assert!(!fragment.contains("<script"));
+        assert!(!fragment.contains("example.test/thumb.jpg"));
+    }
+
+    #[test]
+    fn search_page_has_local_load_more_state_and_append_logic() {
+        let html = render_search_page(crate::core::SearchSession::new(query("mask")).view());
+        assert!(html.contains("id=\"load-more\""));
+        assert!(html.contains("fetch('/more', { credentials: 'same-origin' })"));
+        assert!(html.contains("X-Has-More"));
+        assert!(html.contains("createContextualFragment"));
+        assert!(!LOAD_MORE_SCRIPT.contains("innerHTML"));
+        assert_eq!(html.matches(PAGE_LIFECYCLE_SCRIPT).count(), 1);
     }
 
     #[test]

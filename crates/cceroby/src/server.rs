@@ -17,10 +17,10 @@ use tokio::net::TcpListener;
 use tokio::sync::{Mutex, Notify, RwLock, broadcast, watch};
 
 use crate::artwork::{ArtworkKey, ArtworkKeyError, format_attribution};
-use crate::core::{OutputDirectory, SearchParams, SearchQuery, SearchSession, merge_page};
+use crate::core::{OutputDirectory, SearchParams, SearchQuery, SearchSession};
 use crate::download::{DownloadError, DownloadJob, DownloadNotice, DownloadRequest, Slug};
 use crate::providers::DisplayImageSize;
-use crate::render::{DetailView, render_detail_page, render_search_page};
+use crate::render::{DetailView, render_cards_fragment, render_detail_page, render_search_page};
 use crate::search::{ArtworkLoadError, SearchServices};
 
 /// Process resources shared by local HTTP handlers.
@@ -70,17 +70,14 @@ impl AppState {
             quit: Arc::new(Notify::new()),
         }
     }
-
     #[must_use]
     pub fn shutdown_sender(&self) -> broadcast::Sender<()> {
         self.shutdown.clone()
     }
-
     #[must_use]
     pub fn live_connections(&self) -> LiveConnections {
         self.live.clone()
     }
-
     #[must_use]
     pub fn quit_notifier(&self) -> Arc<Notify> {
         Arc::clone(&self.quit)
@@ -158,6 +155,7 @@ impl Drop for LiveGuard {
 pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/", get(index))
+        .route("/more", get(more))
         .route("/thumb", get(thumbnail))
         .route("/preview", get(preview))
         .route("/detail", get(detail))
@@ -201,16 +199,23 @@ async fn index(State(state): State<AppState>, RawQuery(raw_query): RawQuery) -> 
             let mut session = state.session.write().await;
             session.begin_search(query.clone());
         }
-        let outcomes = state.services.search_batch(&query).await;
+        let cursors = { state.session.read().await.next_batch() };
+        let outcomes = state
+            .services
+            .search_batch_with_cursors(&query, &cursors)
+            .await;
         let mut session = state.session.write().await;
-        for outcome in outcomes {
-            merge_page(&mut session, outcome);
-        }
+        let _ = session.merge_batch(outcomes);
     }
 
     let session = state.session.read().await;
     Html(render_search_page(session.view())).into_response()
 }
+
+#[rustfmt::skip]
+async fn more(State(state): State<AppState>) -> Response { let _search = state.search_gate.lock().await; let (query, cursors) = { let session = state.session.read().await; (session.view().query.clone(), session.next_batch()) }; if cursors.is_empty() { return ([("X-Has-More", has_more_header(false))], Html(String::new())).into_response(); } let outcomes = state.services.search_batch_with_cursors(&query, &cursors).await; let mut session = state.session.write().await; let cards = session.merge_batch(outcomes); ([("X-Has-More", has_more_header(session.view().has_more))], Html(render_cards_fragment(&cards))).into_response() }
+#[rustfmt::skip]
+const fn has_more_header(has_more: bool) -> &'static str { if has_more { "true" } else { "false" } }
 
 async fn thumbnail(State(state): State<AppState>, RawQuery(raw_query): RawQuery) -> Response {
     display_image(state, raw_query, DisplayImageSize::Card).await
@@ -475,7 +480,7 @@ mod tests {
         SearchQuery, SourceKind, SourceSet, merge_page,
     };
     use crate::http::HttpClient;
-    use crate::providers::ProviderSet;
+    use crate::providers::{ProviderEndpoints, ProviderSet};
     use crate::rate_limit::RateLimiters;
 
     use super::*;
@@ -602,12 +607,17 @@ mod tests {
             session,
             SearchServices::new(
                 ProviderSet::with_endpoints(
-                    endpoint,
-                    cleveland,
-                    crate::providers::met::MetProvider::official_endpoint()
-                        .expect("Met endpoint is valid"),
-                    crate::providers::smithsonian::SmithsonianProvider::official_endpoint()
-                        .expect("Smithsonian endpoint is valid"),
+                    ProviderEndpoints {
+                        aic: endpoint,
+                        cleveland,
+                        met: crate::providers::met::MetProvider::official_endpoint()
+                            .expect("Met endpoint is valid"),
+                        smithsonian:
+                            crate::providers::smithsonian::SmithsonianProvider::official_endpoint()
+                                .expect("Smithsonian endpoint is valid"),
+                        commons: crate::providers::commons::CommonsProvider::official_endpoint()
+                            .expect("Commons endpoint is valid"),
+                    },
                     None,
                 ),
                 Cache::new(cache.path().to_path_buf()),
@@ -701,7 +711,7 @@ mod tests {
         let response = router(state("mask"))
             .oneshot(
                 Request::builder()
-                    .uri("/?query=mask&wikimedia=true")
+                    .uri("/?query=mask&smithsonian=true")
                     .body(Body::empty())
                     .expect("request is valid"),
             )
@@ -727,6 +737,15 @@ mod tests {
             .await
             .expect("request succeeds");
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[rustfmt::skip]
+    #[tokio::test]
+    async fn more_route_returns_only_fragments_and_exact_exhaustion_header() { let mut session = SearchSession::new(SearchQuery { query: QueryText::parse("seed").expect("query is valid"), sources: SourceSet::parse(&[SourceKind::ArtInstituteChicago]).expect("source is valid"), culture: Culture::parse(None) }); let _ = session.merge_batch(vec![ProviderOutcome::Success(ProviderPage { source: SourceKind::ArtInstituteChicago, artworks: Vec::new(), next_cursor: None })]); let (shutdown, _) = broadcast::channel(1); let exhausted = AppState::new(session, SearchServices::new(ProviderSet::from_env().expect("providers are valid"), Cache::new(std::env::temp_dir()), HttpClient::new(), RateLimiters::new()), OutputDirectory::from_verified_path(std::env::temp_dir()), SocketAddr::from(([127, 0, 0, 1], 45_123)), shutdown); let response = router(exhausted).oneshot(Request::builder().uri("/more").body(Body::empty()).expect("request is valid")).await.expect("request succeeds"); assert_eq!(response.status(), StatusCode::OK); assert_eq!(response.headers().get("X-Has-More").and_then(|value| value.to_str().ok()), Some("false")); let body = to_bytes(response.into_body(), usize::MAX).await.expect("body is readable"); let fragment = String::from_utf8(body.to_vec()).expect("body is utf-8"); assert!(!fragment.contains("<!doctype")); assert!(!fragment.contains("<script")); }
+    #[test]
+    fn has_more_header_changes_from_true_to_false() {
+        assert_eq!(has_more_header(true), "true");
+        assert_eq!(has_more_header(false), "false");
     }
 
     #[test]
@@ -947,7 +966,7 @@ mod tests {
         let unavailable = app
             .oneshot(
                 Request::builder()
-                    .uri("/detail?source=wikimedia&id=1")
+                    .uri("/detail?source=smithsonian&id=edanmdm%3ANMAFA_1")
                     .body(Body::empty())
                     .expect("request is valid"),
             )

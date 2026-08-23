@@ -18,8 +18,8 @@ use cceroby::core::{
     Culture, QueryText, SearchQuery, SearchSeed, SearchSession, SourceKind, SourceSet,
 };
 use cceroby::http::HttpClient;
-use cceroby::providers::ProviderSet;
 use cceroby::providers::aic::AicProvider;
+use cceroby::providers::{ProviderEndpoints, ProviderSet};
 use cceroby::rate_limit::RateLimiters;
 use cceroby::search::SearchServices;
 use cceroby::server::{AppState, router};
@@ -252,7 +252,17 @@ async fn mocked_cleveland_tiff_download_writes_exact_xmp_and_does_not_cache_full
     let smithsonian = cceroby::providers::smithsonian::SmithsonianProvider::official_endpoint()
         .unwrap_or_else(|error| panic!("Smithsonian endpoint must be valid: {error}"));
     let services = SearchServices::new(
-        ProviderSet::with_endpoints(aic, endpoint, met, smithsonian, None),
+        ProviderSet::with_endpoints(
+            ProviderEndpoints {
+                aic,
+                cleveland: endpoint,
+                met,
+                smithsonian,
+                commons: cceroby::providers::commons::CommonsProvider::official_endpoint()
+                    .unwrap_or_else(|error| panic!("Commons endpoint must be valid: {error}")),
+            },
+            None,
+        ),
         Cache::new(cache.path().to_path_buf()),
         HttpClient::new(),
         RateLimiters::new(),

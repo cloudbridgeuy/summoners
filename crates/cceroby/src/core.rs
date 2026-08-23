@@ -1,5 +1,6 @@
 //! Typed search input and deterministic session transitions.
 
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fmt;
 use std::path::{Path, PathBuf};
 
@@ -8,7 +9,7 @@ use serde::Deserialize;
 use thiserror::Error;
 
 /// One museum or collection that can supply image records.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, ValueEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, ValueEnum)]
 pub enum SourceKind {
     /// Art Institute of Chicago.
     #[value(name = "aic")]
@@ -364,24 +365,98 @@ pub struct SearchSession {
     query: SearchQuery,
     notices: Vec<ProviderNotice>,
     artworks: Vec<Artwork>,
+    active_sources: BTreeSet<SourceKind>,
+    cursors: BTreeMap<SourceKind, Option<String>>,
+    seen: HashSet<(SourceKind, String)>,
+}
+
+/// One provider cursor selected for the next search batch.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderCursor {
+    pub source: SourceKind,
+    pub cursor: Option<String>,
 }
 
 impl SearchSession {
     #[must_use]
     pub fn new(query: SearchQuery) -> Self {
+        let active_sources = BTreeSet::from_iter(query.sources.as_slice().iter().copied());
+        let cursors = BTreeMap::from_iter(
+            query
+                .sources
+                .as_slice()
+                .iter()
+                .copied()
+                .map(|source| (source, None)),
+        );
         Self {
             query,
             notices: Vec::new(),
             artworks: Vec::new(),
+            active_sources,
+            cursors,
+            seen: HashSet::new(),
         }
     }
 
     pub fn begin_search(&mut self, query: SearchQuery) -> bool {
         let changed = self.query != query;
+        let active_sources = BTreeSet::from_iter(query.sources.as_slice().iter().copied());
+        let cursors = BTreeMap::from_iter(
+            query
+                .sources
+                .as_slice()
+                .iter()
+                .copied()
+                .map(|source| (source, None)),
+        );
         self.query = query;
         self.notices.clear();
         self.artworks.clear();
+        self.active_sources = active_sources;
+        self.cursors = cursors;
+        self.seen.clear();
         changed
+    }
+
+    /// Return one independent cursor for every provider that can still run.
+    #[must_use]
+    pub fn next_batch(&self) -> Vec<ProviderCursor> {
+        SourceKind::ALL
+            .into_iter()
+            .filter(|source| self.active_sources.contains(source))
+            .map(|source| ProviderCursor {
+                source,
+                cursor: self.cursors.get(&source).cloned().flatten(),
+            })
+            .collect()
+    }
+
+    /// Merge all outcomes from one batch and return just the new cards.
+    pub fn merge_batch(&mut self, outcomes: Vec<ProviderOutcome>) -> Vec<Artwork> {
+        let mut pages = BTreeMap::new();
+        for outcome in outcomes {
+            match outcome {
+                ProviderOutcome::Success(page) => {
+                    self.cursors.insert(page.source, page.next_cursor.clone());
+                    if page.next_cursor.is_none() {
+                        self.active_sources.remove(&page.source);
+                    }
+                    pages.insert(page.source, page.artworks);
+                }
+                ProviderOutcome::Unavailable { source } => {
+                    self.active_sources.remove(&source);
+                    add_notice(&mut self.notices, ProviderNotice::Unavailable { source });
+                }
+                ProviderOutcome::Failed { source } => {
+                    self.active_sources.remove(&source);
+                    add_notice(&mut self.notices, ProviderNotice::Failed { source });
+                }
+            }
+        }
+        let appended = round_robin_unique(&mut pages, &mut self.seen);
+        self.artworks.extend(appended.iter().cloned());
+        appended
     }
 
     #[must_use]
@@ -390,19 +465,46 @@ impl SearchSession {
             query: &self.query,
             notices: &self.notices,
             artworks: &self.artworks,
+            has_more: !self.active_sources.is_empty(),
         }
     }
 }
 
 /// Merge one provider outcome into the current page in dispatch order.
 pub fn merge_page(session: &mut SearchSession, outcome: ProviderOutcome) {
-    match outcome {
-        ProviderOutcome::Success(page) => session.artworks.extend(page.artworks),
-        ProviderOutcome::Unavailable { source } => {
-            session.notices.push(ProviderNotice::Unavailable { source });
+    let _ = session.merge_batch(vec![outcome]);
+}
+
+fn add_notice(notices: &mut Vec<ProviderNotice>, notice: ProviderNotice) {
+    if !notices.contains(&notice) {
+        notices.push(notice);
+    }
+}
+
+fn round_robin_unique(
+    pages: &mut BTreeMap<SourceKind, Vec<Artwork>>,
+    seen: &mut HashSet<(SourceKind, String)>,
+) -> Vec<Artwork> {
+    let mut positions = BTreeMap::<SourceKind, usize>::new();
+    let mut merged = Vec::new();
+    loop {
+        let mut added = false;
+        for source in SourceKind::ALL {
+            let Some(artworks) = pages.get(&source) else {
+                continue;
+            };
+            let position = positions.entry(source).or_default();
+            while let Some(artwork) = artworks.get(*position) {
+                *position += 1;
+                if seen.insert((artwork.source, artwork.source_id.clone())) {
+                    merged.push(artwork.clone());
+                    added = true;
+                    break;
+                }
+            }
         }
-        ProviderOutcome::Failed { source } => {
-            session.notices.push(ProviderNotice::Failed { source });
+        if !added {
+            return merged;
         }
     }
 }
@@ -413,6 +515,7 @@ pub struct SearchView<'a> {
     pub query: &'a SearchQuery,
     pub notices: &'a [ProviderNotice],
     pub artworks: &'a [Artwork],
+    pub has_more: bool,
 }
 
 /// A typed boundary error shown before I/O starts or as a bad form request.
@@ -779,6 +882,112 @@ mod tests {
             ProviderOutcome::Failed {
                 source: SourceKind::ArtInstituteChicago
             }
+        );
+    }
+
+    #[rustfmt::skip]
+    fn source_artwork(source: SourceKind, source_id: &str) -> Artwork { Artwork { source, source_id: source_id.into(), ..artwork(source_id) } }
+    #[rustfmt::skip]
+    #[test]
+    fn batch_merge_round_robins_and_deduplicates_source_objects() { let mut session = SearchSession::new(query("mask", &SourceKind::ALL, None)); let added = session.merge_batch(vec![ProviderOutcome::Success(ProviderPage { source: SourceKind::WikimediaCommons, artworks: vec![source_artwork(SourceKind::WikimediaCommons, "a"), source_artwork(SourceKind::WikimediaCommons, "b")], next_cursor: Some("20".into()) }), ProviderOutcome::Success(ProviderPage { source: SourceKind::ArtInstituteChicago, artworks: vec![source_artwork(SourceKind::ArtInstituteChicago, "1"), source_artwork(SourceKind::ArtInstituteChicago, "1"), source_artwork(SourceKind::ArtInstituteChicago, "2")], next_cursor: Some("2".into()) }), ProviderOutcome::Success(ProviderPage { source: SourceKind::MetropolitanMuseum, artworks: vec![source_artwork(SourceKind::MetropolitanMuseum, "7")], next_cursor: None })]); assert_eq!(added.iter().map(|artwork| (artwork.source, artwork.source_id.as_str())).collect::<Vec<_>>(), vec![(SourceKind::ArtInstituteChicago, "1"), (SourceKind::MetropolitanMuseum, "7"), (SourceKind::WikimediaCommons, "a"), (SourceKind::ArtInstituteChicago, "2"), (SourceKind::WikimediaCommons, "b")]); assert!(session.view().has_more); assert_eq!(session.next_batch(), vec![ProviderCursor { source: SourceKind::ArtInstituteChicago, cursor: Some("2".into()) }, ProviderCursor { source: SourceKind::ClevelandMuseum, cursor: None }, ProviderCursor { source: SourceKind::Smithsonian, cursor: None }, ProviderCursor { source: SourceKind::WikimediaCommons, cursor: Some("20".into()) }]); }
+
+    #[test]
+    fn empty_or_duplicate_only_pages_keep_cursor_and_later_exhaust() {
+        let mut session =
+            SearchSession::new(query("mask", &[SourceKind::ArtInstituteChicago], None));
+        assert!(
+            session
+                .merge_batch(vec![ProviderOutcome::Success(ProviderPage {
+                    source: SourceKind::ArtInstituteChicago,
+                    artworks: Vec::new(),
+                    next_cursor: Some("2".into())
+                })])
+                .is_empty()
+        );
+        assert!(session.view().has_more);
+        assert!(
+            session
+                .merge_batch(vec![ProviderOutcome::Success(ProviderPage {
+                    source: SourceKind::ArtInstituteChicago,
+                    artworks: vec![source_artwork(SourceKind::ArtInstituteChicago, "1")],
+                    next_cursor: Some("3".into())
+                })])
+                .len()
+                == 1
+        );
+        assert!(
+            session
+                .merge_batch(vec![ProviderOutcome::Success(ProviderPage {
+                    source: SourceKind::ArtInstituteChicago,
+                    artworks: vec![source_artwork(SourceKind::ArtInstituteChicago, "1")],
+                    next_cursor: None
+                })])
+                .is_empty()
+        );
+        assert!(!session.view().has_more);
+    }
+
+    #[test]
+    fn provider_failure_adds_one_notice_and_stops_only_that_provider() {
+        let mut session = SearchSession::new(query(
+            "mask",
+            &[SourceKind::ArtInstituteChicago, SourceKind::ClevelandMuseum],
+            None,
+        ));
+        let added = session.merge_batch(vec![
+            ProviderOutcome::Failed {
+                source: SourceKind::ArtInstituteChicago,
+            },
+            ProviderOutcome::Success(ProviderPage {
+                source: SourceKind::ClevelandMuseum,
+                artworks: vec![source_artwork(SourceKind::ClevelandMuseum, "2")],
+                next_cursor: Some("20".into()),
+            }),
+        ]);
+        assert_eq!(added.len(), 1);
+        let _ = session.merge_batch(vec![ProviderOutcome::Failed {
+            source: SourceKind::ArtInstituteChicago,
+        }]);
+        assert_eq!(
+            session.view().notices,
+            &[ProviderNotice::Failed {
+                source: SourceKind::ArtInstituteChicago
+            }]
+        );
+        assert_eq!(
+            session.next_batch(),
+            vec![ProviderCursor {
+                source: SourceKind::ClevelandMuseum,
+                cursor: Some("20".into())
+            }]
+        );
+    }
+
+    #[test]
+    fn changed_query_resets_results_notices_keys_and_cursors() {
+        let mut session =
+            SearchSession::new(query("mask", &[SourceKind::ArtInstituteChicago], None));
+        let _ = session.merge_batch(vec![ProviderOutcome::Success(ProviderPage {
+            source: SourceKind::ArtInstituteChicago,
+            artworks: vec![source_artwork(SourceKind::ArtInstituteChicago, "1")],
+            next_cursor: Some("2".into()),
+        })]);
+        let _ = session.merge_batch(vec![ProviderOutcome::Failed {
+            source: SourceKind::ArtInstituteChicago,
+        }]);
+        assert!(session.begin_search(query(
+            "new mask",
+            &[SourceKind::WikimediaCommons],
+            Some("MNAV")
+        )));
+        assert!(session.view().artworks.is_empty());
+        assert!(session.view().notices.is_empty());
+        assert_eq!(
+            session.next_batch(),
+            vec![ProviderCursor {
+                source: SourceKind::WikimediaCommons,
+                cursor: None
+            }]
         );
     }
 }
