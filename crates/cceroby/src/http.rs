@@ -11,7 +11,7 @@ const HTTP_TIMEOUT: Duration = Duration::from_secs(15);
 
 #[derive(Debug, Clone)]
 pub struct HttpClient {
-    client: reqwest::Client,
+    client: Option<reqwest::Client>,
     timeout: Duration,
 }
 
@@ -19,14 +19,17 @@ impl HttpClient {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            client: reqwest::Client::new(),
+            client: reqwest::Client::builder()
+                .redirect(reqwest::redirect::Policy::none())
+                .build()
+                .ok(),
             timeout: HTTP_TIMEOUT,
         }
     }
 
     pub async fn execute(&self, request: &HttpRequest) -> Result<Vec<u8>, HttpError> {
-        let response = self
-            .client
+        let client = self.client.as_ref().ok_or(HttpError::RequestFailed)?;
+        let response = client
             .get(request.url().clone())
             .headers(request.headers().clone())
             .timeout(self.timeout)
@@ -66,9 +69,12 @@ mod tests {
     #![allow(clippy::expect_used)]
 
     use std::convert::Infallible;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     use axum::Router;
-    use axum::http::HeaderMap;
+    use axum::extract::State;
+    use axum::http::{HeaderMap, StatusCode, header::LOCATION};
     use axum::routing::get;
     use reqwest::header::{HeaderName, HeaderValue};
     use tokio::net::TcpListener;
@@ -101,7 +107,7 @@ mod tests {
             Url::parse(&format!("http://{address}/slow")).expect("mock URL is valid"),
         );
         let client = HttpClient {
-            client: reqwest::Client::new(),
+            client: Some(reqwest::Client::new()),
             timeout: Duration::from_millis(10),
         };
 
@@ -147,5 +153,75 @@ mod tests {
             Ok(b"provider-owned".to_vec())
         );
         task.abort();
+    }
+
+    #[tokio::test]
+    async fn cross_origin_redirect_does_not_forward_a_custom_secret_header() {
+        async fn read_secret_header(
+            State(requests): State<Arc<AtomicUsize>>,
+            headers: HeaderMap,
+        ) -> String {
+            requests.fetch_add(1, Ordering::SeqCst);
+            headers
+                .get("x-api-key")
+                .map_or_else(|| "missing".to_owned(), |_| "received".to_owned())
+        }
+
+        let target_requests = Arc::new(AtomicUsize::new(0));
+        let target_listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("target listener binds");
+        let target_address = target_listener.local_addr().expect("target address exists");
+        let target_state = target_requests.clone();
+        let target_task = tokio::spawn(async move {
+            axum::serve(
+                target_listener,
+                Router::new()
+                    .route("/target", get(read_secret_header))
+                    .with_state(target_state),
+            )
+            .await
+            .expect("target server runs");
+        });
+
+        let redirect_listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("redirect listener binds");
+        let redirect_address = redirect_listener
+            .local_addr()
+            .expect("redirect address exists");
+        let location = format!("http://{target_address}/target");
+        let redirect_task = tokio::spawn(async move {
+            let app = Router::new().route(
+                "/redirect",
+                get(move || async move {
+                    (
+                        StatusCode::FOUND,
+                        [(LOCATION, location.clone())],
+                        "redirect",
+                    )
+                }),
+            );
+            axum::serve(redirect_listener, app)
+                .await
+                .expect("redirect server runs");
+        });
+
+        let request = HttpRequest::get(
+            Url::parse(&format!("http://{redirect_address}/redirect"))
+                .expect("redirect URL is valid"),
+        )
+        .with_header(
+            HeaderName::from_static("x-api-key"),
+            HeaderValue::from_static("must-not-cross-origin"),
+        );
+
+        assert_eq!(
+            HttpClient::new().execute(&request).await,
+            Err(HttpError::UnsuccessfulStatus(302))
+        );
+        assert_eq!(target_requests.load(Ordering::SeqCst), 0);
+        redirect_task.abort();
+        target_task.abort();
     }
 }

@@ -68,7 +68,15 @@ fn services(endpoint: Url, cache_root: &TempDir) -> SearchServices {
         Err(error) => panic!("built-in Cleveland endpoint must be valid: {error}"),
     };
     SearchServices::new(
-        ProviderSet::with_endpoints(endpoint, cleveland),
+        ProviderSet::with_endpoints(
+            endpoint,
+            cleveland,
+            cceroby::providers::met::MetProvider::official_endpoint()
+                .unwrap_or_else(|error| panic!("Met endpoint must be valid: {error}")),
+            cceroby::providers::smithsonian::SmithsonianProvider::official_endpoint()
+                .unwrap_or_else(|error| panic!("Smithsonian endpoint must be valid: {error}")),
+            None,
+        ),
         Cache::new(cache_root.path().to_path_buf()),
         HttpClient::new(),
         RateLimiters::new(),

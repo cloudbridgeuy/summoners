@@ -166,7 +166,11 @@ mod tests {
             HttpRequest::get(Url::parse("https://example.test/search").expect("URL is valid"))
         }
 
-        fn parse_search(&self, _bytes: &[u8]) -> Result<ProviderSearchPage, ProviderError> {
+        fn parse_search(
+            &self,
+            _bytes: &[u8],
+            _cursor: Option<&str>,
+        ) -> Result<ProviderSearchPage, ProviderError> {
             Err(ProviderError::MalformedResponse)
         }
 

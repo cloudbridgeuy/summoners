@@ -604,7 +604,15 @@ mod tests {
         let state = AppState::new(
             session,
             SearchServices::new(
-                ProviderSet::with_endpoints(endpoint, cleveland),
+                ProviderSet::with_endpoints(
+                    endpoint,
+                    cleveland,
+                    crate::providers::met::MetProvider::official_endpoint()
+                        .expect("Met endpoint is valid"),
+                    crate::providers::smithsonian::SmithsonianProvider::official_endpoint()
+                        .expect("Smithsonian endpoint is valid"),
+                    None,
+                ),
                 Cache::new(cache.path().to_path_buf()),
                 HttpClient::new(),
                 RateLimiters::new(),
@@ -696,7 +704,7 @@ mod tests {
         let response = router(state("mask"))
             .oneshot(
                 Request::builder()
-                    .uri("/?query=mask&cleveland=true&met=true&smithsonian=true&wikimedia=true")
+                    .uri("/?query=mask&wikimedia=true")
                     .body(Body::empty())
                     .expect("request is valid"),
             )
@@ -707,7 +715,7 @@ mod tests {
             .await
             .expect("body is readable");
         let html = String::from_utf8(body.to_vec()).expect("body is utf-8");
-        assert_eq!(html.matches("is not available in this build").count(), 3);
+        assert_eq!(html.matches("is not available in this build").count(), 1);
     }
 
     #[tokio::test]
@@ -942,7 +950,7 @@ mod tests {
         let unavailable = app
             .oneshot(
                 Request::builder()
-                    .uri("/detail?source=met&id=1")
+                    .uri("/detail?source=wikimedia&id=1")
                     .body(Body::empty())
                     .expect("request is valid"),
             )
@@ -970,4 +978,7 @@ mod tests {
 
     #[path = "lifecycle_tests.rs"]
     mod lifecycle_tests;
+
+    #[path = "smithsonian_id_tests.rs"]
+    mod smithsonian_id_tests;
 }

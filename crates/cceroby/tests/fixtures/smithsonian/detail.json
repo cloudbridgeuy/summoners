@@ -1,0 +1,24 @@
+{
+  "status": 200,
+  "responseCode": 1,
+  "response": {
+    "url": "edanmdm:nmafa_2005-6-189",
+    "title": "Face mask",
+    "content": {
+      "freetext": {
+        "name": [{"label":"Maker","content":"Yoruba artist"}],
+        "date": [{"label":"Date","content":"early 20th century"}],
+        "culture": [{"label":"Culture","content":"Yoruba"}],
+        "place": [{"label":"Place","content":"Nigeria"}],
+        "creditLine": [{"label":"Credit Line","content":"Gift of A & B"}]
+      },
+      "indexedStructured": {"culture":["Yoruba"],"place":["Nigeria"]},
+      "descriptiveNonRepeating": {
+        "record_ID":"nmafa_2005-6-189",
+        "data_source":"National Museum of African Art",
+        "record_link":"https://www.si.edu/object/face-mask:nmafa_2005-6-189",
+        "online_media":{"media":[{"type":"Images","content":"https://ids.si.edu/ids/deliveryService?id=NMAfA-2005-6-189","thumbnail":"https://ids.si.edu/ids/deliveryService?id=NMAfA-2005-6-189&max=150","usage":{"access":"CC0"}}]}
+      }
+    }
+  }
+}

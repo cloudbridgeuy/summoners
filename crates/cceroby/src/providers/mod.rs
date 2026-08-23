@@ -167,8 +167,15 @@ impl TokenBucketPolicy {
 pub trait Provider: Send + Sync {
     fn kind(&self) -> SourceKind;
     fn rate_policy(&self) -> RatePolicy;
+    fn validate_search_cursor(&self, _cursor: Option<&str>) -> Result<(), ProviderError> {
+        Ok(())
+    }
     fn search_request(&self, query: &SearchQuery, cursor: Option<&str>) -> HttpRequest;
-    fn parse_search(&self, bytes: &[u8]) -> Result<ProviderSearchPage, ProviderError>;
+    fn parse_search(
+        &self,
+        bytes: &[u8],
+        cursor: Option<&str>,
+    ) -> Result<ProviderSearchPage, ProviderError>;
     fn parse_artwork(
         &self,
         candidate: &ProviderCandidate,
@@ -225,6 +232,10 @@ pub enum ProviderConfigError {
     InvalidAicEndpoint(url::ParseError),
     #[error("the built-in Cleveland endpoint is invalid")]
     InvalidClevelandEndpoint(url::ParseError),
+    #[error("the built-in Met endpoint is invalid")]
+    InvalidMetEndpoint(url::ParseError),
+    #[error("the built-in Smithsonian endpoint is invalid")]
+    InvalidSmithsonianEndpoint(url::ParseError),
 }
 
 /// A provider record is valid JSON but cannot become an accepted artwork.
@@ -292,20 +303,36 @@ pub struct ProviderSet {
 
 impl ProviderSet {
     pub fn from_env() -> Result<Self, ProviderConfigError> {
-        let aic =
+        let aic_endpoint =
             AicProvider::official_endpoint().map_err(ProviderConfigError::InvalidAicEndpoint)?;
-        let cleveland = ClevelandProvider::official_endpoint()
+        let cleveland_endpoint = ClevelandProvider::official_endpoint()
             .map_err(ProviderConfigError::InvalidClevelandEndpoint)?;
-        Ok(Self::with_endpoints(aic, cleveland))
+        let met_endpoint =
+            MetProvider::official_endpoint().map_err(ProviderConfigError::InvalidMetEndpoint)?;
+        let smithsonian_endpoint = SmithsonianProvider::official_endpoint()
+            .map_err(ProviderConfigError::InvalidSmithsonianEndpoint)?;
+        Ok(Self::with_endpoints(
+            aic_endpoint,
+            cleveland_endpoint,
+            met_endpoint,
+            smithsonian_endpoint,
+            std::env::var(smithsonian::API_KEY_ENV).ok(),
+        ))
     }
 
     #[must_use]
-    pub fn with_endpoints(aic_endpoint: Url, cleveland_endpoint: Url) -> Self {
+    pub fn with_endpoints(
+        aic_endpoint: Url,
+        cleveland_endpoint: Url,
+        met_endpoint: Url,
+        smithsonian_endpoint: Url,
+        smithsonian_api_key: Option<String>,
+    ) -> Self {
         Self {
             aic: AicProvider::new(aic_endpoint),
             cleveland: ClevelandProvider::new(cleveland_endpoint),
-            met: MetProvider::new(),
-            smithsonian: SmithsonianProvider::new(),
+            met: MetProvider::new(met_endpoint),
+            smithsonian: SmithsonianProvider::new(smithsonian_endpoint, smithsonian_api_key),
             commons: CommonsProvider::new(),
         }
     }
@@ -368,7 +395,11 @@ mod tests {
             unreachable!("not used by this direct default-method test")
         }
 
-        fn parse_search(&self, _bytes: &[u8]) -> Result<ProviderSearchPage, ProviderError> {
+        fn parse_search(
+            &self,
+            _bytes: &[u8],
+            _cursor: Option<&str>,
+        ) -> Result<ProviderSearchPage, ProviderError> {
             unreachable!("not used by this direct default-method test")
         }
 
@@ -483,6 +514,14 @@ mod tests {
     }
 
     #[test]
+    fn provider_default_cursor_check_accepts_opaque_values() {
+        assert_eq!(
+            DefaultBestImageProvider.validate_search_cursor(Some("opaque")),
+            Ok(())
+        );
+    }
+
+    #[test]
     fn provider_default_best_image_request_is_typed_invalid() {
         assert_eq!(
             DefaultBestImageProvider.best_image_request(&default_method_artwork()),
@@ -501,12 +540,7 @@ mod tests {
         assert_eq!(cleveland.kind(), SourceKind::ClevelandMuseum);
         assert_eq!(cleveland.unavailable_notice(), None);
         assert_eq!(met.kind(), SourceKind::MetropolitanMuseum);
-        assert_eq!(
-            met.unavailable_notice(),
-            Some(ProviderNotice::Unavailable {
-                source: SourceKind::MetropolitanMuseum
-            })
-        );
+        assert_eq!(met.unavailable_notice(), None);
     }
 
     #[test]
@@ -533,8 +567,17 @@ mod tests {
     #[test]
     fn injected_endpoint_is_used_by_the_aic_slot() {
         let endpoint = Url::parse("http://127.0.0.1:4000/search").expect("URL is valid");
-        let cleveland = ClevelandProvider::official_endpoint().expect("endpoint is valid");
-        let providers = ProviderSet::with_endpoints(endpoint.clone(), cleveland);
+        let cleveland_endpoint = ClevelandProvider::official_endpoint().expect("endpoint is valid");
+        let met_endpoint = MetProvider::official_endpoint().expect("endpoint is valid");
+        let smithsonian_endpoint =
+            SmithsonianProvider::official_endpoint().expect("endpoint is valid");
+        let providers = ProviderSet::with_endpoints(
+            endpoint.clone(),
+            cleveland_endpoint,
+            met_endpoint,
+            smithsonian_endpoint,
+            None,
+        );
         let ProviderEntry::Available(provider) = providers.get(SourceKind::ArtInstituteChicago)
         else {
             panic!("AIC is available");
@@ -551,7 +594,9 @@ mod tests {
     fn injected_endpoint_is_used_by_the_cleveland_slot() {
         let aic = AicProvider::official_endpoint().expect("endpoint is valid");
         let endpoint = Url::parse("http://127.0.0.1:4001/api/artworks/").expect("URL is valid");
-        let providers = ProviderSet::with_endpoints(aic, endpoint.clone());
+        let met = MetProvider::official_endpoint().expect("endpoint is valid");
+        let smithsonian = SmithsonianProvider::official_endpoint().expect("endpoint is valid");
+        let providers = ProviderSet::with_endpoints(aic, endpoint.clone(), met, smithsonian, None);
         let ProviderEntry::Available(provider) = providers.get(SourceKind::ClevelandMuseum) else {
             panic!("Cleveland is available");
         };

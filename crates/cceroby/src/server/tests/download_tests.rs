@@ -231,6 +231,38 @@ async fn invalid_slug_is_rejected_before_trusted_detail_io() {
     assert_no_download_io(&harness);
 }
 
+#[tokio::test]
+async fn smithsonian_ids_are_validated_before_download_io() {
+    let harness = mock_harness().await;
+    let app = router(harness.state.clone());
+    for id in [
+        ".",
+        "..",
+        "0",
+        "arbitrary+text",
+        "https%3A%2F%2Fevil.test%2Fobject",
+        "edanmdm%3A.",
+        "edanmdm%3A..",
+    ] {
+        let response = app
+            .clone()
+            .oneshot(same_origin_form_request(Body::from(format!(
+                "source=smithsonian&id={id}&slug=mask&tags="
+            ))))
+            .await
+            .expect("request succeeds");
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{id}");
+    }
+    let valid = app
+        .oneshot(same_origin_form_request(Body::from(
+            "source=smithsonian&id=edanmdm%3Afsg_F1900.1&slug=mask&tags=",
+        )))
+        .await
+        .expect("request succeeds");
+    assert_eq!(valid.status(), StatusCode::NOT_FOUND);
+    assert_no_download_io(&harness);
+}
+
 fn same_origin_form_request(body: Body) -> Request<Body> {
     Request::builder()
         .method("POST")

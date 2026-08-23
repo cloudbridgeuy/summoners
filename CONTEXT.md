@@ -10,12 +10,13 @@ clock, and uses no random source. Every entry point takes one state value and
 one action, and returns a new state value; it never mutates anything the caller
 still holds. A strict authored-card boundary parses caller-held Set bytes into
 core definitions without file I/O. A separate CLI serves a local museum image
-search form. It connects to the Art Institute of Chicago and the Cleveland
-Museum of Art; the other three provider connections are not available yet.
-There is no game client or runtime
-file loader yet. Detail pages include a trusted self-contained JPEG download
-path for provider image responses. This file is an index of stable product
-language, not an API contract.
+search form. It connects to the Art Institute of Chicago, the Cleveland Museum
+of Art, and the Metropolitan Museum of Art. It attempts Smithsonian Open Access
+requests when `SMITHSONIAN_API_KEY` has a non-empty value that is valid as an
+HTTP header. Wikimedia Commons is not available yet. There is no game client or
+runtime file loader yet. Detail pages include a trusted self-contained JPEG
+download path for provider image responses. This file is an index of stable
+product language, not an API contract.
 
 ## Behavior
 
@@ -27,11 +28,14 @@ server options before it starts a loopback-only server on an operating-system
 assigned port. The local page keeps valid query and filter values in its form.
 The Art Institute of Chicago search keeps only records that the response marks
 as public domain. The Cleveland Museum of Art search requires exact CC0 records
-with display images and supports a culture filter. Both sources show normalized
-result cards. Metadata responses stay
-in the user cache for 24 hours. Card and preview image bytes stay in a separate
-user cache for 30 days. Cards use local image and detail routes that accept only
-a known source and object ID. The detail route reconstructs trusted provider
+with display images and supports a culture filter. The Metropolitan Museum of
+Art and configured Smithsonian Open Access searches also keep only records with
+an accepted public-use license. All connected sources show normalized result
+cards. Smithsonian requests use the configured key without putting it in
+browser content, diagnostics, or cache names. Metadata responses stay in the
+user cache for 24 hours. Card and preview image bytes stay in a separate user
+cache for 30 days. Cards use local image and detail routes that accept only a
+known source and object ID. The detail route reconstructs trusted provider
 metadata and shows a local-proxy preview, normalized metadata, the accepted
 license, and the ready-to-print attribution. Provider slots that do not have a
 connection return an unavailable notice, and a connected-provider failure
@@ -70,6 +74,44 @@ server. Ctrl-C stops either mode and closes open event streams cleanly.
 - **AND** each accepted record has a locally proxied thumbnail, detail link,
   title, institution, and public-domain license badge
 - **AND** a record that is not public domain does not appear
+
+#### Scenario: A Metropolitan Museum search succeeds
+
+- **WHEN** the Metropolitan Museum of Art returns object IDs for a query
+- **THEN** the server loads one bounded page of object records through the
+  metadata cache
+- **AND** the page shows only public-domain objects with an identity, title,
+  canonical HTTPS object page, and required canonical HTTPS image URLs
+- **AND** one failed or rejected object does not remove other accepted objects
+  from the page
+
+#### Scenario: A Smithsonian Open Access search succeeds
+
+- **WHEN** `SMITHSONIAN_API_KEY` contains a valid api.data.gov key and
+  Smithsonian returns matching records
+- **THEN** the page shows only records with an official `edanmdm:` identity,
+  a canonical HTTPS object page, and canonical HTTPS image URLs
+- **AND** the selected media item has the exact type `Images` and the exact
+  access value `CC0`
+- **AND** African, Asian, and pre-Columbian filters use their documented museum
+  unit codes
+- **AND** provider requests, diagnostics, cache names, and browser content do
+  not contain the key value
+- **AND** a redirect does not send the key to another server
+
+#### Scenario: A Smithsonian key is not usable as a header
+
+- **WHEN** a user selects Smithsonian while `SMITHSONIAN_API_KEY` is missing,
+  empty, or not valid as an HTTP header
+- **THEN** the page shows one Smithsonian unavailable notice
+- **AND** other selected connected sources can return their results
+
+#### Scenario: The Smithsonian service rejects a key
+
+- **WHEN** `SMITHSONIAN_API_KEY` is valid as an HTTP header but the Smithsonian
+  service rejects it
+- **THEN** the page shows one Smithsonian failure notice after the request
+- **AND** it does not describe Smithsonian as unavailable
 
 #### Scenario: A Cleveland Museum search succeeds
 
@@ -166,7 +208,7 @@ server. Ctrl-C stops either mode and closes open event streams cleanly.
 
 #### Scenario: A metadata response is still fresh
 
-- **WHEN** the user repeats the same connected-provider search less than 24
+- **WHEN** the user repeats the same connected-provider request less than 24
   hours after a successful metadata response
 - **THEN** the page uses the cached metadata without a second provider request
 

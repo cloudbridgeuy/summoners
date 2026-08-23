@@ -79,7 +79,11 @@ impl Provider for ClevelandProvider {
         cleveland_request(url)
     }
 
-    fn parse_search(&self, bytes: &[u8]) -> Result<ProviderSearchPage, ProviderError> {
+    fn parse_search(
+        &self,
+        bytes: &[u8],
+        _cursor: Option<&str>,
+    ) -> Result<ProviderSearchPage, ProviderError> {
         let response: ClevelandSearchResponse =
             serde_json::from_slice(bytes).map_err(|_| ProviderError::MalformedResponse)?;
         let returned =
@@ -404,6 +408,9 @@ impl ClevelandImage {
 }
 
 #[cfg(test)]
+mod test_fixtures;
+
+#[cfg(test)]
 mod tests {
     #![allow(clippy::expect_used)]
 
@@ -413,19 +420,8 @@ mod tests {
 
     use crate::core::{Culture, QueryText, SourceSet};
 
+    use super::test_fixtures::*;
     use super::*;
-
-    const SEARCH_PAGE_1: &[u8] =
-        include_bytes!("../../tests/fixtures/cleveland/search-page-1.json");
-    const SEARCH_PAGE_2: &[u8] =
-        include_bytes!("../../tests/fixtures/cleveland/search-page-2.json");
-    const CC0_FALSE: &[u8] = include_bytes!("../../tests/fixtures/cleveland/cc0-false.json");
-    const UNKNOWN_LICENSE: &[u8] =
-        include_bytes!("../../tests/fixtures/cleveland/unknown-license.json");
-    const MISSING_FIELDS: &[u8] =
-        include_bytes!("../../tests/fixtures/cleveland/missing-fields.json");
-    const MISSING_DATA: &[u8] = include_bytes!("../../tests/fixtures/cleveland/missing-data.json");
-    const MALFORMED: &[u8] = include_bytes!("../../tests/fixtures/cleveland/malformed.json");
 
     fn provider() -> ClevelandProvider {
         ClevelandProvider::official().expect("built-in endpoint is valid")
@@ -538,12 +534,12 @@ mod tests {
     #[test]
     fn captured_pages_parse_with_stable_pagination() {
         let first = provider()
-            .parse_search(SEARCH_PAGE_1)
+            .parse_search(SEARCH_PAGE_1, None)
             .expect("page is valid");
         assert_eq!(first.candidates.len(), 2);
         assert_eq!(first.next_cursor.as_deref(), Some("2"));
         let second = provider()
-            .parse_search(SEARCH_PAGE_2)
+            .parse_search(SEARCH_PAGE_2, None)
             .expect("page is valid");
         assert_eq!(second.candidates.len(), 1);
         assert_eq!(second.next_cursor, None);
@@ -552,7 +548,7 @@ mod tests {
     #[test]
     fn captured_tiff_record_normalizes_exact_metadata_and_urls() {
         let page = provider()
-            .parse_search(SEARCH_PAGE_1)
+            .parse_search(SEARCH_PAGE_1, None)
             .expect("page is valid");
         let artwork = provider()
             .parse_artwork(&page.candidates[0], None)
@@ -586,7 +582,7 @@ mod tests {
     #[test]
     fn captured_jpeg_only_record_uses_best_jpeg_and_joins_creator_and_culture() {
         let page = provider()
-            .parse_search(SEARCH_PAGE_1)
+            .parse_search(SEARCH_PAGE_1, None)
             .expect("page is valid");
         let artwork = provider()
             .parse_artwork(&page.candidates[1], None)
@@ -613,7 +609,7 @@ mod tests {
     #[test]
     fn captured_missing_creator_and_single_jpeg_are_supported() {
         let page = provider()
-            .parse_search(SEARCH_PAGE_2)
+            .parse_search(SEARCH_PAGE_2, None)
             .expect("page is valid");
         let artwork = provider()
             .parse_artwork(&page.candidates[0], None)
@@ -646,16 +642,18 @@ mod tests {
     #[test]
     fn missing_data_malformed_json_and_unknown_schema_fields_are_rejected() {
         assert_eq!(
-            provider().parse_search(MISSING_DATA),
+            provider().parse_search(MISSING_DATA, None),
             Err(ProviderError::MalformedResponse)
         );
         assert_eq!(
-            provider().parse_search(MALFORMED),
+            provider().parse_search(MALFORMED, None),
             Err(ProviderError::MalformedResponse)
         );
         assert_eq!(
-            provider()
-                .parse_search(br#"{"info":{"total":0,"parameters":{}},"data":[],"extra":true}"#),
+            provider().parse_search(
+                br#"{"info":{"total":0,"parameters":{}},"data":[],"extra":true}"#,
+                None,
+            ),
             Err(ProviderError::MalformedResponse)
         );
     }
@@ -876,7 +874,9 @@ mod tests {
             .artwork_request(&key)
             .expect("detail request is valid");
         assert_eq!(detail.url().path(), "/api/artworks/126730");
-        let page = provider.parse_search(SEARCH_PAGE_1).expect("page is valid");
+        let page = provider
+            .parse_search(SEARCH_PAGE_1, None)
+            .expect("page is valid");
         let artwork = provider
             .parse_artwork(&page.candidates[0], None)
             .expect("artwork is valid");
@@ -912,7 +912,7 @@ mod tests {
         let artwork = provider().parse_artwork_response(b"{\"data\":null}");
         assert_eq!(artwork, Err(ProviderError::MalformedResponse));
         let page = provider()
-            .parse_search(SEARCH_PAGE_1)
+            .parse_search(SEARCH_PAGE_1, None)
             .expect("page is valid");
         let mut artwork = provider()
             .parse_artwork(&page.candidates[0], None)
@@ -942,7 +942,7 @@ mod tests {
     #[test]
     fn normalization_helper_directly_rejects_each_missing_required_field() {
         let page = provider()
-            .parse_search(SEARCH_PAGE_1)
+            .parse_search(SEARCH_PAGE_1, None)
             .expect("fixture page is valid");
         let raw = page.candidates[0].raw.clone();
 
@@ -974,7 +974,7 @@ mod tests {
     #[test]
     fn normalization_rejects_missing_blank_malformed_and_non_http_object_urls() {
         let page = provider()
-            .parse_search(SEARCH_PAGE_1)
+            .parse_search(SEARCH_PAGE_1, None)
             .expect("fixture page is valid");
         let raw = page.candidates[0].raw.clone();
         for invalid in [

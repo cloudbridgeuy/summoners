@@ -247,8 +247,12 @@ async fn mocked_cleveland_tiff_download_writes_exact_xmp_and_does_not_cache_full
     };
     let aic = AicProvider::official_endpoint()
         .unwrap_or_else(|error| panic!("AIC endpoint must be valid: {error}"));
+    let met = cceroby::providers::met::MetProvider::official_endpoint()
+        .unwrap_or_else(|error| panic!("Met endpoint must be valid: {error}"));
+    let smithsonian = cceroby::providers::smithsonian::SmithsonianProvider::official_endpoint()
+        .unwrap_or_else(|error| panic!("Smithsonian endpoint must be valid: {error}"));
     let services = SearchServices::new(
-        ProviderSet::with_endpoints(aic, endpoint),
+        ProviderSet::with_endpoints(aic, endpoint, met, smithsonian, None),
         Cache::new(cache.path().to_path_buf()),
         HttpClient::new(),
         RateLimiters::new(),

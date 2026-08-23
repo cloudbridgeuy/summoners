@@ -70,7 +70,7 @@ impl SearchServices {
             .providers
             .selected(query.sources.as_slice())
             .into_iter()
-            .map(|entry| self.search_one(entry, query, now));
+            .map(|entry| self.search_one(entry, query, None, now));
         join_all(searches).await
     }
 
@@ -168,6 +168,7 @@ impl SearchServices {
         &self,
         entry: ProviderEntry<'_>,
         query: &SearchQuery,
+        cursor: Option<&str>,
         now: SystemTime,
     ) -> ProviderOutcome {
         let ProviderEntry::Available(provider) = entry else {
@@ -175,10 +176,15 @@ impl SearchServices {
                 source: entry.kind(),
             };
         };
-        let request = provider.search_request(query, None);
+        if provider.validate_search_cursor(cursor).is_err() {
+            return ProviderOutcome::Failed {
+                source: provider.kind(),
+            };
+        }
+        let request = provider.search_request(query, cursor);
         let result: std::result::Result<ProviderPage, ()> = async {
             let bytes = self.get_metadata(provider, &request, now).await?;
-            let page = provider.parse_search(&bytes).map_err(|_| ())?;
+            let page = provider.parse_search(&bytes, cursor).map_err(|_| ())?;
             let candidates = page
                 .candidates
                 .iter()
@@ -418,7 +424,11 @@ mod tests {
             HttpRequest::get(self.endpoint.join("search").expect("search URL is valid"))
         }
 
-        fn parse_search(&self, _bytes: &[u8]) -> Result<ProviderSearchPage, ProviderError> {
+        fn parse_search(
+            &self,
+            _bytes: &[u8],
+            _cursor: Option<&str>,
+        ) -> Result<ProviderSearchPage, ProviderError> {
             Ok(ProviderSearchPage {
                 candidates: vec![ProviderCandidate {
                     raw: serde_json::json!({ "id": "1" }),
@@ -554,6 +564,7 @@ mod tests {
             .search_one(
                 ProviderEntry::Available(&provider),
                 &query,
+                None,
                 SystemTime::now(),
             )
             .await;
@@ -563,6 +574,113 @@ mod tests {
         };
         assert_eq!(page.artworks.len(), 1);
         assert_eq!(requests.load(Ordering::SeqCst), 2);
+        task.abort();
+    }
+    #[tokio::test]
+    async fn invalid_smithsonian_cursor_fails_before_metadata_io() {
+        let requests = Arc::new(AtomicUsize::new(0));
+        let app = Router::new()
+            .route(
+                "/search",
+                get(|State(requests): State<Arc<AtomicUsize>>| async move {
+                    requests.fetch_add(1, Ordering::SeqCst);
+                    r#"{"response":{"rowCount":0,"rows":[]}}"#
+                }),
+            )
+            .with_state(requests.clone());
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("mock listener binds");
+        let address = listener.local_addr().expect("mock address exists");
+        let task = tokio::spawn(async move {
+            axum::serve(listener, app).await.expect("mock server runs");
+        });
+        let provider = crate::providers::smithsonian::SmithsonianProvider::new(
+            Url::parse(&format!("http://{address}/search")).expect("endpoint is valid"),
+            Some("test-key".into()),
+        );
+        let cache_root = tempdir().expect("temporary cache exists");
+        let services = SearchServices::new(
+            ProviderSet::from_env().expect("provider set is valid"),
+            Cache::new(cache_root.path().to_path_buf()),
+            HttpClient::new(),
+            RateLimiters::new(),
+        );
+        let query = SearchQuery {
+            query: QueryText::parse("mask").expect("query is valid"),
+            sources: SourceSet::parse(&[SourceKind::Smithsonian]).expect("source is valid"),
+            culture: Culture::parse(None),
+        };
+
+        assert_eq!(
+            services
+                .search_one(
+                    ProviderEntry::Available(&provider),
+                    &query,
+                    Some("not-an-offset"),
+                    SystemTime::now(),
+                )
+                .await,
+            ProviderOutcome::Failed {
+                source: SourceKind::Smithsonian
+            }
+        );
+        assert_eq!(requests.load(Ordering::SeqCst), 0);
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn every_invalid_met_cursor_fails_before_metadata_io() {
+        let requests = Arc::new(AtomicUsize::new(0));
+        let app = Router::new()
+            .route(
+                "/search",
+                get(|State(requests): State<Arc<AtomicUsize>>| async move {
+                    requests.fetch_add(1, Ordering::SeqCst);
+                    r#"{"total":0,"objectIDs":[]}"#
+                }),
+            )
+            .with_state(requests.clone());
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("mock listener binds");
+        let address = listener.local_addr().expect("mock address exists");
+        let task = tokio::spawn(async move {
+            axum::serve(listener, app).await.expect("mock server runs");
+        });
+        let provider = crate::providers::met::MetProvider::new(
+            Url::parse(&format!("http://{address}/search")).expect("endpoint is valid"),
+        );
+        let cache_root = tempdir().expect("temporary cache exists");
+        let services = SearchServices::new(
+            ProviderSet::from_env().expect("provider set is valid"),
+            Cache::new(cache_root.path().to_path_buf()),
+            HttpClient::new(),
+            RateLimiters::new(),
+        );
+        let query = SearchQuery {
+            query: QueryText::parse("mask").expect("query is valid"),
+            sources: SourceSet::parse(&[SourceKind::MetropolitanMuseum]).expect("source is valid"),
+            culture: Culture::parse(None),
+        };
+
+        for cursor in ["", "-1", "+1", "1.0", "184467440737095516160"] {
+            assert_eq!(
+                services
+                    .search_one(
+                        ProviderEntry::Available(&provider),
+                        &query,
+                        Some(cursor),
+                        SystemTime::now(),
+                    )
+                    .await,
+                ProviderOutcome::Failed {
+                    source: SourceKind::MetropolitanMuseum
+                },
+                "{cursor}"
+            );
+        }
+        assert_eq!(requests.load(Ordering::SeqCst), 0);
         task.abort();
     }
 
