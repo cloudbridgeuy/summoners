@@ -295,6 +295,33 @@ the final digest.
 - **THEN** the engine state, the one `GameEnded` outcome, completion counts,
   winner, loss reason, and final digests all match the transcript
 
+### Requirement: Reviewed golden match corpus
+
+The repository contains one or more human-reviewed golden **Match
+transcripts**. The corpus test discovers every `.ndjson` file in the fixture
+directory, ignores unrelated files, loads the built-in card catalog, and uses
+the public replay verifier for each match. The test does not provide an update
+or bless operation. A person approves each fixture change through normal code
+review.
+
+#### Scenario: Every reviewed match still replays
+
+- **WHEN** the repository test reads the golden fixture directory
+- **THEN** every `.ndjson` fixture replays with the built-in catalog
+- **AND** unrelated files do not enter the corpus
+
+#### Scenario: The corpus has no reviewed match
+
+- **WHEN** discovery finds no `.ndjson` fixture
+- **THEN** the corpus test fails because at least one reviewed match is
+  required
+
+#### Scenario: One golden match differs
+
+- **WHEN** a fixture does not match the current parser, card data, or engine
+- **THEN** the failure names the fixture before it reports the typed replay
+  error or difference
+
 ### Requirement: Deterministic match transcript contract
 
 The version 1 **Match transcript** contract contains exactly one JSON Schema
