@@ -63,8 +63,12 @@ fn aic_query() -> SearchQuery {
 }
 
 fn services(endpoint: Url, cache_root: &TempDir) -> SearchServices {
+    let cleveland = match cceroby::providers::cleveland::ClevelandProvider::official_endpoint() {
+        Ok(endpoint) => endpoint,
+        Err(error) => panic!("built-in Cleveland endpoint must be valid: {error}"),
+    };
     SearchServices::new(
-        ProviderSet::with_aic_endpoint(endpoint),
+        ProviderSet::with_endpoints(endpoint, cleveland),
         Cache::new(cache_root.path().to_path_buf()),
         HttpClient::new(),
         RateLimiters::new(),

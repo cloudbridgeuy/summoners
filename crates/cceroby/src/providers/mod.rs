@@ -222,7 +222,9 @@ pub enum ProviderError {
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum ProviderConfigError {
     #[error("the built-in AIC endpoint is invalid")]
-    InvalidAicEndpoint(#[from] url::ParseError),
+    InvalidAicEndpoint(url::ParseError),
+    #[error("the built-in Cleveland endpoint is invalid")]
+    InvalidClevelandEndpoint(url::ParseError),
 }
 
 /// A provider record is valid JSON but cannot become an accepted artwork.
@@ -290,16 +292,18 @@ pub struct ProviderSet {
 
 impl ProviderSet {
     pub fn from_env() -> Result<Self, ProviderConfigError> {
-        AicProvider::official_endpoint()
-            .map(Self::with_aic_endpoint)
-            .map_err(ProviderConfigError::from)
+        let aic =
+            AicProvider::official_endpoint().map_err(ProviderConfigError::InvalidAicEndpoint)?;
+        let cleveland = ClevelandProvider::official_endpoint()
+            .map_err(ProviderConfigError::InvalidClevelandEndpoint)?;
+        Ok(Self::with_endpoints(aic, cleveland))
     }
 
     #[must_use]
-    pub fn with_aic_endpoint(endpoint: Url) -> Self {
+    pub fn with_endpoints(aic_endpoint: Url, cleveland_endpoint: Url) -> Self {
         Self {
-            aic: AicProvider::new(endpoint),
-            cleveland: ClevelandProvider::new(),
+            aic: AicProvider::new(aic_endpoint),
+            cleveland: ClevelandProvider::new(cleveland_endpoint),
             met: MetProvider::new(),
             smithsonian: SmithsonianProvider::new(),
             commons: CommonsProvider::new(),
@@ -490,9 +494,12 @@ mod tests {
     fn provider_entries_return_kinds_and_only_stub_notices() {
         let providers = provider_set();
         let aic = providers.get(SourceKind::ArtInstituteChicago);
+        let cleveland = providers.get(SourceKind::ClevelandMuseum);
         let met = providers.get(SourceKind::MetropolitanMuseum);
         assert_eq!(aic.kind(), SourceKind::ArtInstituteChicago);
         assert_eq!(aic.unavailable_notice(), None);
+        assert_eq!(cleveland.kind(), SourceKind::ClevelandMuseum);
+        assert_eq!(cleveland.unavailable_notice(), None);
         assert_eq!(met.kind(), SourceKind::MetropolitanMuseum);
         assert_eq!(
             met.unavailable_notice(),
@@ -526,10 +533,27 @@ mod tests {
     #[test]
     fn injected_endpoint_is_used_by_the_aic_slot() {
         let endpoint = Url::parse("http://127.0.0.1:4000/search").expect("URL is valid");
-        let providers = ProviderSet::with_aic_endpoint(endpoint.clone());
+        let cleveland = ClevelandProvider::official_endpoint().expect("endpoint is valid");
+        let providers = ProviderSet::with_endpoints(endpoint.clone(), cleveland);
         let ProviderEntry::Available(provider) = providers.get(SourceKind::ArtInstituteChicago)
         else {
             panic!("AIC is available");
+        };
+        assert!(
+            provider
+                .search_request(&query(), None)
+                .canonical()
+                .starts_with(endpoint.as_str())
+        );
+    }
+
+    #[test]
+    fn injected_endpoint_is_used_by_the_cleveland_slot() {
+        let aic = AicProvider::official_endpoint().expect("endpoint is valid");
+        let endpoint = Url::parse("http://127.0.0.1:4001/api/artworks/").expect("URL is valid");
+        let providers = ProviderSet::with_endpoints(aic, endpoint.clone());
+        let ProviderEntry::Available(provider) = providers.get(SourceKind::ClevelandMuseum) else {
+            panic!("Cleveland is available");
         };
         assert!(
             provider
@@ -550,5 +574,20 @@ mod tests {
         assert_eq!(request.url().scheme(), "https");
         assert_eq!(request.url().host_str(), Some("api.artic.edu"));
         assert_eq!(request.url().path(), "/api/v1/artworks/search");
+    }
+
+    #[test]
+    fn built_in_configuration_uses_the_typed_official_cleveland_endpoint() {
+        let providers = ProviderSet::from_env().expect("provider configuration is valid");
+        let ProviderEntry::Available(provider) = providers.get(SourceKind::ClevelandMuseum) else {
+            panic!("Cleveland is available");
+        };
+        let request = provider.search_request(&query(), None);
+        assert_eq!(request.url().scheme(), "https");
+        assert_eq!(
+            request.url().host_str(),
+            Some("openaccess-api.clevelandart.org")
+        );
+        assert_eq!(request.url().path(), "/api/artworks/");
     }
 }
