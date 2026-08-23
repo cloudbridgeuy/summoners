@@ -58,8 +58,10 @@ the process environment:
 export SMITHSONIAN_API_KEY='<api.data.gov key>'
 ```
 
-The Smithsonian source stays unavailable when this variable is missing or
-invalid. The search page does not show the variable name or its value.
+The Smithsonian source stays unavailable when this variable is missing, empty,
+or not valid as an HTTP header. A syntactically valid key that the service
+rejects produces one provider failure after the request. The search page does
+not show the variable name or its value.
 
 ## License
 

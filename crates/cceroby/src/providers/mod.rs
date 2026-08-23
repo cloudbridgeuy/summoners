@@ -167,6 +167,9 @@ impl TokenBucketPolicy {
 pub trait Provider: Send + Sync {
     fn kind(&self) -> SourceKind;
     fn rate_policy(&self) -> RatePolicy;
+    fn validate_search_cursor(&self, _cursor: Option<&str>) -> Result<(), ProviderError> {
+        Ok(())
+    }
     fn search_request(&self, query: &SearchQuery, cursor: Option<&str>) -> HttpRequest;
     fn parse_search(
         &self,
@@ -508,6 +511,14 @@ mod tests {
             context: None,
         };
         assert_eq!(provider.object_request(&candidate), None);
+    }
+
+    #[test]
+    fn provider_default_cursor_check_accepts_opaque_values() {
+        assert_eq!(
+            DefaultBestImageProvider.validate_search_cursor(Some("opaque")),
+            Ok(())
+        );
     }
 
     #[test]

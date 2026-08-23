@@ -7,6 +7,7 @@ use std::time::SystemTime;
 
 use axum::Router;
 use axum::extract::State;
+use axum::http::StatusCode;
 use axum::routing::get;
 use img_parts::Bytes;
 use img_parts::jpeg::Jpeg;
@@ -80,9 +81,11 @@ fn key_controls_only_smithsonian_availability() {
 fn provider_and_request_diagnostics_redact_the_key() {
     let provider = provider(Some(SECRET));
     let request = provider.search_request(&query(None), None);
-    assert_eq!(
-        request.headers().get(X_API_KEY),
-        Some(&HeaderValue::from_static(SECRET))
+    assert!(
+        request
+            .headers()
+            .get(X_API_KEY)
+            .is_some_and(HeaderValue::is_sensitive)
     );
     assert_eq!(
         request.headers().get(USER_AGENT),
@@ -242,6 +245,60 @@ fn missing_or_restricted_media_drops_the_record() {
 }
 
 #[test]
+fn media_selection_requires_exact_image_type_and_cc0_access() {
+    fn media(media_type: Option<&str>, access: Option<&str>, id: &str) -> Media {
+        Media {
+            media_type: media_type.map(str::to_owned),
+            content: Some(format!("https://ids.si.edu/ids/deliveryService?id={id}")),
+            thumbnail: Some(format!(
+                "https://ids.si.edu/ids/deliveryService?id={id}&max=150"
+            )),
+            usage: access.map(|value| MediaUsage {
+                access: Some(value.to_owned()),
+            }),
+        }
+    }
+
+    let rejected = [
+        Media {
+            media_type: None,
+            content: Some("https://ids.si.edu/missing-type".into()),
+            thumbnail: Some("https://ids.si.edu/missing-type-thumb".into()),
+            usage: Some(MediaUsage {
+                access: Some("CC0".into()),
+            }),
+        },
+        Media {
+            media_type: Some("Images".into()),
+            content: Some("https://ids.si.edu/missing-usage".into()),
+            thumbnail: Some("https://ids.si.edu/missing-usage-thumb".into()),
+            usage: None,
+        },
+        Media {
+            media_type: Some("Images".into()),
+            content: Some("https://ids.si.edu/missing-access".into()),
+            thumbnail: Some("https://ids.si.edu/missing-access-thumb".into()),
+            usage: Some(MediaUsage { access: None }),
+        },
+        media(Some("images"), Some("CC0"), "wrong-type-case"),
+        media(Some("Images"), Some("cc0"), "wrong-access-case"),
+        media(Some("Images"), Some(" CC0 "), "access-whitespace"),
+        media(Some("Images"), Some("Usage conditions apply"), "restricted"),
+        media(Some("Video"), Some("CC0"), "video"),
+    ];
+    for item in &rejected {
+        assert!(select_image(std::slice::from_ref(item)).is_none());
+    }
+
+    let mut mixed = rejected.into_iter().collect::<Vec<_>>();
+    mixed.push(media(Some("Images"), Some("CC0"), "valid"));
+    assert_eq!(
+        select_image(&mixed).map(|image| image.original),
+        Some("https://ids.si.edu/ids/deliveryService?id=valid".into())
+    );
+}
+
+#[test]
 fn record_fallbacks_and_required_fields_are_directly_checked() {
     let page = provider(Some(SECRET))
         .parse_search(SEARCH, None)
@@ -261,7 +318,7 @@ fn record_fallbacks_and_required_fields_are_directly_checked() {
             None,
         )
         .expect("record fallbacks are accepted");
-    assert_eq!(artwork.source_id, "nmafa_2005-6-189");
+    assert_eq!(artwork.source_id, "edanmdm:nmafa_2005-6-189");
     assert_eq!(artwork.title, "Face mask");
     assert_eq!(artwork.institution, SourceKind::Smithsonian.label());
 
@@ -300,6 +357,36 @@ fn record_fallbacks_and_required_fields_are_directly_checked() {
         provider(Some(SECRET)).parse_artwork_response(MALFORMED),
         Err(ProviderError::MalformedResponse)
     );
+    let mut public_http_object = base;
+    public_http_object["content"]["descriptiveNonRepeating"]["record_link"] =
+        serde_json::Value::String("http://example.test/object".into());
+    assert_eq!(
+        provider(Some(SECRET)).parse_artwork(
+            &ProviderCandidate {
+                raw: public_http_object,
+                context: None
+            },
+            None
+        ),
+        Err(ArtworkDropReason::MissingSourceId)
+    );
+
+    let mut invalid_id: serde_json::Value =
+        serde_json::from_slice(SEARCH).expect("search fixture is JSON");
+    let invalid_record = &mut invalid_id["response"]["rows"][0];
+    invalid_record["url"] = serde_json::Value::String("arbitrary".into());
+    invalid_record["content"]["descriptiveNonRepeating"]["record_ID"] =
+        serde_json::Value::String("also.invalid".into());
+    assert_eq!(
+        provider(Some(SECRET)).parse_artwork(
+            &ProviderCandidate {
+                raw: invalid_record.clone(),
+                context: None,
+            },
+            None,
+        ),
+        Err(ArtworkDropReason::MissingSourceId)
+    );
 }
 
 #[test]
@@ -312,9 +399,11 @@ fn detail_and_image_requests_keep_provider_owned_headers_and_urls() {
         detail_request.url().path(),
         "/openaccess/api/v1.0/content/edanmdm:nmafa_2005-6-189"
     );
-    assert_eq!(
-        detail_request.headers().get(X_API_KEY),
-        Some(&HeaderValue::from_static(SECRET))
+    assert!(
+        detail_request
+            .headers()
+            .get(X_API_KEY)
+            .is_some_and(HeaderValue::is_sensitive)
     );
     let artwork = provider
         .parse_artwork_response(DETAIL)
@@ -397,6 +486,50 @@ async fn missing_key_does_not_stop_another_source_search_or_expose_secret_text()
     task.abort();
 }
 
+#[tokio::test]
+async fn syntactically_valid_rejected_key_fails_after_one_request() {
+    async fn reject(State(requests): State<Arc<AtomicUsize>>) -> StatusCode {
+        requests.fetch_add(1, Ordering::SeqCst);
+        StatusCode::FORBIDDEN
+    }
+
+    let requests = Arc::new(AtomicUsize::new(0));
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("mock listener binds");
+    let address = listener.local_addr().expect("mock address exists");
+    let app = Router::new()
+        .route("/search", get(reject))
+        .with_state(requests.clone());
+    let task = tokio::spawn(async move {
+        axum::serve(listener, app).await.expect("mock server runs");
+    });
+    let temporary = tempdir().expect("temporary directory exists");
+    let providers = ProviderSet::with_endpoints(
+        crate::providers::aic::AicProvider::official_endpoint().expect("AIC endpoint is valid"),
+        crate::providers::cleveland::ClevelandProvider::official_endpoint()
+            .expect("Cleveland endpoint is valid"),
+        crate::providers::met::MetProvider::official_endpoint().expect("Met endpoint is valid"),
+        Url::parse(&format!("http://{address}/search")).expect("mock endpoint is valid"),
+        Some(SECRET.into()),
+    );
+    let services = SearchServices::new(
+        providers,
+        Cache::new(temporary.path().join("cache")),
+        HttpClient::new(),
+        RateLimiters::new(),
+    );
+
+    assert_eq!(
+        services.search_batch(&query(None)).await,
+        vec![ProviderOutcome::Failed {
+            source: SourceKind::Smithsonian
+        }]
+    );
+    assert_eq!(requests.load(Ordering::SeqCst), 1);
+    task.abort();
+}
+
 #[test]
 fn pure_helpers_cover_region_media_url_and_error_branches() {
     assert_eq!(regional_unit_codes(None), &[] as &[&str]);
@@ -408,11 +541,25 @@ fn pure_helpers_cover_region_media_url_and_error_branches() {
     assert_eq!(parse_offset(Some("0")), Ok(0));
     assert!(parse_api_key("  ".into()).is_none());
     assert!(parse_api_key("bad\nkey".into()).is_none());
-    assert_eq!(https_url("http://ids.si.edu/a.jpg"), None);
-    assert_eq!(https_url("not a URL"), None);
+    for raw in [
+        "relative/image.jpg",
+        "javascript:alert(1)",
+        "file:///tmp/image.jpg",
+        "http://example.test/image.jpg",
+    ] {
+        assert_eq!(https_url(raw), None, "{raw}");
+    }
+    for raw in [
+        "https://example.test/image.jpg",
+        "http://127.0.0.1:4000/image.jpg",
+        "http://[::1]:4000/image.jpg",
+        "http://localhost:4000/image.jpg",
+    ] {
+        assert!(https_url(raw).is_some(), "{raw}");
+    }
     assert_eq!(
-        https_url("http://127.0.0.1:4000/image"),
-        Some("http://127.0.0.1:4000/image".into())
+        https_url("https://EXAMPLE.test/a/../image.jpg"),
+        Some("https://example.test/image.jpg".into())
     );
     assert_eq!(resized_image_url("not a URL", 300), "not a URL");
     assert_eq!(

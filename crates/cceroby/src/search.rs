@@ -174,6 +174,11 @@ impl SearchServices {
                 source: entry.kind(),
             };
         };
+        if provider.validate_search_cursor(cursor).is_err() {
+            return ProviderOutcome::Failed {
+                source: provider.kind(),
+            };
+        }
         let request = provider.search_request(query, cursor);
         let result: std::result::Result<ProviderPage, ()> = async {
             let bytes = self.get_metadata(provider, &request, now).await?;
@@ -486,6 +491,59 @@ mod tests {
         };
         assert_eq!(page.artworks.len(), 1);
         assert_eq!(requests.load(Ordering::SeqCst), 2);
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn invalid_smithsonian_cursor_fails_before_metadata_io() {
+        let requests = Arc::new(AtomicUsize::new(0));
+        let app = Router::new()
+            .route(
+                "/search",
+                get(|State(requests): State<Arc<AtomicUsize>>| async move {
+                    requests.fetch_add(1, Ordering::SeqCst);
+                    r#"{"response":{"rowCount":0,"rows":[]}}"#
+                }),
+            )
+            .with_state(requests.clone());
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("mock listener binds");
+        let address = listener.local_addr().expect("mock address exists");
+        let task = tokio::spawn(async move {
+            axum::serve(listener, app).await.expect("mock server runs");
+        });
+        let provider = crate::providers::smithsonian::SmithsonianProvider::new(
+            Url::parse(&format!("http://{address}/search")).expect("endpoint is valid"),
+            Some("test-key".into()),
+        );
+        let cache_root = tempdir().expect("temporary cache exists");
+        let services = SearchServices::new(
+            ProviderSet::from_env().expect("provider set is valid"),
+            Cache::new(cache_root.path().to_path_buf()),
+            HttpClient::new(),
+            RateLimiters::new(),
+        );
+        let query = SearchQuery {
+            query: QueryText::parse("mask").expect("query is valid"),
+            sources: SourceSet::parse(&[SourceKind::Smithsonian]).expect("source is valid"),
+            culture: Culture::parse(None),
+        };
+
+        assert_eq!(
+            services
+                .search_one(
+                    ProviderEntry::Available(&provider),
+                    &query,
+                    Some("not-an-offset"),
+                    SystemTime::now(),
+                )
+                .await,
+            ProviderOutcome::Failed {
+                source: SourceKind::Smithsonian
+            }
+        );
+        assert_eq!(requests.load(Ordering::SeqCst), 0);
         task.abort();
     }
 }

@@ -823,6 +823,44 @@ mod tests {
             }
         }
 
+        let invalid_smithsonian_ids = [
+            ".",
+            "..",
+            "0",
+            "arbitrary+text",
+            "https%3A%2F%2Fevil.test%2Fobject",
+            "edanmdm%3A.",
+            "edanmdm%3A..",
+        ];
+        for route in ["/preview", "/detail"] {
+            for id in invalid_smithsonian_ids {
+                let response = app
+                    .clone()
+                    .oneshot(
+                        Request::builder()
+                            .uri(format!("{route}?source=smithsonian&id={id}"))
+                            .body(Body::empty())
+                            .expect("request is valid"),
+                    )
+                    .await
+                    .expect("request succeeds");
+                assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{route} {id}");
+            }
+            let valid = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri(format!(
+                            "{route}?source=smithsonian&id=edanmdm%3Anmafa_2005-6-189"
+                        ))
+                        .body(Body::empty())
+                        .expect("request is valid"),
+                )
+                .await
+                .expect("request succeeds");
+            assert_eq!(valid.status(), StatusCode::NOT_FOUND, "{route}");
+        }
+
         let unavailable = app
             .oneshot(
                 Request::builder()

@@ -8,12 +8,25 @@ const MAX_OBJECT_ID_LENGTH: usize = 240;
 
 /// One provider object identifier that is safe to use as local route data.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct ArtworkId(String);
+pub struct ArtworkId(ArtworkIdValue);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum ArtworkIdValue {
+    Numeric(String),
+    Smithsonian(SmithsonianArtworkId),
+    Wikimedia(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct SmithsonianArtworkId(String);
 
 impl ArtworkId {
     #[must_use]
     pub fn as_str(&self) -> &str {
-        &self.0
+        match &self.0 {
+            ArtworkIdValue::Numeric(value) | ArtworkIdValue::Wikimedia(value) => value,
+            ArtworkIdValue::Smithsonian(value) => &value.0,
+        }
     }
 }
 
@@ -63,16 +76,31 @@ fn parse_artwork_id(source: SourceKind, raw: &str) -> Result<ArtworkId, ArtworkK
     let safe_characters = raw.chars().all(|character| {
         !character.is_control() && !matches!(character, '/' | '\\' | '?' | '#' | '&' | '=' | '%')
     });
-    let source_format = match source {
+    if !valid_length || !safe_characters {
+        return Err(ArtworkKeyError::MalformedId);
+    }
+    let value = match source {
         SourceKind::ArtInstituteChicago
         | SourceKind::ClevelandMuseum
-        | SourceKind::MetropolitanMuseum => raw.parse::<u64>().is_ok_and(|id| id > 0),
-        SourceKind::Smithsonian | SourceKind::WikimediaCommons => true,
+        | SourceKind::MetropolitanMuseum => raw
+            .parse::<u64>()
+            .ok()
+            .filter(|id| *id > 0)
+            .map(|_| ArtworkIdValue::Numeric(raw.to_owned())),
+        SourceKind::Smithsonian => parse_smithsonian_id(raw).map(ArtworkIdValue::Smithsonian),
+        SourceKind::WikimediaCommons => Some(ArtworkIdValue::Wikimedia(raw.to_owned())),
     };
 
-    (valid_length && safe_characters && source_format)
-        .then(|| ArtworkId(raw.to_owned()))
-        .ok_or(ArtworkKeyError::MalformedId)
+    value.map(ArtworkId).ok_or(ArtworkKeyError::MalformedId)
+}
+
+fn parse_smithsonian_id(raw: &str) -> Option<SmithsonianArtworkId> {
+    let suffix = raw.strip_prefix("edanmdm:")?;
+    (!suffix.is_empty()
+        && suffix
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-')))
+    .then(|| SmithsonianArtworkId(raw.to_owned()))
 }
 
 /// Format the mandatory ready-to-print attribution from trusted provider data.
@@ -151,7 +179,7 @@ mod tests {
             ("aic", "1001", SourceKind::ArtInstituteChicago),
             ("cleveland", "42", SourceKind::ClevelandMuseum),
             ("met", "77", SourceKind::MetropolitanMuseum),
-            ("smithsonian", "edanmdm-NMAFA_1", SourceKind::Smithsonian),
+            ("smithsonian", "edanmdm:NMAFA_1", SourceKind::Smithsonian),
             (
                 "wikimedia",
                 "File:Mask (1900).jpg",
@@ -189,9 +217,31 @@ mod tests {
                 .as_str(),
             "File:Mask (1900).jpg"
         );
+        assert_eq!(
+            parse_artwork_id(SourceKind::Smithsonian, "edanmdm:nmafa_2005-6-189")
+                .expect("Smithsonian ID is valid")
+                .as_str(),
+            "edanmdm:nmafa_2005-6-189"
+        );
         for raw in ["", "0", "abc", "1/2", "1%2", "1&id=2"] {
             assert_eq!(
                 parse_artwork_id(SourceKind::ArtInstituteChicago, raw),
+                Err(ArtworkKeyError::MalformedId),
+                "{raw}"
+            );
+        }
+        for raw in [
+            ".",
+            "..",
+            "0",
+            "arbitrary text",
+            "https://example.test/object",
+            "edanmdm:.",
+            "edanmdm:..",
+            "edanmdm:nmafa.item",
+        ] {
+            assert_eq!(
+                parse_artwork_id(SourceKind::Smithsonian, raw),
                 Err(ArtworkKeyError::MalformedId),
                 "{raw}"
             );

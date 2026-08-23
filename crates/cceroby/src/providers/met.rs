@@ -3,7 +3,7 @@
 use std::time::Duration;
 
 use serde::Deserialize;
-use url::Url;
+use url::{Host, Url};
 
 use crate::artwork::ArtworkKey;
 use crate::core::{Artwork, CommercialLicense, ImageUrls, SearchQuery, SourceKind};
@@ -211,9 +211,15 @@ fn parse_object(bytes: &[u8]) -> Result<Artwork, ArtworkDropReason> {
         .map(|object_id| object_id.to_string())
         .ok_or(ArtworkDropReason::MissingSourceId)?;
     let title = nonempty(raw.title).ok_or(ArtworkDropReason::MissingTitle)?;
-    let original = nonempty(raw.primary_image).ok_or(ArtworkDropReason::MissingImage)?;
-    let display = nonempty(raw.primary_image_small).ok_or(ArtworkDropReason::MissingImage)?;
-    let object_url = nonempty(raw.object_url).ok_or(ArtworkDropReason::MissingSourceId)?;
+    let original = nonempty(raw.primary_image)
+        .and_then(|value| canonical_trusted_url(&value))
+        .ok_or(ArtworkDropReason::MissingImage)?;
+    let display = nonempty(raw.primary_image_small)
+        .and_then(|value| canonical_trusted_url(&value))
+        .ok_or(ArtworkDropReason::MissingImage)?;
+    let object_url = nonempty(raw.object_url)
+        .and_then(|value| canonical_trusted_url(&value))
+        .ok_or(ArtworkDropReason::MissingSourceId)?;
     Ok(Artwork {
         source: SourceKind::MetropolitanMuseum,
         source_id,
@@ -267,9 +273,28 @@ fn object_endpoint(search_endpoint: &Url, object_id: &str) -> Url {
 }
 
 fn parse_image_request(raw: &str) -> Result<HttpRequest, ProviderError> {
-    Url::parse(raw)
+    trusted_remote_url(raw)
         .map(HttpRequest::get)
-        .map_err(|_| ProviderError::InvalidImageRequest)
+        .ok_or(ProviderError::InvalidImageRequest)
+}
+
+fn canonical_trusted_url(raw: &str) -> Option<String> {
+    trusted_remote_url(raw).map(Into::into)
+}
+
+fn trusted_remote_url(raw: &str) -> Option<Url> {
+    let url = Url::parse(raw).ok()?;
+    let host = url.host()?;
+    let allowed = match url.scheme() {
+        "https" => true,
+        "http" => match host {
+            Host::Domain(domain) => domain == "localhost",
+            Host::Ipv4(address) => address.is_loopback(),
+            Host::Ipv6(address) => address.is_loopback(),
+        },
+        _ => false,
+    };
+    allowed.then_some(url)
 }
 
 const fn drop_reason_to_provider_error(reason: ArtworkDropReason) -> ProviderError {
@@ -506,6 +531,17 @@ mod tests {
             provider().parse_artwork_response(NOT_PUBLIC_DOMAIN),
             Err(ProviderError::ArtworkUnavailable)
         );
+
+        for (field, expected) in [
+            ("primaryImage", ArtworkDropReason::MissingImage),
+            ("primaryImageSmall", ArtworkDropReason::MissingImage),
+            ("objectURL", ArtworkDropReason::MissingSourceId),
+        ] {
+            let mut object = base.clone();
+            object[field] = serde_json::Value::String("http://example.test/value".into());
+            let bytes = serde_json::to_vec(&object).expect("object is JSON");
+            assert_eq!(parse_object(&bytes), Err(expected), "{field}");
+        }
     }
 
     #[test]
@@ -572,6 +608,30 @@ mod tests {
         assert_eq!(
             parse_image_request("not a URL"),
             Err(ProviderError::InvalidImageRequest)
+        );
+        for raw in [
+            "relative/image.jpg",
+            "javascript:alert(1)",
+            "file:///tmp/image.jpg",
+            "http://example.test/image.jpg",
+        ] {
+            assert_eq!(
+                parse_image_request(raw),
+                Err(ProviderError::InvalidImageRequest),
+                "{raw}"
+            );
+        }
+        for raw in [
+            "https://example.test/image.jpg",
+            "http://127.0.0.1:4000/image.jpg",
+            "http://[::1]:4000/image.jpg",
+            "http://localhost:4000/image.jpg",
+        ] {
+            assert!(parse_image_request(raw).is_ok(), "{raw}");
+        }
+        assert_eq!(
+            canonical_trusted_url("https://EXAMPLE.test/a/../image.jpg"),
+            Some("https://example.test/image.jpg".into())
         );
         assert_eq!(
             object_endpoint(

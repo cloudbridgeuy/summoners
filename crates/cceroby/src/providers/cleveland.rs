@@ -408,6 +408,9 @@ impl ClevelandImage {
 }
 
 #[cfg(test)]
+mod test_fixtures;
+
+#[cfg(test)]
 mod tests {
     #![allow(clippy::expect_used)]
 
@@ -417,19 +420,8 @@ mod tests {
 
     use crate::core::{Culture, QueryText, SourceSet};
 
+    use super::test_fixtures::*;
     use super::*;
-
-    const SEARCH_PAGE_1: &[u8] =
-        include_bytes!("../../tests/fixtures/cleveland/search-page-1.json");
-    const SEARCH_PAGE_2: &[u8] =
-        include_bytes!("../../tests/fixtures/cleveland/search-page-2.json");
-    const CC0_FALSE: &[u8] = include_bytes!("../../tests/fixtures/cleveland/cc0-false.json");
-    const UNKNOWN_LICENSE: &[u8] =
-        include_bytes!("../../tests/fixtures/cleveland/unknown-license.json");
-    const MISSING_FIELDS: &[u8] =
-        include_bytes!("../../tests/fixtures/cleveland/missing-fields.json");
-    const MISSING_DATA: &[u8] = include_bytes!("../../tests/fixtures/cleveland/missing-data.json");
-    const MALFORMED: &[u8] = include_bytes!("../../tests/fixtures/cleveland/malformed.json");
 
     fn provider() -> ClevelandProvider {
         ClevelandProvider::official().expect("built-in endpoint is valid")

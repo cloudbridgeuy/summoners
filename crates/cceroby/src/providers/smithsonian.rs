@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use reqwest::header::{HeaderName, HeaderValue, USER_AGENT};
 use serde::Deserialize;
-use url::Url;
+use url::{Host, Url};
 
 use crate::artwork::ArtworkKey;
 use crate::core::{Artwork, CommercialLicense, ImageUrls, SearchQuery, SourceKind};
@@ -98,6 +98,10 @@ impl Provider for SmithsonianProvider {
             std::num::NonZeroU32::MIN,
             Duration::from_secs(1),
         ))
+    }
+
+    fn validate_search_cursor(&self, cursor: Option<&str>) -> Result<(), ProviderError> {
+        parse_offset(cursor).map(|_| ())
     }
 
     fn search_request(&self, query: &SearchQuery, cursor: Option<&str>) -> HttpRequest {
@@ -287,7 +291,10 @@ fn parse_api_key(raw: String) -> Option<ApiKey> {
     (!raw.trim().is_empty())
         .then_some(raw)
         .and_then(|value| HeaderValue::from_str(&value).ok())
-        .map(ApiKey)
+        .map(|mut value| {
+            value.set_sensitive(true);
+            ApiKey(value)
+        })
 }
 
 fn parse_offset(cursor: Option<&str>) -> Result<usize, ProviderError> {
@@ -336,7 +343,15 @@ fn escape_query(raw: &str) -> String {
 
 fn normalize_record(raw: SmithsonianRecord) -> Result<Artwork, ArtworkDropReason> {
     let source_id = nonempty(raw.url)
-        .or_else(|| nonempty(raw.content.descriptive.record_id.clone()))
+        .or_else(|| {
+            nonempty(raw.content.descriptive.record_id.clone())
+                .map(|record_id| format!("edanmdm:{record_id}"))
+        })
+        .and_then(|value| {
+            ArtworkKey::try_from_parts(SourceKind::Smithsonian.key(), &value)
+                .ok()
+                .map(|key| key.id().as_str().to_owned())
+        })
         .ok_or(ArtworkDropReason::MissingSourceId)?;
     let title = nonempty(raw.title)
         .or_else(|| {
@@ -353,8 +368,9 @@ fn normalize_record(raw: SmithsonianRecord) -> Result<Artwork, ArtworkDropReason
         .as_ref()
         .and_then(|online| select_image(&online.media))
         .ok_or(ArtworkDropReason::MissingImage)?;
-    let object_url =
-        nonempty(raw.content.descriptive.record_link).ok_or(ArtworkDropReason::MissingSourceId)?;
+    let object_url = nonempty(raw.content.descriptive.record_link)
+        .and_then(|value| https_url(&value))
+        .ok_or(ArtworkDropReason::MissingSourceId)?;
     let culture = record_culture(&raw.content.freetext, &raw.content.indexed);
     Ok(Artwork {
         source: SourceKind::Smithsonian,
@@ -381,12 +397,12 @@ fn select_image(media: &[Media]) -> Option<SelectedImage> {
         let is_image = item
             .media_type
             .as_deref()
-            .is_some_and(|value| value.eq_ignore_ascii_case("Images"));
+            .is_some_and(|value| value == "Images");
         let is_cc0 = item
             .usage
             .as_ref()
             .and_then(|usage| usage.access.as_deref())
-            .is_some_and(|value| value.trim().eq_ignore_ascii_case("CC0"));
+            .is_some_and(|value| value == "CC0");
         if !is_image || !is_cc0 {
             return None;
         }
@@ -413,15 +429,18 @@ fn https_url(raw: &str) -> Option<String> {
 }
 
 fn browser_safe_image_url(url: &Url) -> bool {
-    url.host_str().is_some()
-        && (url.scheme() == "https"
-            || (url.scheme() == "http"
-                && url.host_str().is_some_and(|host| {
-                    host == "localhost"
-                        || host
-                            .parse::<std::net::IpAddr>()
-                            .is_ok_and(|ip| ip.is_loopback())
-                })))
+    let Some(host) = url.host() else {
+        return false;
+    };
+    match url.scheme() {
+        "https" => true,
+        "http" => match host {
+            Host::Domain(domain) => domain == "localhost",
+            Host::Ipv4(address) => address.is_loopback(),
+            Host::Ipv6(address) => address.is_loopback(),
+        },
+        _ => false,
+    }
 }
 
 fn resized_image_url(raw: &str, maximum: u16) -> String {
