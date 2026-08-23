@@ -4,16 +4,18 @@ Home of Summoners, a two-player card game.
 
 This repository contains the deterministic game rules, authored card data, a
 local museum image search shell, and development tools. The search shell
-connects to the Art Institute of Chicago. Four additional source slots remain
-unavailable.
+connects to the Art Institute of Chicago and the Metropolitan Museum of Art.
+It connects to Smithsonian Open Access when `SMITHSONIAN_API_KEY` contains an
+api.data.gov key. Two additional source slots remain unavailable.
 
 ## Workspace
 
 - `crates/core`: the dependency-free deterministic rules and state-transition library.
 - `crates/cards`: strict authored Set and Deck loading with built-in content.
 - `crates/cceroby`: local museum image search CLI and form with public-domain
-  Art Institute of Chicago results, locally proxied artwork previews, exact
-  attribution, a 24-hour metadata cache, a 30-day image cache, and a trusted
+  Art Institute of Chicago, Metropolitan Museum of Art, and configured
+  Smithsonian Open Access results; locally proxied artwork previews; exact
+  attribution; a 24-hour metadata cache; a 30-day image cache; and a trusted
   self-contained JPEG download path for provider image responses.
 - `xtask`: repository lint and Git hook automation.
 
@@ -45,6 +47,16 @@ Run the workspace tests directly with:
 ```sh
 cargo test --workspace --all-targets
 ```
+
+To enable Smithsonian Open Access, get an api.data.gov key and set it only in
+the process environment:
+
+```sh
+export SMITHSONIAN_API_KEY='<api.data.gov key>'
+```
+
+The Smithsonian source stays unavailable when this variable is missing or
+invalid. The search page does not show the variable name or its value.
 
 ## License
 

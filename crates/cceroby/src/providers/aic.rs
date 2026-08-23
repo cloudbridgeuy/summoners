@@ -76,7 +76,11 @@ impl Provider for AicProvider {
         aic_request(url)
     }
 
-    fn parse_search(&self, bytes: &[u8]) -> Result<ProviderSearchPage, ProviderError> {
+    fn parse_search(
+        &self,
+        bytes: &[u8],
+        _cursor: Option<&str>,
+    ) -> Result<ProviderSearchPage, ProviderError> {
         let response: AicResponse =
             serde_json::from_slice(bytes).map_err(|_| ProviderError::MalformedResponse)?;
         let image_base = response
@@ -540,7 +544,9 @@ mod tests {
     #[test]
     fn success_fixture_parses_normalized_public_domain_artwork() {
         let provider = provider();
-        let page = provider.parse_search(SUCCESS).expect("fixture is valid");
+        let page = provider
+            .parse_search(SUCCESS, None)
+            .expect("fixture is valid");
         assert_eq!(page.next_cursor, Some("2".into()));
         assert_eq!(page.candidates.len(), 3);
         let first = provider
@@ -611,7 +617,7 @@ mod tests {
     #[test]
     fn malformed_json_returns_a_typed_provider_error() {
         assert_eq!(
-            provider().parse_search(MALFORMED),
+            provider().parse_search(MALFORMED, None),
             Err(ProviderError::MalformedResponse)
         );
     }
@@ -619,7 +625,7 @@ mod tests {
     #[test]
     fn missing_image_service_returns_a_typed_provider_error() {
         assert_eq!(
-            provider().parse_search(MISSING_IMAGE_SERVICE),
+            provider().parse_search(MISSING_IMAGE_SERVICE, None),
             Err(ProviderError::MissingImageService)
         );
     }

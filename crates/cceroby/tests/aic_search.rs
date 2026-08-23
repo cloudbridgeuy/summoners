@@ -64,7 +64,14 @@ fn aic_query() -> SearchQuery {
 
 fn services(endpoint: Url, cache_root: &TempDir) -> SearchServices {
     SearchServices::new(
-        ProviderSet::with_aic_endpoint(endpoint),
+        ProviderSet::with_endpoints(
+            endpoint,
+            cceroby::providers::met::MetProvider::official_endpoint()
+                .unwrap_or_else(|error| panic!("Met endpoint must be valid: {error}")),
+            cceroby::providers::smithsonian::SmithsonianProvider::official_endpoint()
+                .unwrap_or_else(|error| panic!("Smithsonian endpoint must be valid: {error}")),
+            None,
+        ),
         Cache::new(cache_root.path().to_path_buf()),
         HttpClient::new(),
         RateLimiters::new(),

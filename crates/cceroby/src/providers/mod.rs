@@ -168,7 +168,11 @@ pub trait Provider: Send + Sync {
     fn kind(&self) -> SourceKind;
     fn rate_policy(&self) -> RatePolicy;
     fn search_request(&self, query: &SearchQuery, cursor: Option<&str>) -> HttpRequest;
-    fn parse_search(&self, bytes: &[u8]) -> Result<ProviderSearchPage, ProviderError>;
+    fn parse_search(
+        &self,
+        bytes: &[u8],
+        cursor: Option<&str>,
+    ) -> Result<ProviderSearchPage, ProviderError>;
     fn parse_artwork(
         &self,
         candidate: &ProviderCandidate,
@@ -222,7 +226,11 @@ pub enum ProviderError {
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum ProviderConfigError {
     #[error("the built-in AIC endpoint is invalid")]
-    InvalidAicEndpoint(#[from] url::ParseError),
+    InvalidAicEndpoint(url::ParseError),
+    #[error("the built-in Met endpoint is invalid")]
+    InvalidMetEndpoint(url::ParseError),
+    #[error("the built-in Smithsonian endpoint is invalid")]
+    InvalidSmithsonianEndpoint(url::ParseError),
 }
 
 /// A provider record is valid JSON but cannot become an accepted artwork.
@@ -290,18 +298,33 @@ pub struct ProviderSet {
 
 impl ProviderSet {
     pub fn from_env() -> Result<Self, ProviderConfigError> {
-        AicProvider::official_endpoint()
-            .map(Self::with_aic_endpoint)
-            .map_err(ProviderConfigError::from)
+        let aic_endpoint =
+            AicProvider::official_endpoint().map_err(ProviderConfigError::InvalidAicEndpoint)?;
+        let met_endpoint =
+            MetProvider::official_endpoint().map_err(ProviderConfigError::InvalidMetEndpoint)?;
+        let smithsonian_endpoint = SmithsonianProvider::official_endpoint()
+            .map_err(ProviderConfigError::InvalidSmithsonianEndpoint)?;
+        Ok(Self {
+            aic: AicProvider::new(aic_endpoint),
+            cleveland: ClevelandProvider::new(),
+            met: MetProvider::new(met_endpoint),
+            smithsonian: SmithsonianProvider::from_env(smithsonian_endpoint),
+            commons: CommonsProvider::new(),
+        })
     }
 
     #[must_use]
-    pub fn with_aic_endpoint(endpoint: Url) -> Self {
+    pub fn with_endpoints(
+        aic_endpoint: Url,
+        met_endpoint: Url,
+        smithsonian_endpoint: Url,
+        smithsonian_api_key: Option<String>,
+    ) -> Self {
         Self {
-            aic: AicProvider::new(endpoint),
+            aic: AicProvider::new(aic_endpoint),
             cleveland: ClevelandProvider::new(),
-            met: MetProvider::new(),
-            smithsonian: SmithsonianProvider::new(),
+            met: MetProvider::new(met_endpoint),
+            smithsonian: SmithsonianProvider::new(smithsonian_endpoint, smithsonian_api_key),
             commons: CommonsProvider::new(),
         }
     }
@@ -364,7 +387,11 @@ mod tests {
             unreachable!("not used by this direct default-method test")
         }
 
-        fn parse_search(&self, _bytes: &[u8]) -> Result<ProviderSearchPage, ProviderError> {
+        fn parse_search(
+            &self,
+            _bytes: &[u8],
+            _cursor: Option<&str>,
+        ) -> Result<ProviderSearchPage, ProviderError> {
             unreachable!("not used by this direct default-method test")
         }
 
@@ -494,12 +521,7 @@ mod tests {
         assert_eq!(aic.kind(), SourceKind::ArtInstituteChicago);
         assert_eq!(aic.unavailable_notice(), None);
         assert_eq!(met.kind(), SourceKind::MetropolitanMuseum);
-        assert_eq!(
-            met.unavailable_notice(),
-            Some(ProviderNotice::Unavailable {
-                source: SourceKind::MetropolitanMuseum
-            })
-        );
+        assert_eq!(met.unavailable_notice(), None);
     }
 
     #[test]
@@ -526,7 +548,11 @@ mod tests {
     #[test]
     fn injected_endpoint_is_used_by_the_aic_slot() {
         let endpoint = Url::parse("http://127.0.0.1:4000/search").expect("URL is valid");
-        let providers = ProviderSet::with_aic_endpoint(endpoint.clone());
+        let met_endpoint = MetProvider::official_endpoint().expect("endpoint is valid");
+        let smithsonian_endpoint =
+            SmithsonianProvider::official_endpoint().expect("endpoint is valid");
+        let providers =
+            ProviderSet::with_endpoints(endpoint.clone(), met_endpoint, smithsonian_endpoint, None);
         let ProviderEntry::Available(provider) = providers.get(SourceKind::ArtInstituteChicago)
         else {
             panic!("AIC is available");

@@ -10,11 +10,13 @@ clock, and uses no random source. Every entry point takes one state value and
 one action, and returns a new state value; it never mutates anything the caller
 still holds. A strict authored-card boundary parses caller-held Set bytes into
 core definitions without file I/O. A separate CLI serves a local museum image
-search form. It connects to the Art Institute of Chicago; the other four
-provider connections are not available yet. There is no game client or runtime
-file loader yet. Detail pages include a trusted self-contained JPEG download
-path for provider image responses. This file is an index of stable product
-language, not an API contract.
+search form. It connects to the Art Institute of Chicago and the Metropolitan
+Museum of Art. It connects to Smithsonian Open Access when the process has a
+valid api.data.gov key in `SMITHSONIAN_API_KEY`.
+Cleveland and Wikimedia Commons are not available yet. There is no game client
+or runtime file loader yet. Detail pages include a trusted self-contained JPEG
+download path for provider image responses. This file is an index of stable
+product language, not an API contract.
 
 ## Behavior
 
@@ -24,22 +26,25 @@ The `cceroby search` command parses a non-empty query, one or more of five
 museum sources, an optional culture or region, an output directory, and local
 server options before it starts a loopback-only server on an operating-system
 assigned port. The local page keeps valid query and filter values in its form.
-The Art Institute of Chicago search keeps only records that the response marks
-as public domain, and it shows normalized result cards. Metadata responses stay
-in the user cache for 24 hours. Card and preview image bytes stay in a separate
-user cache for 30 days. Cards use local image and detail routes that accept only
-a known source and object ID. The detail route reconstructs trusted provider
-metadata and shows a local-proxy preview, normalized metadata, the accepted
-license, and the ready-to-print attribution. Provider slots that do not have a
-connection return an unavailable notice, and a connected-provider failure
-returns one failure notice without stopping the page. A corrupt metadata or
-thumbnail cache entry degrades to a cache miss instead of stopping the search.
-The detail page accepts an editable safe file name and free-form tags. A
-download requires the Host and Origin to match the exact authority assigned to
-the loopback listener. It strictly parses the complete form before provider I/O
-and reconstructs all policy and remote-request data from the provider, keeps
-native JPEG scan data, converts TIFF input once, embeds attribution and tags as
-standard XMP, and atomically writes one JPEG in the selected output directory.
+The Art Institute of Chicago, Metropolitan Museum of Art, and configured
+Smithsonian Open Access searches keep only records with an accepted public-use
+license, and they show normalized result cards. Smithsonian requests use the
+configured key without putting it in browser content, diagnostics, or cache
+names. Metadata responses stay in the user cache for 24 hours. Card and preview
+image bytes stay in a separate user cache for 30 days. Cards use local image and
+detail routes that accept only a known source and object ID. The detail route
+reconstructs trusted provider metadata and shows a local-proxy preview,
+normalized metadata, the accepted license, and the ready-to-print attribution.
+Provider slots that do not have a connection return an unavailable notice, and
+a connected-provider failure returns one failure notice without stopping the
+page. A corrupt metadata or thumbnail cache entry degrades to a cache miss
+instead of stopping the search. The detail page accepts an editable safe file
+name and free-form tags. A download requires the Host and Origin to match the
+exact authority assigned to the loopback listener. It strictly parses the
+complete form before provider I/O and reconstructs all policy and remote-request
+data from the provider, keeps native JPEG scan data, converts TIFF input once,
+embeds attribution and tags as standard XMP, and atomically writes one JPEG in
+the selected output directory.
 
 #### Scenario: A valid local search starts
 
@@ -57,6 +62,32 @@ standard XMP, and atomically writes one JPEG in the selected output directory.
 - **AND** each accepted record has a locally proxied thumbnail, detail link,
   title, institution, and public-domain license badge
 - **AND** a record that is not public domain does not appear
+
+#### Scenario: A Metropolitan Museum search succeeds
+
+- **WHEN** the Metropolitan Museum of Art returns object IDs for a query
+- **THEN** the server loads one bounded page of object records through the
+  metadata cache
+- **AND** the page shows only public-domain objects with an identity, title,
+  object page, and required image URLs
+- **AND** one failed or rejected object does not remove other accepted objects
+  from the page
+
+#### Scenario: A Smithsonian Open Access search succeeds
+
+- **WHEN** `SMITHSONIAN_API_KEY` contains a valid api.data.gov key and
+  Smithsonian returns matching records
+- **THEN** the page shows only image media items that have CC0 access
+- **AND** African, Asian, and pre-Columbian filters use their documented museum
+  unit codes
+- **AND** provider requests, diagnostics, cache names, and browser content do
+  not contain the key value
+
+#### Scenario: A Smithsonian key is not configured
+
+- **WHEN** a user selects Smithsonian without a valid `SMITHSONIAN_API_KEY`
+- **THEN** the page shows one Smithsonian unavailable notice
+- **AND** other selected connected sources can return their results
 
 #### Scenario: A user opens one artwork
 
@@ -141,8 +172,8 @@ standard XMP, and atomically writes one JPEG in the selected output directory.
 
 #### Scenario: A metadata response is still fresh
 
-- **WHEN** the user repeats the same Art Institute of Chicago search less than
-  24 hours after a successful metadata response
+- **WHEN** the user repeats the same connected-provider request less than 24
+  hours after a successful metadata response
 - **THEN** the page uses the cached metadata without a second provider request
 
 #### Scenario: A metadata cache entry is corrupt

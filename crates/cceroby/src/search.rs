@@ -68,7 +68,7 @@ impl SearchServices {
             .providers
             .selected(query.sources.as_slice())
             .into_iter()
-            .map(|entry| self.search_one(entry, query, now));
+            .map(|entry| self.search_one(entry, query, None, now));
         join_all(searches).await
     }
 
@@ -166,6 +166,7 @@ impl SearchServices {
         &self,
         entry: ProviderEntry<'_>,
         query: &SearchQuery,
+        cursor: Option<&str>,
         now: SystemTime,
     ) -> ProviderOutcome {
         let ProviderEntry::Available(provider) = entry else {
@@ -173,10 +174,10 @@ impl SearchServices {
                 source: entry.kind(),
             };
         };
-        let request = provider.search_request(query, None);
+        let request = provider.search_request(query, cursor);
         let result: std::result::Result<ProviderPage, ()> = async {
             let bytes = self.get_metadata(provider, &request, now).await?;
-            let page = provider.parse_search(&bytes).map_err(|_| ())?;
+            let page = provider.parse_search(&bytes, cursor).map_err(|_| ())?;
             let candidates = page
                 .candidates
                 .iter()
@@ -335,7 +336,11 @@ mod tests {
             HttpRequest::get(self.endpoint.join("search").expect("search URL is valid"))
         }
 
-        fn parse_search(&self, _bytes: &[u8]) -> Result<ProviderSearchPage, ProviderError> {
+        fn parse_search(
+            &self,
+            _bytes: &[u8],
+            _cursor: Option<&str>,
+        ) -> Result<ProviderSearchPage, ProviderError> {
             Ok(ProviderSearchPage {
                 candidates: vec![ProviderCandidate {
                     raw: serde_json::json!({ "id": "1" }),
@@ -471,6 +476,7 @@ mod tests {
             .search_one(
                 ProviderEntry::Available(&provider),
                 &query,
+                None,
                 SystemTime::now(),
             )
             .await;
