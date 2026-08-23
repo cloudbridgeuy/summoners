@@ -725,6 +725,76 @@ fn parser_reports_initial_digest_path_before_replay() {
 }
 
 #[test]
+fn more_recorded_steps_than_prepared_actions_is_rejected_before_replay() {
+    let (catalog, bytes) = fixture();
+    let transcript = parsed(&bytes);
+    let recorded_steps = &transcript.steps;
+    let prepared_actions: Vec<PreparedAction> =
+        transcript.steps[..2].iter().map(prepared_action).collect();
+    let invoked = Cell::new(false);
+
+    let error = replay_steps_with(
+        recorded_steps,
+        &prepared_actions,
+        initial_state(&transcript, &catalog),
+        |_, _| {
+            invoked.set(true);
+            Err(ActionError::WrongPhase)
+        },
+    )
+    .expect_err("more recorded steps than prepared actions must be rejected");
+
+    assert!(!invoked.get(), "the engine must not run before the guard");
+    assert!(matches!(
+        error,
+        ReplayError::StepActionMismatch { steps, actions }
+            if steps == recorded_steps.len() && actions == 2
+    ));
+}
+
+#[test]
+fn more_prepared_actions_than_recorded_steps_is_rejected_before_replay() {
+    let (catalog, bytes) = fixture();
+    let transcript = parsed(&bytes);
+    let recorded_steps = &transcript.steps[..2];
+    let prepared_actions: Vec<PreparedAction> =
+        transcript.steps.iter().map(prepared_action).collect();
+    let invoked = Cell::new(false);
+
+    let error = replay_steps_with(
+        recorded_steps,
+        &prepared_actions,
+        initial_state(&transcript, &catalog),
+        |_, _| {
+            invoked.set(true);
+            Err(ActionError::WrongPhase)
+        },
+    )
+    .expect_err("more prepared actions than recorded steps must be rejected");
+
+    assert!(!invoked.get(), "the engine must not run before the guard");
+    assert!(matches!(
+        error,
+        ReplayError::StepActionMismatch { steps, actions }
+            if steps == 2 && actions == prepared_actions.len()
+    ));
+}
+
+#[test]
+fn step_action_mismatch_reports_counts_and_has_no_location() {
+    let error = ReplayError::StepActionMismatch {
+        steps: 4,
+        actions: 2,
+    };
+
+    assert_eq!(
+        error.to_string(),
+        "replay received 4 recorded steps but 2 prepared actions"
+    );
+    assert!(error.location().is_none());
+}
+
+#[test]
 fn display_uses_semantic_names_without_debug_contracts() {
     let divergence = ReplayDivergence {
         location: ReplayLocation::completion("match_completed.reason"),
