@@ -235,6 +235,25 @@ fn mixed_media_selects_only_the_cc0_image_and_normalizes_metadata() {
 }
 
 #[test]
+fn dotted_official_id_survives_fixture_search_and_normalization() {
+    let mut fixture: serde_json::Value =
+        serde_json::from_slice(SEARCH).expect("search fixture is JSON");
+    let record = &mut fixture["response"]["rows"][0];
+    record["url"] = serde_json::Value::String("edanmdm:fsg_F1900.1".into());
+    record["content"]["descriptiveNonRepeating"]["record_ID"] =
+        serde_json::Value::String("fsg_F1900.1".into());
+    let bytes = serde_json::to_vec(&fixture).expect("changed fixture is JSON");
+
+    let page = provider(Some(SECRET))
+        .parse_search(&bytes, None)
+        .expect("search fixture is valid");
+    let artwork = provider(Some(SECRET))
+        .parse_artwork(&page.candidates[0], None)
+        .expect("dotted official ID is accepted");
+    assert_eq!(artwork.source_id, "edanmdm:fsg_F1900.1");
+}
+
+#[test]
 fn missing_or_restricted_media_drops_the_record() {
     let raw: serde_json::Value = serde_json::from_slice(MISSING_MEDIA).expect("fixture is JSON");
     let candidate = ProviderCandidate { raw, context: None };
@@ -392,12 +411,12 @@ fn record_fallbacks_and_required_fields_are_directly_checked() {
 #[test]
 fn detail_and_image_requests_keep_provider_owned_headers_and_urls() {
     let provider = provider(Some(SECRET));
-    let key = ArtworkKey::try_from_parts("smithsonian", "edanmdm:nmafa_2005-6-189")
-        .expect("key is valid");
+    let key =
+        ArtworkKey::try_from_parts("smithsonian", "edanmdm:fsg_F1900.1").expect("key is valid");
     let detail_request = provider.artwork_request(&key).expect("request is valid");
     assert_eq!(
         detail_request.url().path(),
-        "/openaccess/api/v1.0/content/edanmdm:nmafa_2005-6-189"
+        "/openaccess/api/v1.0/content/edanmdm:fsg_F1900.1"
     );
     assert!(
         detail_request
@@ -621,7 +640,7 @@ struct MockState {
 
 fn mock_record(base: &str) -> serde_json::Value {
     serde_json::json!({
-        "url": "edanmdm:nmafa_2005-6-189",
+        "url": "edanmdm:fsg_F1900.1",
         "title": "Face mask",
         "content": {
             "freetext": {
@@ -631,7 +650,7 @@ fn mock_record(base: &str) -> serde_json::Value {
             },
             "indexedStructured": {"culture":["Yoruba"],"place":["Nigeria"]},
             "descriptiveNonRepeating": {
-                "record_ID":"nmafa_2005-6-189",
+                "record_ID":"fsg_F1900.1",
                 "data_source":"National Museum of African Art",
                 "record_link":"https://www.si.edu/object/face-mask:nmafa_2005-6-189",
                 "online_media":{"media":[{

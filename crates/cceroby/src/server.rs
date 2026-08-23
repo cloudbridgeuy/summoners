@@ -851,7 +851,7 @@ mod tests {
                 .oneshot(
                     Request::builder()
                         .uri(format!(
-                            "{route}?source=smithsonian&id=edanmdm%3Anmafa_2005-6-189"
+                            "{route}?source=smithsonian&id=edanmdm%3Afsg_F1900.1"
                         ))
                         .body(Body::empty())
                         .expect("request is valid"),

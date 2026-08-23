@@ -60,6 +60,10 @@ impl Provider for MetProvider {
         ))
     }
 
+    fn validate_search_cursor(&self, cursor: Option<&str>) -> Result<(), ProviderError> {
+        parse_offset(cursor).map(|_| ())
+    }
+
     fn search_request(&self, query: &SearchQuery, _cursor: Option<&str>) -> HttpRequest {
         let mut url = self.endpoint.clone();
         {

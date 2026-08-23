@@ -255,7 +255,7 @@ async fn smithsonian_ids_are_validated_before_download_io() {
     }
     let valid = app
         .oneshot(same_origin_form_request(Body::from(
-            "source=smithsonian&id=edanmdm%3Anmafa_2005-6-189&slug=mask&tags=",
+            "source=smithsonian&id=edanmdm%3Afsg_F1900.1&slug=mask&tags=",
         )))
         .await
         .expect("request succeeds");

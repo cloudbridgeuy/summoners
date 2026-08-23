@@ -97,9 +97,10 @@ fn parse_artwork_id(source: SourceKind, raw: &str) -> Result<ArtworkId, ArtworkK
 fn parse_smithsonian_id(raw: &str) -> Option<SmithsonianArtworkId> {
     let suffix = raw.strip_prefix("edanmdm:")?;
     (!suffix.is_empty()
+        && !matches!(suffix, "." | "..")
         && suffix
             .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-')))
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.')))
     .then(|| SmithsonianArtworkId(raw.to_owned()))
 }
 
@@ -223,6 +224,13 @@ mod tests {
                 .as_str(),
             "edanmdm:nmafa_2005-6-189"
         );
+        assert_eq!(
+            ArtworkKey::try_from_parts("smithsonian", "edanmdm:fsg_F1900.1")
+                .expect("official dotted Smithsonian ID is valid")
+                .id()
+                .as_str(),
+            "edanmdm:fsg_F1900.1"
+        );
         for raw in ["", "0", "abc", "1/2", "1%2", "1&id=2"] {
             assert_eq!(
                 parse_artwork_id(SourceKind::ArtInstituteChicago, raw),
@@ -238,7 +246,6 @@ mod tests {
             "https://example.test/object",
             "edanmdm:.",
             "edanmdm:..",
-            "edanmdm:nmafa.item",
         ] {
             assert_eq!(
                 parse_artwork_id(SourceKind::Smithsonian, raw),
