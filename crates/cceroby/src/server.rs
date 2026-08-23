@@ -246,12 +246,10 @@ async fn detail(State(state): State<AppState>, RawQuery(raw_query): RawQuery) ->
     };
     match state.services.load_artwork(&key).await {
         Ok(artwork) => {
-            let attribution = format_attribution(&artwork);
             let slug = Slug::from_title(&artwork.title);
             Html(render_detail_page(DetailView {
                 artwork: &artwork,
                 key: &key,
-                attribution: &attribution,
                 slug: slug.as_str(),
                 tags: "",
                 notice: None,
@@ -303,7 +301,6 @@ async fn download(State(state): State<AppState>, headers: HeaderMap, body: Bytes
     Html(render_detail_page(DetailView {
         artwork: &artwork,
         key: &request.key,
-        attribution: &attribution,
         slug: request.slug.as_str(),
         tags: &request.tags.as_slice().join(", "),
         notice: Some(&notice),

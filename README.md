@@ -16,12 +16,13 @@ unavailable.
 - `crates/cceroby`: local museum image search CLI and form with public-domain
   Art Institute of Chicago, CC0 Cleveland Museum, Metropolitan Museum of Art,
   and configured Smithsonian Open Access results; locally proxied artwork
-  previews; exact attribution; a 24-hour metadata cache; a 30-day image cache;
-  and a trusted self-contained JPEG download path. Cleveland downloads use
-  valid absolute HTTP(S) full TIFF originals when available and the best valid
-  absolute HTTP(S) JPEG otherwise. The CLI can inspect or clear its cache. A
-  transient browser session stops after its last tab closes; `--serve` keeps it
-  available until Ctrl-C.
+  previews; compact URL-free card credit with separate license and source
+  links; full attribution in downloaded JPEG XMP; a 24-hour metadata cache; a
+  30-day image cache; and a trusted self-contained JPEG download path.
+  Cleveland downloads use valid absolute HTTP(S) full TIFF originals when
+  available and the best valid absolute HTTP(S) JPEG otherwise. The CLI can
+  inspect or clear its cache. A transient browser session stops after its last
+  tab closes; `--serve` keeps it available until Ctrl-C.
 - `xtask`: repository lint and Git hook automation.
 
 ## Design inputs
