@@ -2,7 +2,7 @@
 
 use std::fs;
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -38,6 +38,48 @@ impl Cache {
         }
     }
 
+    /// Construct a cache that performs no file-system operations.
+    #[must_use]
+    pub const fn disabled() -> Self {
+        Self { root: None }
+    }
+
+    /// Inspect both cache layers without following symbolic links.
+    #[must_use]
+    pub fn stats(&self, now: SystemTime) -> CacheStats {
+        let Some(root) = self.root.clone() else {
+            return CacheStats::disabled();
+        };
+        if !safe_directory(&root) {
+            return CacheStats {
+                root: Some(root),
+                ..CacheStats::default()
+            };
+        }
+        CacheStats {
+            root: Some(root.clone()),
+            metadata: collect_stats(&root.join("meta"), now, CacheLayer::Metadata),
+            thumbnails: collect_stats(&root.join("thumbs"), now, CacheLayer::Thumbnail),
+        }
+    }
+
+    /// Remove only this cache root. A missing or disabled cache is a no-op.
+    pub fn clear(&self) -> std::io::Result<usize> {
+        let Some(root) = self.root.as_ref() else {
+            return Ok(0);
+        };
+        let Ok(metadata) = fs::symlink_metadata(root) else {
+            return Ok(0);
+        };
+        let removed = count_files(root);
+        if metadata.file_type().is_dir() {
+            fs::remove_dir_all(root)?;
+        } else {
+            fs::remove_file(root)?;
+        }
+        Ok(removed)
+    }
+
     /// Read fresh metadata. Any cache error degrades to a miss.
     #[must_use]
     pub fn read_metadata(
@@ -47,7 +89,7 @@ impl Cache {
         now: SystemTime,
     ) -> Option<Vec<u8>> {
         let path = self.metadata_path(source, canonical_request)?;
-        let entry = fs::read(&path)
+        let entry = read_regular_file(&path)
             .ok()
             .and_then(|bytes| decode_entry(&bytes))
             .filter(|entry| is_fresh(entry.fetched_at, now));
@@ -83,7 +125,7 @@ impl Cache {
     #[must_use]
     pub fn read_thumbnail(&self, canonical_url: &str, now: SystemTime) -> Option<CachedThumbnail> {
         let path = self.thumbnail_path(canonical_url)?;
-        let entry = fs::read(&path)
+        let entry = read_regular_file(&path)
             .ok()
             .and_then(|bytes| decode_thumbnail_entry(&bytes))
             .filter(|entry| is_thumbnail_fresh(entry.fetched_at, now));
@@ -124,24 +166,86 @@ impl Cache {
         let Some(root) = self.root.as_ref() else {
             return 0;
         };
-        prune_metadata_directory(root.join("meta"), now)
-            + prune_thumbnail_directory(root.join("thumbs"), now)
+        if !safe_directory(root) {
+            return 0;
+        }
+        prune_directory(&root.join("meta"), now, CacheLayer::Metadata)
+            + prune_directory(&root.join("thumbs"), now, CacheLayer::Thumbnail)
     }
 
     fn metadata_path(&self, source: SourceKind, canonical_request: &str) -> Option<PathBuf> {
-        self.root.as_ref().map(|root| {
-            root.join("meta")
-                .join(source.key())
-                .join(format!("{}.json", metadata_key(source, canonical_request)))
-        })
+        let root = self.root.as_ref().filter(|root| safe_directory(root))?;
+        let metadata = root.join("meta");
+        safe_directory(&metadata).then_some(())?;
+        let source_directory = metadata.join(source.key());
+        safe_directory(&source_directory).then_some(())?;
+        Some(source_directory.join(format!("{}.json", metadata_key(source, canonical_request))))
     }
 
     fn thumbnail_path(&self, canonical_url: &str) -> Option<PathBuf> {
-        self.root.as_ref().map(|root| {
-            root.join("thumbs")
-                .join(format!("{}.bin", thumbnail_key(canonical_url)))
-        })
+        let root = self.root.as_ref().filter(|root| safe_directory(root))?;
+        let thumbnails = root.join("thumbs");
+        safe_directory(&thumbnails).then_some(())?;
+        Some(thumbnails.join(format!("{}.bin", thumbnail_key(canonical_url))))
     }
+}
+
+/// File count and byte total for one freshness class.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CacheUsage {
+    pub files: usize,
+    pub bytes: u64,
+}
+
+impl CacheUsage {
+    fn add_file(&mut self, bytes: u64) {
+        self.files = self.files.saturating_add(1);
+        self.bytes = self.bytes.saturating_add(bytes);
+    }
+}
+
+/// Fresh and expired use for one cache layer. Corrupt entries are expired.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CacheLayerStats {
+    pub fresh: CacheUsage,
+    pub expired: CacheUsage,
+}
+
+/// A best-effort snapshot of the resolved cache root and both cache layers.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CacheStats {
+    pub root: Option<PathBuf>,
+    pub metadata: CacheLayerStats,
+    pub thumbnails: CacheLayerStats,
+}
+
+impl CacheStats {
+    #[must_use]
+    pub const fn disabled() -> Self {
+        Self {
+            root: None,
+            metadata: CacheLayerStats {
+                fresh: CacheUsage { files: 0, bytes: 0 },
+                expired: CacheUsage { files: 0, bytes: 0 },
+            },
+            thumbnails: CacheLayerStats {
+                fresh: CacheUsage { files: 0, bytes: 0 },
+                expired: CacheUsage { files: 0, bytes: 0 },
+            },
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CacheLayer {
+    Metadata,
+    Thumbnail,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Freshness {
+    Fresh,
+    Expired,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -326,7 +430,7 @@ fn write_atomic(path: &std::path::Path, bytes: &[u8]) -> bool {
     let Some(parent) = path.parent() else {
         return false;
     };
-    if fs::create_dir_all(parent).is_err() {
+    if !safe_directory(parent) || fs::create_dir_all(parent).is_err() || !safe_directory(parent) {
         return false;
     }
     let sequence = TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
@@ -346,37 +450,103 @@ fn write_atomic(path: &std::path::Path, bytes: &[u8]) -> bool {
     true
 }
 
-fn prune_metadata_directory(root: PathBuf, now: SystemTime) -> usize {
-    let Ok(source_directories) = fs::read_dir(root) else {
-        return 0;
-    };
-    source_directories
-        .filter_map(Result::ok)
-        .filter_map(|entry| fs::read_dir(entry.path()).ok())
-        .flat_map(|entries| entries.filter_map(Result::ok))
-        .filter(|entry| {
-            fs::read(entry.path())
-                .ok()
-                .and_then(|bytes| decode_entry(&bytes))
-                .is_none_or(|cached| !is_fresh(cached.fetched_at, now))
-        })
-        .filter(|entry| fs::remove_file(entry.path()).is_ok())
-        .count()
+fn safe_directory(path: &Path) -> bool {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata.is_dir() && !metadata.file_type().is_symlink(),
+        Err(error) => error.kind() == std::io::ErrorKind::NotFound,
+    }
 }
 
-fn prune_thumbnail_directory(root: PathBuf, now: SystemTime) -> usize {
-    let Ok(entries) = fs::read_dir(root) else {
-        return 0;
-    };
-    entries
-        .filter_map(Result::ok)
-        .filter(|entry| {
-            fs::read(entry.path())
+fn read_regular_file(path: &Path) -> std::io::Result<Vec<u8>> {
+    let metadata = fs::symlink_metadata(path)?;
+    if !metadata.is_file() || metadata.file_type().is_symlink() {
+        return Err(std::io::Error::other("cache entry is not a regular file"));
+    }
+    fs::read(path)
+}
+
+fn collect_stats(root: &Path, now: SystemTime, layer: CacheLayer) -> CacheLayerStats {
+    let mut stats = CacheLayerStats::default();
+    visit_files(root, &mut |path, bytes| {
+        let is_symlink =
+            fs::symlink_metadata(path).is_ok_and(|metadata| metadata.file_type().is_symlink());
+        let freshness = if is_symlink {
+            Freshness::Expired
+        } else {
+            fs::read(path)
                 .ok()
-                .and_then(|bytes| decode_thumbnail_entry(&bytes))
-                .is_none_or(|cached| !is_thumbnail_fresh(cached.fetched_at, now))
+                .and_then(|entry| classify_entry(&entry, now, layer))
+                .unwrap_or(Freshness::Expired)
+        };
+        match freshness {
+            Freshness::Fresh => stats.fresh.add_file(bytes),
+            Freshness::Expired => stats.expired.add_file(bytes),
+        }
+    });
+    stats
+}
+
+fn classify_entry(bytes: &[u8], now: SystemTime, layer: CacheLayer) -> Option<Freshness> {
+    let fresh = match layer {
+        CacheLayer::Metadata => decode_entry(bytes).map(|entry| is_fresh(entry.fetched_at, now)),
+        CacheLayer::Thumbnail => {
+            decode_thumbnail_entry(bytes).map(|entry| is_thumbnail_fresh(entry.fetched_at, now))
+        }
+    }?;
+    Some(if fresh {
+        Freshness::Fresh
+    } else {
+        Freshness::Expired
+    })
+}
+
+fn visit_files(root: &Path, visit: &mut impl FnMut(&Path, u64)) {
+    let Ok(metadata) = fs::symlink_metadata(root) else {
+        return;
+    };
+    if metadata.file_type().is_symlink() {
+        visit(root, metadata.len());
+        return;
+    }
+    if metadata.is_file() {
+        visit(root, metadata.len());
+        return;
+    }
+    let Ok(entries) = fs::read_dir(root) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Ok(entry_metadata) = fs::symlink_metadata(&path) else {
+            continue;
+        };
+        if entry_metadata.file_type().is_symlink() || entry_metadata.is_file() {
+            visit(&path, entry_metadata.len());
+        } else if entry_metadata.is_dir() {
+            visit_files(&path, visit);
+        }
+    }
+}
+
+fn count_files(root: &Path) -> usize {
+    let mut files = 0_usize;
+    visit_files(root, &mut |_, _| files = files.saturating_add(1));
+    files
+}
+
+fn prune_directory(root: &Path, now: SystemTime, layer: CacheLayer) -> usize {
+    let mut candidates = Vec::new();
+    visit_files(root, &mut |path, _| candidates.push(path.to_path_buf()));
+    candidates
+        .into_iter()
+        .filter(|path| {
+            fs::symlink_metadata(path).is_ok_and(|metadata| metadata.file_type().is_symlink())
+                || fs::read(path)
+                    .ok()
+                    .and_then(|bytes| classify_entry(&bytes, now, layer))
+                    != Some(Freshness::Fresh)
         })
-        .filter(|entry| fs::remove_file(entry.path()).is_ok())
+        .filter(|path| fs::remove_file(path).is_ok())
         .count()
 }
 
@@ -797,12 +967,17 @@ mod tests {
 
     #[test]
     fn cache_without_a_user_directory_is_disabled() {
-        let cache = Cache { root: None };
+        let cache = Cache::disabled();
         assert_eq!(
             cache.read_metadata(SourceKind::ArtInstituteChicago, REQUEST, SystemTime::now()),
             None
         );
         assert_eq!(cache.prune_expired(SystemTime::now()), 0);
         assert_eq!(cache.read_thumbnail(REQUEST, SystemTime::now()), None);
+        assert_eq!(cache.stats(SystemTime::now()), CacheStats::disabled());
+        assert_eq!(cache.clear().expect("disabled clear succeeds"), 0);
     }
+
+    #[path = "management_tests.rs"]
+    mod management_tests;
 }

@@ -21,6 +21,24 @@ pub struct App {
 pub enum Command {
     /// Start a local search page.
     Search(SearchArgs),
+    /// Inspect or remove local cached responses.
+    Cache(CacheArgs),
+}
+
+/// Cache command options.
+#[derive(Debug, Args)]
+pub struct CacheArgs {
+    #[command(subcommand)]
+    pub action: CacheAction,
+}
+
+/// One cache operation.
+#[derive(Debug, Clone, Copy, Subcommand)]
+pub enum CacheAction {
+    /// Show the cache path and use by freshness.
+    Info,
+    /// Remove all files in the Cceroby cache.
+    Clear,
 }
 
 /// Raw command-line values for a local search.
@@ -96,7 +114,9 @@ mod tests {
     fn parser_supplies_all_sources_by_default() {
         let app =
             App::try_parse_from(["cceroby", "search", "mask"]).expect("command line is valid");
-        let Command::Search(args) = app.command;
+        let Command::Search(args) = app.command else {
+            panic!("expected search command");
+        };
         assert_eq!(args.source, SourceKind::ALL);
         assert_eq!(args.out, PathBuf::from("."));
     }
@@ -105,7 +125,9 @@ mod tests {
     fn parser_accepts_repeated_and_comma_separated_sources() {
         let app = App::try_parse_from(["cceroby", "search", "mask", "--source", "met,wikimedia"])
             .expect("command line is valid");
-        let Command::Search(args) = app.command;
+        let Command::Search(args) = app.command else {
+            panic!("expected search command");
+        };
         assert_eq!(
             args.source,
             vec![SourceKind::MetropolitanMuseum, SourceKind::WikimediaCommons]
@@ -115,6 +137,27 @@ mod tests {
     #[test]
     fn parser_rejects_source_option_without_values() {
         assert!(App::try_parse_from(["cceroby", "search", "mask", "--source"]).is_err());
+    }
+
+    #[test]
+    fn parser_accepts_both_cache_actions() {
+        let info =
+            App::try_parse_from(["cceroby", "cache", "info"]).expect("cache info command is valid");
+        assert!(matches!(
+            info.command,
+            Command::Cache(CacheArgs {
+                action: CacheAction::Info
+            })
+        ));
+
+        let clear = App::try_parse_from(["cceroby", "cache", "clear"])
+            .expect("cache clear command is valid");
+        assert!(matches!(
+            clear.command,
+            Command::Cache(CacheArgs {
+                action: CacheAction::Clear
+            })
+        ));
     }
 
     #[test]
