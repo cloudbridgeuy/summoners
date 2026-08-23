@@ -278,6 +278,7 @@ mod damage_trace;
 mod demo;
 mod demo_triggers;
 mod effect_order_and_persistence;
+mod resignation;
 mod scenario_probes;
 
 #[test]

@@ -323,6 +323,7 @@ fn every_loss_status_and_component_kind_variant_round_trips() {
         LossReason::ThirdMainLoss,
         LossReason::NoPromotionAvailable,
         LossReason::EmptyDeckDraw,
+        LossReason::Resignation,
     ] {
         assert_eq!(LossReason::from(LossReasonV1::from(reason)), reason);
     }
