@@ -32,13 +32,14 @@ pub struct PlaySummary {
 }
 
 /// Whether the session loop stopped because the game reached a terminal
-/// outcome, the operator quit, the game broke, or the recording itself
-/// could no longer proceed.
+/// outcome, the operator quit, the game broke, the recording itself could
+/// no longer proceed, or the input stream itself failed to read.
 enum LoopOutcome {
     Ended,
     Quit,
     Broken,
     RecordingFailed(RecordingError),
+    ReadFailed(std::io::Error),
 }
 
 /// The three streams an interactive session reads and writes: operator
@@ -61,9 +62,10 @@ pub struct PlayStreams<R, W, E> {
 /// unparseable line both leave the session running. Writes to
 /// `<output_path>.partial` while the match is active, renaming it to
 /// `output_path` only once the game reaches a terminal outcome. Ending the
-/// session any other way — `quit`, end of input, or the game breaking —
-/// leaves the partial file in place for diagnosis; a `.partial` file is
-/// never presented as a valid transcript.
+/// session any other way — `quit`, end of input, the game breaking, or the
+/// input stream itself failing to read — leaves the partial file in place
+/// for diagnosis; a `.partial` file is never presented as a valid
+/// transcript.
 pub fn run_play<R: BufRead, W: Write, E: Write>(
     from: &Path,
     output_path: &Path,
@@ -109,6 +111,11 @@ pub fn run_play<R: BufRead, W: Write, E: Write>(
             path: plan.partial,
             source,
         }),
+        LoopOutcome::ReadFailed(source) => Err(ShellError::Io {
+            command: COMMAND,
+            path: plan.partial,
+            source,
+        }),
     }
 }
 
@@ -124,7 +131,8 @@ fn complete_play(plan: &OutputPlan) -> Result<PlaySummary, ShellError> {
 }
 
 /// Render the view, prompt, read, parse, and act — until the game ends,
-/// the operator quits, input reaches its end, or recording itself fails.
+/// the operator quits, input reaches its end, recording itself fails, or
+/// the input stream itself fails to read.
 fn session_loop<W1: Write, R: BufRead, O: Write, E: Write>(
     recording: &mut RecordedMatch<W1>,
     input: &mut R,
@@ -137,10 +145,11 @@ fn session_loop<W1: Write, R: BufRead, O: Write, E: Write>(
         let _ = output.flush();
 
         let mut line = String::new();
-        let read = input.read_line(&mut line).unwrap_or(0);
-        if read == 0 {
+        match input.read_line(&mut line) {
             // End of input behaves exactly as `quit`.
-            return LoopOutcome::Quit;
+            Ok(0) => return LoopOutcome::Quit,
+            Ok(_) => {}
+            Err(source) => return LoopOutcome::ReadFailed(source),
         }
 
         match parse_line(&line) {

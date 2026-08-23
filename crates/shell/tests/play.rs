@@ -176,6 +176,27 @@ fn state_json_prints_the_recorder_state_projection() {
 }
 
 #[test]
+fn an_output_naming_the_same_file_as_from_is_refused_and_leaves_the_input_untouched() {
+    let directory = TemporaryDirectory::new("same-file");
+    let input = directory.join("in.ndjson");
+    fs::copy(golden("resignation.ndjson"), &input).expect("the golden copies into the sandbox");
+    let original = fs::read(&input).expect("the copied input is readable");
+
+    let output = run_play(&input, &input, "quit\n");
+
+    assert_eq!(output.status.code(), Some(2), "stdout: {}", stdout(&output));
+    let after = fs::read(&input).expect("the input file is still readable");
+    assert_eq!(
+        original, after,
+        "an output that names the same file as the input must leave it byte-identical"
+    );
+    assert!(
+        !directory.join("in.ndjson.partial").exists(),
+        "no partial file must be created for a refused run"
+    );
+}
+
+#[test]
 fn play_rejects_bad_arguments_as_exit_two() {
     let output = Command::new(env!("CARGO_BIN_EXE_summoners"))
         .arg("play")

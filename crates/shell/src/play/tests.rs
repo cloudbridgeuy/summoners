@@ -2,7 +2,7 @@
 
 use std::{
     fs,
-    io::Cursor,
+    io::{self, BufRead, Cursor, Read},
     path::PathBuf,
     sync::atomic::{AtomicU64, Ordering},
 };
@@ -42,6 +42,24 @@ impl Drop for TempDir {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.path);
     }
+}
+
+/// A `BufRead` whose every read fails, standing in for a real stream
+/// failure — undecodable bytes on a terminal, a closed pipe, and so on.
+struct FailingInput;
+
+impl Read for FailingInput {
+    fn read(&mut self, _buffer: &mut [u8]) -> io::Result<usize> {
+        Err(io::Error::new(io::ErrorKind::InvalidData, "stream failure"))
+    }
+}
+
+impl BufRead for FailingInput {
+    fn fill_buf(&mut self) -> io::Result<&[u8]> {
+        Err(io::Error::new(io::ErrorKind::InvalidData, "stream failure"))
+    }
+
+    fn consume(&mut self, _amount: usize) {}
 }
 
 fn run(
@@ -135,6 +153,42 @@ fn end_of_input_behaves_exactly_as_quit() {
         }
     ));
     assert!(directory.join("played.ndjson.partial").exists());
+}
+
+#[test]
+fn a_read_failure_is_its_own_outcome_and_the_partial_file_is_kept() {
+    let directory = TempDir::new("read-failure");
+    let output = directory.join("played.ndjson");
+    let catalog = built_in_catalog().expect("the built-in catalog loads");
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+
+    let result = run_play(
+        &golden("resignation.ndjson"),
+        &output,
+        false,
+        catalog.library(),
+        PlayStreams {
+            input: FailingInput,
+            output: &mut stdout,
+            errors: &mut stderr,
+        },
+    );
+
+    let error = result.expect_err("a read failure must not complete the session");
+    match &error {
+        ShellError::Io { command, path, .. } => {
+            assert_eq!(*command, COMMAND);
+            assert_eq!(path, &directory.join("played.ndjson.partial"));
+        }
+        other => panic!("unexpected error: {other}"),
+    }
+    assert_eq!(crate::exit::exit_code(&error), 4);
+    assert!(
+        directory.join("played.ndjson.partial").exists(),
+        "the partial file must be kept for diagnosis"
+    );
+    assert!(!output.exists(), "no complete file must be created");
 }
 
 #[test]

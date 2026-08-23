@@ -8,7 +8,7 @@
 
 use std::fmt;
 
-use summoners_core::domain::cards::Breakage;
+use summoners_core::domain::cards::{Breakage, ComponentKind};
 use summoners_core::domain::errors::ActionError;
 use summoners_core::domain::events::GameEvent;
 use summoners_core::domain::ids::PlayerId;
@@ -221,13 +221,13 @@ impl fmt::Display for StatusView {
                 formatter,
                 "ended(winner:{} reason:{})",
                 player_label(*winner),
-                snake_case(&format!("{reason:?}"))
+                loss_reason_label(*reason)
             ),
             Self::Broken(breakage) => write!(
                 formatter,
                 "broken({} expected:{})",
                 breakage.rule,
-                snake_case(&format!("{:?}", breakage.expected))
+                component_kind_label(breakage.expected)
             ),
         }
     }
@@ -259,25 +259,44 @@ fn readiness_label(readiness: Readiness) -> &'static str {
     }
 }
 
-/// Convert one `Debug`-rendered `PascalCase` identifier (every fieldless
-/// enum variant this module reads renders this way) to the `snake_case`
-/// spelling the wire layer already uses for the same names — so a status
+/// The wire layer's own `snake_case` spelling for one loss reason, matching
+/// `LossReasonV1`'s `#[serde(rename_all = "snake_case")]` names so a status
 /// line and a recorded transcript describe the same fact with the same
-/// word, without this module hand-copying the wire layer's own rename
-/// table.
-fn snake_case(input: &str) -> String {
-    let mut output = String::new();
-    for (index, character) in input.chars().enumerate() {
-        if character.is_uppercase() {
-            if index != 0 {
-                output.push('_');
-            }
-            output.extend(character.to_lowercase());
-        } else {
-            output.push(character);
-        }
+/// word. An exhaustive match, not a `Debug`-derived rename: a new variant
+/// fails to compile here instead of silently rendering wrong.
+fn loss_reason_label(reason: LossReason) -> &'static str {
+    match reason {
+        LossReason::ThirdMainLoss => "third_main_loss",
+        LossReason::NoPromotionAvailable => "no_promotion_available",
+        LossReason::EmptyDeckDraw => "empty_deck_draw",
+        LossReason::Resignation => "resignation",
     }
-    output
+}
+
+/// The wire layer's own `snake_case` spelling for one component kind,
+/// matching `ComponentKindV1`'s `#[serde(rename_all = "snake_case")]`
+/// names. An exhaustive match, not a `Debug`-derived rename: a new variant
+/// fails to compile here instead of silently rendering wrong.
+fn component_kind_label(kind: ComponentKind) -> &'static str {
+    match kind {
+        ComponentKind::Name => "name",
+        ComponentKind::AccountingId => "accounting_id",
+        ComponentKind::Life => "life",
+        ComponentKind::RetreatCost => "retreat_cost",
+        ComponentKind::Form => "form",
+        ComponentKind::Produces => "produces",
+        ComponentKind::Tags => "tags",
+        ComponentKind::Cost => "cost",
+        ComponentKind::Skill => "skill",
+        ComponentKind::Attack => "attack",
+        ComponentKind::Trigger => "trigger",
+        ComponentKind::Effect => "effect",
+        ComponentKind::Passive => "passive",
+        ComponentKind::Timing => "timing",
+        ComponentKind::Event => "event",
+        ComponentKind::Respondable => "respondable",
+        ComponentKind::Persistent => "persistent",
+    }
 }
 
 #[cfg(test)]
