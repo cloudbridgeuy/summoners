@@ -782,7 +782,7 @@ mod tests {
     }
 
     #[test]
-    fn live_shape_uses_gsroffset_thumbmime_and_generator_index() {
+    fn live_response_uses_gsroffset_thumbmime_and_generator_index() {
         let provider = CommonsProvider::official().expect("endpoint is valid");
         let first = serde_json::json!({
             "index": 0,
@@ -818,10 +818,10 @@ mod tests {
             "continue": { "gsroffset": 2, "continue": "gsroffset||" },
             "query": { "pages": { "7": second, "4": first } }
         });
-        let bytes = serde_json::to_vec(&response).expect("live shape serializes");
+        let bytes = serde_json::to_vec(&response).expect("live response serializes");
         let parsed = provider
             .parse_search(&bytes, None)
-            .expect("live shape parses");
+            .expect("live response parses");
         assert_eq!(parsed.next_cursor.as_deref(), Some("2"));
         let titles = parsed
             .candidates
