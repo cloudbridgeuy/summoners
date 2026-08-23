@@ -169,9 +169,9 @@ fn dispatch(state: &GameState, action: &GameAction) -> Result<ActionOutcome, Act
             player,
             prize_index,
         } => destruction::answer_prize(state, *player, *prize_index),
-        GameAction::Resign { .. } => {
-            unreachable!("apply handles Resign before dispatch is ever reached")
-        }
+        // `apply` handles `Resign` before `dispatch` is ever reached; this
+        // arm only keeps the match total.
+        GameAction::Resign { player } => Ok(resign(state, *player)),
     }
 }
 
