@@ -2,6 +2,10 @@
 
 The JSON Schema files define each record. This document defines the rules that apply across records in one strict NDJSON transcript.
 
+## JSON integer tokens
+
+Every integer-valued wire field uses a JSON integer token. Floating-point spellings such as `1.0` are invalid, even when their mathematical value is an integer.
+
 ## Record order
 
 The record order is `header`, `match_created`, then one or more action steps, `final_state`, and `match_completed`. A step contains `action`, zero or more `event` records for an accepted result, and exactly one `step_completed` or `step_rejected` result.

@@ -14,7 +14,11 @@
       "const": "summoners_match"
     },
     "format_version": {
-      "const": 1
+      "const": 1,
+      "format": "uint32",
+      "maximum": 4294967295,
+      "minimum": 0,
+      "type": "integer"
     },
     "metadata": {
       "additionalProperties": true,

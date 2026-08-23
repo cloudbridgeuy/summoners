@@ -252,6 +252,30 @@ It keeps all normative values and array order exact.
 - **THEN** comparison returns a typed fault that identifies the expected or
   actual input
 
+### Requirement: Deterministic match transcript contract
+
+The version 1 **Match transcript** contract contains exactly one JSON Schema
+for each of its eight record types and one lifecycle document. A caller can
+write this deterministic artifact set to an explicit directory or verify an
+existing directory without changing it.
+
+#### Scenario: The contract is generated
+
+- **WHEN** a caller writes the contract to an explicit target directory
+- **THEN** it receives the same nine artifact paths and bytes on every run
+
+#### Scenario: The checked contract is current
+
+- **WHEN** all expected artifacts and no unexpected paths are present
+- **THEN** verification succeeds and leaves the target directory unchanged
+
+#### Scenario: One or more contract paths differ
+
+- **WHEN** an artifact is missing or stale, or an unexpected path is present
+- **THEN** verification returns a typed error for the first different path in
+  lexical order
+- **AND** it leaves the target directory unchanged
+
 ### Requirement: Turn structure and phase order
 
 A turn moves through Upkeep, Main Phase, and Combat, and phases only move

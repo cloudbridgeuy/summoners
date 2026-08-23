@@ -22,6 +22,10 @@ const LIFECYCLE: &str = r#"# Summoners match log lifecycle, version 1
 
 The JSON Schema files define each record. This document defines the rules that apply across records in one strict NDJSON transcript.
 
+## JSON integer tokens
+
+Every integer-valued wire field uses a JSON integer token. Floating-point spellings such as `1.0` are invalid, even when their mathematical value is an integer.
+
 ## Record order
 
 The record order is `header`, `match_created`, then one or more action steps, `final_state`, and `match_completed`. A step contains `action`, zero or more `event` records for an accepted result, and exactly one `step_completed` or `step_rejected` result.
@@ -484,7 +488,16 @@ fn constrain_root(schema: &mut Value, record_name: &str) {
     };
     if record_name == "header" {
         properties.insert("format".to_string(), json!({ "const": "summoners_match" }));
-        properties.insert("format_version".to_string(), json!({ "const": 1 }));
+        properties.insert(
+            "format_version".to_string(),
+            json!({
+                "const": 1,
+                "format": "uint32",
+                "maximum": u32::MAX,
+                "minimum": 0,
+                "type": "integer"
+            }),
+        );
         properties.insert(
             "metadata".to_string(),
             json!({ "type": "object", "additionalProperties": true }),
@@ -659,6 +672,9 @@ mod tests {
         let header = schema_artifact(&artifacts, "header.json");
         assert_eq!(header["properties"]["format"]["const"], "summoners_match");
         assert_eq!(header["properties"]["format_version"]["const"], 1);
+        assert_eq!(header["properties"]["format_version"]["type"], "integer");
+        assert_eq!(header["properties"]["format_version"]["minimum"], 0);
+        assert_eq!(header["properties"]["format_version"]["maximum"], u32::MAX);
         assert_ne!(
             header["properties"]["metadata"]["additionalProperties"], false,
             "header metadata stays open"
@@ -685,6 +701,8 @@ mod tests {
         let text = std::str::from_utf8(&lifecycle.bytes).expect("lifecycle text is UTF-8");
 
         for required in [
+            "JSON integer tokens",
+            "Floating-point spellings such as `1.0` are invalid",
             "Global sequence",
             "Action steps",
             "Event indexes and counts",
