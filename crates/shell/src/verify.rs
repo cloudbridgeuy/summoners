@@ -5,7 +5,7 @@ use std::{fs::File, io::BufReader, path::Path};
 
 use summoners_cards::CardLibrary;
 use summoners_match_log::TranscriptV1;
-use summoners_match_log::replay::{ReplayError, verify_transcript};
+use summoners_match_log::replay::{ReplayError, verify_parsed_transcript};
 
 use crate::error::ShellError;
 
@@ -20,9 +20,18 @@ pub struct VerifySummary {
 
 /// Open, parse, and replay one transcript through the current catalog,
 /// confirming it reproduces itself exactly.
+///
+/// The transcript is parsed once into a `TranscriptV1` value; that same
+/// value is both replayed and used to read the step and event counts, so
+/// the counts in the success line always describe the bytes that were
+/// actually verified.
 pub fn run_verify(path: &Path, library: &CardLibrary) -> Result<VerifySummary, ShellError> {
     let transcript = parse_transcript(path)?;
-    replay_transcript(path, library)?;
+    verify_parsed_transcript(&transcript, library).map_err(|source| ShellError::Transcript {
+        command: COMMAND,
+        path: path.to_path_buf(),
+        source: Box::new(source),
+    })?;
     Ok(VerifySummary {
         steps: transcript.match_completed.step_count,
         events: transcript.match_completed.event_count,
@@ -35,15 +44,6 @@ fn parse_transcript(path: &Path) -> Result<TranscriptV1, ShellError> {
         command: COMMAND,
         path: path.to_path_buf(),
         source: Box::new(ReplayError::Parse(error)),
-    })
-}
-
-fn replay_transcript(path: &Path, library: &CardLibrary) -> Result<(), ShellError> {
-    let reader = open(path)?;
-    verify_transcript(reader, library).map_err(|source| ShellError::Transcript {
-        command: COMMAND,
-        path: path.to_path_buf(),
-        source: Box::new(source),
     })
 }
 

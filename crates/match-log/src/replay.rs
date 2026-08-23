@@ -172,6 +172,12 @@ pub enum ReplayError {
         location: ReplayLocation,
         error: CanonicalStateError,
     },
+    /// The recorded steps and the prepared actions passed to replay did not
+    /// have the same length, so they could not be matched one to one.
+    StepActionMismatch {
+        steps: usize,
+        actions: usize,
+    },
     Divergence(Box<ReplayDivergence>),
 }
 
@@ -179,7 +185,7 @@ impl ReplayError {
     #[must_use]
     pub fn location(&self) -> Option<&ReplayLocation> {
         match self {
-            Self::Parse(_) => None,
+            Self::Parse(_) | Self::StepActionMismatch { .. } => None,
             Self::StateRebuild { location, .. }
             | Self::WireConversion { location, .. }
             | Self::CanonicalState { location, .. } => Some(location),
@@ -306,6 +312,10 @@ impl fmt::Display for ReplayError {
             Self::CanonicalState { location, error } => {
                 write!(formatter, "{location}: {error}")
             }
+            Self::StepActionMismatch { steps, actions } => write!(
+                formatter,
+                "replay received {steps} recorded steps but {actions} prepared actions"
+            ),
             Self::Divergence(divergence) => divergence.fmt(formatter),
         }
     }
@@ -318,6 +328,7 @@ impl Error for ReplayError {
             Self::StateRebuild { error, .. } => Some(error),
             Self::WireConversion { error, .. } => Some(error),
             Self::CanonicalState { error, .. } => Some(error),
+            Self::StepActionMismatch { .. } => None,
             Self::Divergence(_) => None,
         }
     }
@@ -329,7 +340,16 @@ pub fn verify_transcript(reader: impl BufRead, library: &CardLibrary) -> Result<
     verify_parsed_transcript(&transcript, library)
 }
 
-fn verify_parsed_transcript(
+/// Replay an already parsed transcript through the current engine.
+///
+/// Use this instead of `verify_transcript` when the caller already holds a
+/// `TranscriptV1` — for example because it also needs to read fields off
+/// that value, such as step and event counts, alongside verifying it.
+/// Parsing the same bytes a second time to get both the value and the
+/// verification result costs a second file read and a second strict parse,
+/// and the two reads are not guaranteed to see the same bytes if the source
+/// changes between them.
+pub fn verify_parsed_transcript(
     transcript: &TranscriptV1,
     library: &CardLibrary,
 ) -> Result<(), ReplayError> {
@@ -476,6 +496,13 @@ fn replay_steps_with(
     mut state: GameState,
     mut engine: impl FnMut(&mut GameState, &GameAction) -> Result<ActionOutcome, ActionError>,
 ) -> Result<(GameState, ReplayFacts), ReplayError> {
+    if steps.len() != actions.len() {
+        return Err(ReplayError::StepActionMismatch {
+            steps: steps.len(),
+            actions: actions.len(),
+        });
+    }
+
     let mut facts = ReplayFacts::default();
     let mut digest = compute_digest(
         &StateProjectionV1::from_state(&state),
