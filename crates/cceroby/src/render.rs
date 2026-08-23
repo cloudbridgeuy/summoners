@@ -4,6 +4,19 @@ use crate::artwork::ArtworkKey;
 use crate::core::{Artwork, ProviderNotice, SearchView, SourceKind};
 use crate::download::DownloadNotice;
 
+const PAGE_LIFECYCLE_SCRIPT: &str = r#"<script>
+(function () {
+  var live = new EventSource('/live');
+  window.addEventListener('pagehide', function () { live.close(); });
+  document.addEventListener('keydown', function (event) {
+    if (event.key !== 'Escape') return;
+    event.preventDefault();
+    fetch('/quit', { method: 'POST', credentials: 'same-origin', keepalive: true });
+    window.close();
+  });
+}());
+</script>"#;
+
 /// Trusted data rendered on the artwork detail page.
 ///
 /// A later download must pass `attribution` unchanged to XMP construction.
@@ -87,7 +100,7 @@ pub fn render_search_page(view: SearchView<'_>) -> String {
         .collect::<Vec<_>>()
         .join("\n");
 
-    format!(
+    let html = format!(
         r#"<!doctype html>
 <html lang="en">
 <head>
@@ -127,7 +140,8 @@ pub fn render_search_page(view: SearchView<'_>) -> String {
 </body>
 </html>"#,
         view.artworks.len()
-    )
+    );
+    with_page_lifecycle(html)
 }
 
 /// Render one trusted artwork and its exact attribution.
@@ -156,7 +170,7 @@ pub fn render_detail_page(view: DetailView<'_>) -> String {
         )
     });
 
-    format!(
+    let html = format!(
         r#"<!doctype html>
 <html lang="en">
 <head>
@@ -214,7 +228,15 @@ pub fn render_detail_page(view: DetailView<'_>) -> String {
         source = artwork.source.key(),
         slug = escape_html(view.slug),
         tags = escape_html(view.tags),
-    )
+    );
+    with_page_lifecycle(html)
+}
+
+#[must_use]
+fn with_page_lifecycle(mut html: String) -> String {
+    let position = html.rfind("</body>").unwrap_or(html.len());
+    html.insert_str(position, PAGE_LIFECYCLE_SCRIPT);
+    html
 }
 
 #[must_use]
@@ -314,6 +336,30 @@ mod tests {
         assert!(html.contains("name=\"met\" value=\"true\" checked"));
         assert!(html.contains("name=\"culture\" type=\"text\" value=\"Japan\""));
         assert!(html.contains(">Search</button>"));
+    }
+
+    #[test]
+    fn search_page_opens_liveness_and_sends_protected_escape_quit() {
+        let session = crate::core::SearchSession::new(query("mask"));
+        let html = render_search_page(session.view());
+
+        assert!(html.contains("new EventSource('/live')"));
+        assert!(html.contains("event.key !== 'Escape'"));
+        assert!(html.contains("fetch('/quit', { method: 'POST'"));
+        assert!(html.contains("credentials: 'same-origin'"));
+        assert!(html.contains("keepalive: true"));
+        assert!(html.find(PAGE_LIFECYCLE_SCRIPT).is_some_and(|position| {
+            html.get(position + PAGE_LIFECYCLE_SCRIPT.len()..)
+                .is_some_and(|tail| tail.starts_with("</body>"))
+        }));
+    }
+
+    #[test]
+    fn lifecycle_script_appends_when_a_fragment_has_no_body_end() {
+        assert_eq!(
+            with_page_lifecycle("fragment".into()),
+            format!("fragment{PAGE_LIFECYCLE_SCRIPT}")
+        );
     }
 
     #[test]
@@ -426,6 +472,25 @@ mod tests {
         assert!(!html.contains("<dt>Creator</dt>"));
         assert!(!html.contains("<dt>Date</dt>"));
         assert!(!html.contains("<dt>Culture or region</dt>"));
+    }
+
+    #[test]
+    fn detail_page_has_the_same_browser_lifecycle_script() {
+        let artwork = artwork();
+        let key = ArtworkKey::try_from_parts("aic", "1001").expect("key is valid");
+        let attribution = format_attribution(&artwork);
+        let html = render_detail_page(DetailView {
+            artwork: &artwork,
+            key: &key,
+            attribution: &attribution,
+            slug: "mask-one",
+            tags: "",
+            notice: None,
+        });
+
+        assert_eq!(html.matches(PAGE_LIFECYCLE_SCRIPT).count(), 1);
+        assert!(html.contains("new EventSource('/live')"));
+        assert!(html.contains("fetch('/quit', { method: 'POST'"));
     }
 
     #[test]
