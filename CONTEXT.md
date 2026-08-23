@@ -11,9 +11,9 @@ one action, and returns a new state value; it never mutates anything the caller
 still holds. A strict authored-card boundary parses caller-held Set bytes into
 core definitions without file I/O. A separate CLI serves a local museum image
 search form. It connects to the Art Institute of Chicago, the Cleveland Museum
-of Art, and the Metropolitan Museum of Art. It attempts Smithsonian Open Access
-requests when `SMITHSONIAN_API_KEY` has a non-empty value that is valid as an
-HTTP header. Wikimedia Commons is not available yet. There is no game client or
+of Art, the Metropolitan Museum of Art, and Wikimedia Commons. It attempts
+Smithsonian Open Access requests when `SMITHSONIAN_API_KEY` has a non-empty
+value that is valid as an HTTP header. There is no game client or
 runtime file loader yet. Detail pages include a trusted self-contained JPEG
 download path for provider image responses. This file is an index of stable
 product language, not an API contract.
@@ -52,7 +52,15 @@ the loopback listener. It strictly parses the complete form before provider I/O
 and reconstructs all policy and remote-request data from the provider, keeps
 native JPEG scan data, converts TIFF input once, embeds attribution and tags as
 standard XMP, and atomically writes one JPEG in the selected output directory.
-Each complete search or detail page holds one local event stream while its tab
+Each search batch requests each active selected source once. The session keeps
+an independent provider cursor, removes duplicate `(source, object ID)` values,
+and interleaves accepted records in fixed source order. A local Load more
+control requests only `/more`, appends trusted local card fragments, updates
+the count, and removes itself when no provider has another cursor. Wikimedia
+Commons requests use a descriptive User-Agent. It accepts only CC0, Public
+Domain Mark, or CC BY from trusted `extmetadata` license fields. It accepts
+`MNAV` and `CdF` in the culture or region field as Uruguay institution category
+filters. Each complete search or detail page holds one local event stream while its tab
 is open. Without `--serve`, the server stops after a same-authority POST quit
 request or after the last connected tab stays disconnected for 10 seconds. It
 does not stop before a page has connected, and a reconnect restarts the grace

@@ -183,6 +183,17 @@ pub trait Provider: Send + Sync {
     ) -> Result<Artwork, ArtworkDropReason>;
     fn artwork_request(&self, key: &ArtworkKey) -> Result<HttpRequest, ProviderError>;
     fn parse_artwork_response(&self, bytes: &[u8]) -> Result<Artwork, ProviderError>;
+
+    fn parse_artwork_response_for_key(
+        &self,
+        key: &ArtworkKey,
+        bytes: &[u8],
+    ) -> Result<Artwork, ProviderError> {
+        let artwork = self.parse_artwork_response(bytes)?;
+        (artwork.source == key.source() && artwork.source_id == key.id().as_str())
+            .then_some(artwork)
+            .ok_or(ProviderError::ArtworkUnavailable)
+    }
     fn display_image_request(
         &self,
         artwork: &Artwork,
@@ -236,6 +247,8 @@ pub enum ProviderConfigError {
     InvalidMetEndpoint(url::ParseError),
     #[error("the built-in Smithsonian endpoint is invalid")]
     InvalidSmithsonianEndpoint(url::ParseError),
+    #[error("the built-in Commons endpoint is invalid")]
+    InvalidCommonsEndpoint(url::ParseError),
 }
 
 /// A provider record is valid JSON but cannot become an accepted artwork.
@@ -301,6 +314,16 @@ pub struct ProviderSet {
     commons: CommonsProvider,
 }
 
+/// Typed endpoints for the fixed provider slots.
+#[derive(Debug, Clone)]
+pub struct ProviderEndpoints {
+    pub aic: Url,
+    pub cleveland: Url,
+    pub met: Url,
+    pub smithsonian: Url,
+    pub commons: Url,
+}
+
 impl ProviderSet {
     pub fn from_env() -> Result<Self, ProviderConfigError> {
         let aic_endpoint =
@@ -311,29 +334,31 @@ impl ProviderSet {
             MetProvider::official_endpoint().map_err(ProviderConfigError::InvalidMetEndpoint)?;
         let smithsonian_endpoint = SmithsonianProvider::official_endpoint()
             .map_err(ProviderConfigError::InvalidSmithsonianEndpoint)?;
+        let commons_endpoint = CommonsProvider::official_endpoint()
+            .map_err(ProviderConfigError::InvalidCommonsEndpoint)?;
         Ok(Self::with_endpoints(
-            aic_endpoint,
-            cleveland_endpoint,
-            met_endpoint,
-            smithsonian_endpoint,
+            ProviderEndpoints {
+                aic: aic_endpoint,
+                cleveland: cleveland_endpoint,
+                met: met_endpoint,
+                smithsonian: smithsonian_endpoint,
+                commons: commons_endpoint,
+            },
             std::env::var(smithsonian::API_KEY_ENV).ok(),
         ))
     }
 
     #[must_use]
     pub fn with_endpoints(
-        aic_endpoint: Url,
-        cleveland_endpoint: Url,
-        met_endpoint: Url,
-        smithsonian_endpoint: Url,
+        endpoints: ProviderEndpoints,
         smithsonian_api_key: Option<String>,
     ) -> Self {
         Self {
-            aic: AicProvider::new(aic_endpoint),
-            cleveland: ClevelandProvider::new(cleveland_endpoint),
-            met: MetProvider::new(met_endpoint),
-            smithsonian: SmithsonianProvider::new(smithsonian_endpoint, smithsonian_api_key),
-            commons: CommonsProvider::new(),
+            aic: AicProvider::new(endpoints.aic),
+            cleveland: ClevelandProvider::new(endpoints.cleveland),
+            met: MetProvider::new(endpoints.met),
+            smithsonian: SmithsonianProvider::new(endpoints.smithsonian, smithsonian_api_key),
+            commons: CommonsProvider::new(endpoints.commons),
         }
     }
 
@@ -572,10 +597,13 @@ mod tests {
         let smithsonian_endpoint =
             SmithsonianProvider::official_endpoint().expect("endpoint is valid");
         let providers = ProviderSet::with_endpoints(
-            endpoint.clone(),
-            cleveland_endpoint,
-            met_endpoint,
-            smithsonian_endpoint,
+            ProviderEndpoints {
+                aic: endpoint.clone(),
+                cleveland: cleveland_endpoint,
+                met: met_endpoint,
+                smithsonian: smithsonian_endpoint,
+                commons: CommonsProvider::official_endpoint().expect("endpoint is valid"),
+            },
             None,
         );
         let ProviderEntry::Available(provider) = providers.get(SourceKind::ArtInstituteChicago)
@@ -596,7 +624,16 @@ mod tests {
         let endpoint = Url::parse("http://127.0.0.1:4001/api/artworks/").expect("URL is valid");
         let met = MetProvider::official_endpoint().expect("endpoint is valid");
         let smithsonian = SmithsonianProvider::official_endpoint().expect("endpoint is valid");
-        let providers = ProviderSet::with_endpoints(aic, endpoint.clone(), met, smithsonian, None);
+        let providers = ProviderSet::with_endpoints(
+            ProviderEndpoints {
+                aic,
+                cleveland: endpoint.clone(),
+                met,
+                smithsonian,
+                commons: CommonsProvider::official_endpoint().expect("endpoint is valid"),
+            },
+            None,
+        );
         let ProviderEntry::Available(provider) = providers.get(SourceKind::ClevelandMuseum) else {
             panic!("Cleveland is available");
         };
@@ -634,5 +671,38 @@ mod tests {
             Some("openaccess-api.clevelandart.org")
         );
         assert_eq!(request.url().path(), "/api/artworks/");
+    }
+
+    #[test]
+    fn typed_official_endpoints_map_to_all_provider_slots() {
+        let endpoints = ProviderEndpoints {
+            aic: AicProvider::official_endpoint().expect("AIC endpoint is valid"),
+            cleveland: ClevelandProvider::official_endpoint().expect("Cleveland endpoint is valid"),
+            met: MetProvider::official_endpoint().expect("Met endpoint is valid"),
+            smithsonian: SmithsonianProvider::official_endpoint()
+                .expect("Smithsonian endpoint is valid"),
+            commons: CommonsProvider::official_endpoint().expect("Commons endpoint is valid"),
+        };
+        let providers = ProviderSet::with_endpoints(endpoints, Some("test-key".into()));
+        let requests = SourceKind::ALL.map(|source| {
+            let ProviderEntry::Available(provider) = providers.get(source) else {
+                panic!("configured provider is available");
+            };
+            (source, provider.search_request(&query(), None))
+        });
+        assert_eq!(requests[0].1.url().host_str(), Some("api.artic.edu"));
+        assert_eq!(
+            requests[1].1.url().host_str(),
+            Some("openaccess-api.clevelandart.org")
+        );
+        assert_eq!(
+            requests[2].1.url().host_str(),
+            Some("collectionapi.metmuseum.org")
+        );
+        assert_eq!(requests[3].1.url().host_str(), Some("api.si.edu"));
+        assert_eq!(
+            requests[4].1.url().host_str(),
+            Some("commons.wikimedia.org")
+        );
     }
 }

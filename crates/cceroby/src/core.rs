@@ -1,5 +1,6 @@
 //! Typed search input and deterministic session transitions.
 
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fmt;
 use std::path::{Path, PathBuf};
 
@@ -8,7 +9,7 @@ use serde::Deserialize;
 use thiserror::Error;
 
 /// One museum or collection that can supply image records.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, ValueEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, ValueEnum)]
 pub enum SourceKind {
     /// Art Institute of Chicago.
     #[value(name = "aic")]
@@ -364,24 +365,98 @@ pub struct SearchSession {
     query: SearchQuery,
     notices: Vec<ProviderNotice>,
     artworks: Vec<Artwork>,
+    active_sources: BTreeSet<SourceKind>,
+    cursors: BTreeMap<SourceKind, Option<String>>,
+    seen: HashSet<(SourceKind, String)>,
+}
+
+/// One provider cursor selected for the next search batch.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderCursor {
+    pub source: SourceKind,
+    pub cursor: Option<String>,
 }
 
 impl SearchSession {
     #[must_use]
     pub fn new(query: SearchQuery) -> Self {
+        let active_sources = BTreeSet::from_iter(query.sources.as_slice().iter().copied());
+        let cursors = BTreeMap::from_iter(
+            query
+                .sources
+                .as_slice()
+                .iter()
+                .copied()
+                .map(|source| (source, None)),
+        );
         Self {
             query,
             notices: Vec::new(),
             artworks: Vec::new(),
+            active_sources,
+            cursors,
+            seen: HashSet::new(),
         }
     }
 
     pub fn begin_search(&mut self, query: SearchQuery) -> bool {
         let changed = self.query != query;
+        let active_sources = BTreeSet::from_iter(query.sources.as_slice().iter().copied());
+        let cursors = BTreeMap::from_iter(
+            query
+                .sources
+                .as_slice()
+                .iter()
+                .copied()
+                .map(|source| (source, None)),
+        );
         self.query = query;
         self.notices.clear();
         self.artworks.clear();
+        self.active_sources = active_sources;
+        self.cursors = cursors;
+        self.seen.clear();
         changed
+    }
+
+    /// Return one independent cursor for every provider that can still run.
+    #[must_use]
+    pub fn next_batch(&self) -> Vec<ProviderCursor> {
+        SourceKind::ALL
+            .into_iter()
+            .filter(|source| self.active_sources.contains(source))
+            .map(|source| ProviderCursor {
+                source,
+                cursor: self.cursors.get(&source).cloned().flatten(),
+            })
+            .collect()
+    }
+
+    /// Merge all outcomes from one batch and return just the new cards.
+    pub fn merge_batch(&mut self, outcomes: Vec<ProviderOutcome>) -> Vec<Artwork> {
+        let mut pages = BTreeMap::new();
+        for outcome in outcomes {
+            match outcome {
+                ProviderOutcome::Success(page) => {
+                    self.cursors.insert(page.source, page.next_cursor.clone());
+                    if page.next_cursor.is_none() {
+                        self.active_sources.remove(&page.source);
+                    }
+                    pages.insert(page.source, page.artworks);
+                }
+                ProviderOutcome::Unavailable { source } => {
+                    self.active_sources.remove(&source);
+                    add_notice(&mut self.notices, ProviderNotice::Unavailable { source });
+                }
+                ProviderOutcome::Failed { source } => {
+                    self.active_sources.remove(&source);
+                    add_notice(&mut self.notices, ProviderNotice::Failed { source });
+                }
+            }
+        }
+        let appended = round_robin_unique(&mut pages, &mut self.seen);
+        self.artworks.extend(appended.iter().cloned());
+        appended
     }
 
     #[must_use]
@@ -390,19 +465,46 @@ impl SearchSession {
             query: &self.query,
             notices: &self.notices,
             artworks: &self.artworks,
+            has_more: !self.active_sources.is_empty(),
         }
     }
 }
 
 /// Merge one provider outcome into the current page in dispatch order.
 pub fn merge_page(session: &mut SearchSession, outcome: ProviderOutcome) {
-    match outcome {
-        ProviderOutcome::Success(page) => session.artworks.extend(page.artworks),
-        ProviderOutcome::Unavailable { source } => {
-            session.notices.push(ProviderNotice::Unavailable { source });
+    let _ = session.merge_batch(vec![outcome]);
+}
+
+fn add_notice(notices: &mut Vec<ProviderNotice>, notice: ProviderNotice) {
+    if !notices.contains(&notice) {
+        notices.push(notice);
+    }
+}
+
+fn round_robin_unique(
+    pages: &mut BTreeMap<SourceKind, Vec<Artwork>>,
+    seen: &mut HashSet<(SourceKind, String)>,
+) -> Vec<Artwork> {
+    let mut positions = BTreeMap::<SourceKind, usize>::new();
+    let mut merged = Vec::new();
+    loop {
+        let mut added = false;
+        for source in SourceKind::ALL {
+            let Some(artworks) = pages.get(&source) else {
+                continue;
+            };
+            let position = positions.entry(source).or_default();
+            while let Some(artwork) = artworks.get(*position) {
+                *position += 1;
+                if seen.insert((artwork.source, artwork.source_id.clone())) {
+                    merged.push(artwork.clone());
+                    added = true;
+                    break;
+                }
+            }
         }
-        ProviderOutcome::Failed { source } => {
-            session.notices.push(ProviderNotice::Failed { source });
+        if !added {
+            return merged;
         }
     }
 }
@@ -413,6 +515,7 @@ pub struct SearchView<'a> {
     pub query: &'a SearchQuery,
     pub notices: &'a [ProviderNotice],
     pub artworks: &'a [Artwork],
+    pub has_more: bool,
 }
 
 /// A typed boundary error shown before I/O starts or as a bad form request.
@@ -437,6 +540,10 @@ impl fmt::Display for SourceKind {
         formatter.write_str(self.key())
     }
 }
+
+#[cfg(test)]
+#[path = "core_pagination_tests.rs"]
+mod pagination_tests;
 
 #[cfg(test)]
 mod tests {

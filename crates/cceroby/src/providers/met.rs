@@ -687,12 +687,18 @@ mod tests {
         let met_endpoint =
             Url::parse(&format!("http://{address}/search")).expect("mock URL is valid");
         let providers = ProviderSet::with_endpoints(
-            crate::providers::aic::AicProvider::official_endpoint().expect("AIC endpoint is valid"),
-            crate::providers::cleveland::ClevelandProvider::official_endpoint()
-                .expect("Cleveland endpoint is valid"),
-            met_endpoint,
-            crate::providers::smithsonian::SmithsonianProvider::official_endpoint()
+            crate::providers::ProviderEndpoints {
+                aic: crate::providers::aic::AicProvider::official_endpoint()
+                    .expect("AIC endpoint is valid"),
+                cleveland: crate::providers::cleveland::ClevelandProvider::official_endpoint()
+                    .expect("Cleveland endpoint is valid"),
+                met: met_endpoint,
+                smithsonian: crate::providers::smithsonian::SmithsonianProvider::official_endpoint(
+                )
                 .expect("Smithsonian endpoint is valid"),
+                commons: crate::providers::commons::CommonsProvider::official_endpoint()
+                    .expect("Commons endpoint is valid"),
+            },
             None,
         );
         let cache = tempdir().expect("temporary cache exists");
@@ -781,12 +787,18 @@ mod tests {
             axum::serve(listener, app).await.expect("mock server runs");
         });
         let providers = ProviderSet::with_endpoints(
-            crate::providers::aic::AicProvider::official_endpoint().expect("AIC endpoint is valid"),
-            crate::providers::cleveland::ClevelandProvider::official_endpoint()
-                .expect("Cleveland endpoint is valid"),
-            Url::parse(&format!("{base}/search")).expect("mock endpoint is valid"),
-            crate::providers::smithsonian::SmithsonianProvider::official_endpoint()
+            crate::providers::ProviderEndpoints {
+                aic: crate::providers::aic::AicProvider::official_endpoint()
+                    .expect("AIC endpoint is valid"),
+                cleveland: crate::providers::cleveland::ClevelandProvider::official_endpoint()
+                    .expect("Cleveland endpoint is valid"),
+                met: Url::parse(&format!("{base}/search")).expect("mock endpoint is valid"),
+                smithsonian: crate::providers::smithsonian::SmithsonianProvider::official_endpoint(
+                )
                 .expect("Smithsonian endpoint is valid"),
+                commons: crate::providers::commons::CommonsProvider::official_endpoint()
+                    .expect("Commons endpoint is valid"),
+            },
             None,
         );
         let temporary = tempdir().expect("temporary directory exists");

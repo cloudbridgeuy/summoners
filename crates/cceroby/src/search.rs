@@ -15,7 +15,7 @@ use crate::artwork::ArtworkKey;
 use crate::asset_writer::write_atomic_replace;
 use crate::cache::Cache;
 use crate::core::{
-    ProviderOutcome, ProviderPage, SearchQuery, SearchSeed, SearchSession, merge_page,
+    ProviderCursor, ProviderOutcome, ProviderPage, SearchQuery, SearchSeed, SearchSession,
 };
 use crate::download::{DownloadError, DownloadJob, SavedAsset};
 use crate::http::HttpClient;
@@ -65,12 +65,32 @@ impl SearchServices {
     }
 
     pub async fn search_batch(&self, query: &SearchQuery) -> Vec<ProviderOutcome> {
+        let cursors = query
+            .sources
+            .as_slice()
+            .iter()
+            .copied()
+            .map(|source| ProviderCursor {
+                source,
+                cursor: None,
+            })
+            .collect::<Vec<_>>();
+        self.search_batch_with_cursors(query, &cursors).await
+    }
+
+    pub async fn search_batch_with_cursors(
+        &self,
+        query: &SearchQuery,
+        cursors: &[ProviderCursor],
+    ) -> Vec<ProviderOutcome> {
         let now = SystemTime::now();
-        let searches = self
-            .providers
-            .selected(query.sources.as_slice())
-            .into_iter()
-            .map(|entry| self.search_one(entry, query, None, now));
+        let searches = cursors.iter().filter_map(|cursor| {
+            let entry = self.providers.get(cursor.source);
+            query
+                .sources
+                .contains(cursor.source)
+                .then(|| self.search_one(entry, query, cursor.cursor.as_deref(), now))
+        });
         join_all(searches).await
     }
 
@@ -90,7 +110,7 @@ impl SearchServices {
             .await
             .map_err(|_| ArtworkLoadError::ArtworkUnavailable)?;
         provider
-            .parse_artwork_response(&bytes)
+            .parse_artwork_response_for_key(key, &bytes)
             .map_err(|_| ArtworkLoadError::ArtworkUnavailable)
     }
 
@@ -265,11 +285,11 @@ pub async fn run(seed: SearchSeed) -> Result<()> {
     let output = seed.output.clone();
     let query = SearchQuery::from_seed(&seed);
     let services = SearchServices::from_env().wrap_err("cannot configure providers")?;
-    let outcomes = services.search_batch(&query).await;
     let mut session = SearchSession::new(query);
-    for outcome in outcomes {
-        merge_page(&mut session, outcome);
-    }
+    let outcomes = services
+        .search_batch_with_cursors(session.view().query, &session.next_batch())
+        .await;
+    let _ = session.merge_batch(outcomes);
     let listener = bind_listener("127.0.0.1:0")
         .await
         .wrap_err("cannot bind the local search server")?;

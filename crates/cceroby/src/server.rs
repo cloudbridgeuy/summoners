@@ -17,10 +17,10 @@ use tokio::net::TcpListener;
 use tokio::sync::{Mutex, Notify, RwLock, broadcast, watch};
 
 use crate::artwork::{ArtworkKey, ArtworkKeyError, format_attribution};
-use crate::core::{OutputDirectory, SearchParams, SearchQuery, SearchSession, merge_page};
+use crate::core::{OutputDirectory, SearchParams, SearchQuery, SearchSession};
 use crate::download::{DownloadError, DownloadJob, DownloadNotice, DownloadRequest, Slug};
 use crate::providers::DisplayImageSize;
-use crate::render::{DetailView, render_detail_page, render_search_page};
+use crate::render::{DetailView, render_cards_fragment, render_detail_page, render_search_page};
 use crate::search::{ArtworkLoadError, SearchServices};
 
 /// Process resources shared by local HTTP handlers.
@@ -70,17 +70,14 @@ impl AppState {
             quit: Arc::new(Notify::new()),
         }
     }
-
     #[must_use]
     pub fn shutdown_sender(&self) -> broadcast::Sender<()> {
         self.shutdown.clone()
     }
-
     #[must_use]
     pub fn live_connections(&self) -> LiveConnections {
         self.live.clone()
     }
-
     #[must_use]
     pub fn quit_notifier(&self) -> Arc<Notify> {
         Arc::clone(&self.quit)
@@ -158,6 +155,7 @@ impl Drop for LiveGuard {
 pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/", get(index))
+        .route("/more", get(more))
         .route("/thumb", get(thumbnail))
         .route("/preview", get(preview))
         .route("/detail", get(detail))
@@ -201,15 +199,48 @@ async fn index(State(state): State<AppState>, RawQuery(raw_query): RawQuery) -> 
             let mut session = state.session.write().await;
             session.begin_search(query.clone());
         }
-        let outcomes = state.services.search_batch(&query).await;
+        let cursors = { state.session.read().await.next_batch() };
+        let outcomes = state
+            .services
+            .search_batch_with_cursors(&query, &cursors)
+            .await;
         let mut session = state.session.write().await;
-        for outcome in outcomes {
-            merge_page(&mut session, outcome);
-        }
+        let _ = session.merge_batch(outcomes);
     }
 
     let session = state.session.read().await;
     Html(render_search_page(session.view())).into_response()
+}
+
+async fn more(State(state): State<AppState>) -> Response {
+    let _search = state.search_gate.lock().await;
+    let (query, cursors) = {
+        let session = state.session.read().await;
+        (session.view().query.clone(), session.next_batch())
+    };
+    if cursors.is_empty() {
+        return (
+            [("X-Has-More", has_more_header(false))],
+            Html(String::new()),
+        )
+            .into_response();
+    }
+
+    let outcomes = state
+        .services
+        .search_batch_with_cursors(&query, &cursors)
+        .await;
+    let mut session = state.session.write().await;
+    let cards = session.merge_batch(outcomes);
+    (
+        [("X-Has-More", has_more_header(session.view().has_more))],
+        Html(render_cards_fragment(&cards)),
+    )
+        .into_response()
+}
+
+const fn has_more_header(has_more: bool) -> &'static str {
+    if has_more { "true" } else { "false" }
 }
 
 async fn thumbnail(State(state): State<AppState>, RawQuery(raw_query): RawQuery) -> Response {
@@ -456,6 +487,10 @@ enum ArtworkRouteError {
 }
 
 #[cfg(test)]
+#[path = "server_more_tests.rs"]
+mod more_tests;
+
+#[cfg(test)]
 mod tests {
     #![allow(clippy::expect_used)]
 
@@ -475,7 +510,7 @@ mod tests {
         SearchQuery, SourceKind, SourceSet, merge_page,
     };
     use crate::http::HttpClient;
-    use crate::providers::ProviderSet;
+    use crate::providers::{ProviderEndpoints, ProviderSet};
     use crate::rate_limit::RateLimiters;
 
     use super::*;
@@ -602,12 +637,17 @@ mod tests {
             session,
             SearchServices::new(
                 ProviderSet::with_endpoints(
-                    endpoint,
-                    cleveland,
-                    crate::providers::met::MetProvider::official_endpoint()
-                        .expect("Met endpoint is valid"),
-                    crate::providers::smithsonian::SmithsonianProvider::official_endpoint()
-                        .expect("Smithsonian endpoint is valid"),
+                    ProviderEndpoints {
+                        aic: endpoint,
+                        cleveland,
+                        met: crate::providers::met::MetProvider::official_endpoint()
+                            .expect("Met endpoint is valid"),
+                        smithsonian:
+                            crate::providers::smithsonian::SmithsonianProvider::official_endpoint()
+                                .expect("Smithsonian endpoint is valid"),
+                        commons: crate::providers::commons::CommonsProvider::official_endpoint()
+                            .expect("Commons endpoint is valid"),
+                    },
                     None,
                 ),
                 Cache::new(cache.path().to_path_buf()),
@@ -701,7 +741,7 @@ mod tests {
         let response = router(state("mask"))
             .oneshot(
                 Request::builder()
-                    .uri("/?query=mask&wikimedia=true")
+                    .uri("/?query=mask&smithsonian=true")
                     .body(Body::empty())
                     .expect("request is valid"),
             )
@@ -904,58 +944,6 @@ mod tests {
         assert!(back_html.contains("/detail?source=aic&amp;id=1001"));
     }
 
-    #[tokio::test]
-    async fn artwork_handlers_reject_unknown_malformed_extra_duplicate_and_url_input() {
-        let app = router(state("mask"));
-        let invalid_queries = [
-            "source=unknown&id=1",
-            "source=aic&id=bad",
-            "source=aic&&id=1",
-            "source=aic&id=1&",
-            "source=aic&id",
-            "source=aic&id=1&extra=x",
-            "source=aic&id=1&id=2",
-            "source=aic&id=https%3A%2F%2Fevil.test%2Fimage.jpg",
-            "source=aic&id=1&url=https%3A%2F%2Fevil.test%2Fimage.jpg",
-        ];
-        for route in ["/thumb", "/preview", "/detail"] {
-            for query in invalid_queries {
-                let response = app
-                    .clone()
-                    .oneshot(
-                        Request::builder()
-                            .uri(format!("{route}?{query}"))
-                            .body(Body::empty())
-                            .expect("request is valid"),
-                    )
-                    .await
-                    .expect("request succeeds");
-                assert_eq!(
-                    response.status(),
-                    StatusCode::BAD_REQUEST,
-                    "{route}?{query}"
-                );
-                let body = to_bytes(response.into_body(), usize::MAX)
-                    .await
-                    .expect("body is readable");
-                let message = String::from_utf8(body.to_vec()).expect("body is UTF-8");
-                assert!(!message.contains("evil.test"));
-                assert!(!message.contains("https://"));
-            }
-        }
-
-        let unavailable = app
-            .oneshot(
-                Request::builder()
-                    .uri("/detail?source=wikimedia&id=1")
-                    .body(Body::empty())
-                    .expect("request is valid"),
-            )
-            .await
-            .expect("request succeeds");
-        assert_eq!(unavailable.status(), StatusCode::NOT_FOUND);
-    }
-
     #[test]
     fn live_guard_counts_each_connection_and_cannot_underflow() {
         let live = LiveConnections::new();
@@ -975,6 +963,9 @@ mod tests {
 
     #[path = "lifecycle_tests.rs"]
     mod lifecycle_tests;
+
+    #[path = "route_tests.rs"]
+    mod route_tests;
 
     #[path = "smithsonian_id_tests.rs"]
     mod smithsonian_id_tests;
