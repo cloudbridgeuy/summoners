@@ -219,6 +219,39 @@ typed rejections, authoritative states, and completion data as typed values.
   sequence, step, and event index context
 - **AND** it does not return a **Match transcript** value
 
+### Requirement: Semantic match transcript comparison
+
+A caller can compare two complete **Match transcript** inputs after each input
+passes strict parsing. Comparison uses typed wire values, not JSON text layout.
+It keeps all normative values and array order exact.
+
+#### Scenario: Two inputs have the same normative values
+
+- **WHEN** two valid inputs differ only in JSON whitespace, object key order,
+  or header metadata
+- **THEN** default comparison reports that they are equal
+- **AND** header format and format version remain normative
+
+#### Scenario: Header metadata is included
+
+- **WHEN** a caller enables metadata comparison and the header metadata values
+  differ
+- **THEN** comparison reports the first metadata difference
+
+#### Scenario: A normative value differs
+
+- **WHEN** two valid inputs have a different normative value
+- **THEN** comparison reports the first difference in record, field, and array
+  order
+- **AND** the report contains its sequence, available step and event index,
+  stable path, expected value, and actual value
+
+#### Scenario: One input is invalid
+
+- **WHEN** strict parsing fails for either comparison input
+- **THEN** comparison returns a typed fault that identifies the expected or
+  actual input
+
 ### Requirement: Turn structure and phase order
 
 A turn moves through Upkeep, Main Phase, and Combat, and phases only move
