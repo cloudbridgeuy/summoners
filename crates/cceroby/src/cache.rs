@@ -1,9 +1,9 @@
 //! Best-effort metadata cache shell and deterministic cache policy.
 
+#[cfg(test)]
 use std::fs;
-use std::io::Write;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
@@ -17,7 +17,9 @@ const THUMBNAIL_TTL: Duration = Duration::from_secs(30 * 24 * 60 * 60);
 const THUMBNAIL_MAGIC: &[u8; 8] = b"CCERTHM2";
 const THUMBNAIL_TIMESTAMP_BYTES: usize = 16;
 const THUMBNAIL_CHECKSUM_BYTES: usize = 32;
-static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+static CACHE_OPERATIONS: Mutex<()> = Mutex::new(());
+
+mod cache_fs;
 
 /// A plain per-entry cache rooted outside the repository.
 #[derive(Debug, Clone)]
@@ -38,6 +40,46 @@ impl Cache {
         }
     }
 
+    /// Construct a cache that performs no file-system operations.
+    #[must_use]
+    pub const fn disabled() -> Self {
+        Self { root: None }
+    }
+
+    /// Inspect both cache layers without following symbolic links.
+    #[must_use]
+    pub fn stats(&self, now: SystemTime) -> CacheStats {
+        let Some(root) = self.root.clone() else {
+            return CacheStats::disabled();
+        };
+        let _guard = cache_operation_guard();
+        CacheStats {
+            root: Some(root.clone()),
+            metadata: cache_fs::collect_stats(&root, "meta", now, CacheLayer::Metadata),
+            thumbnails: cache_fs::collect_stats(&root, "thumbs", now, CacheLayer::Thumbnail),
+        }
+    }
+
+    /// Remove only this cache root. A missing or disabled cache is a no-op.
+    pub fn clear(&self) -> std::io::Result<usize> {
+        self.clear_with_after_detach(|| {})
+    }
+
+    fn clear_with_after_detach(&self, after_detach: impl FnOnce()) -> std::io::Result<usize> {
+        let Some(root) = self.root.as_ref() else {
+            return Ok(0);
+        };
+        let snapshot = {
+            let _guard = cache_operation_guard();
+            cache_fs::detach_root(root)?
+        };
+        let Some(snapshot) = snapshot else {
+            return Ok(0);
+        };
+        after_detach();
+        cache_fs::remove_snapshot(&snapshot)
+    }
+
     /// Read fresh metadata. Any cache error degrades to a miss.
     #[must_use]
     pub fn read_metadata(
@@ -46,8 +88,10 @@ impl Cache {
         canonical_request: &str,
         now: SystemTime,
     ) -> Option<Vec<u8>> {
-        let path = self.metadata_path(source, canonical_request)?;
-        let entry = fs::read(&path)
+        let root = self.root.as_ref()?;
+        let name = format!("{}.json", metadata_key(source, canonical_request));
+        let _guard = cache_operation_guard();
+        let entry = cache_fs::read(root, &["meta", source.key()], &name)
             .ok()
             .and_then(|bytes| decode_entry(&bytes))
             .filter(|entry| is_fresh(entry.fetched_at, now));
@@ -55,7 +99,7 @@ impl Cache {
         match entry {
             Some(entry) => Some(entry.bytes),
             None => {
-                let _ = fs::remove_file(path);
+                let _ = cache_fs::remove(root, &["meta", source.key()], &name);
                 None
             }
         }
@@ -70,20 +114,24 @@ impl Cache {
         bytes: &[u8],
         fetched_at: SystemTime,
     ) -> bool {
-        let Some(path) = self.metadata_path(source, canonical_request) else {
+        let Some(root) = self.root.as_ref() else {
             return false;
         };
         let Some(encoded) = encode_entry(bytes, fetched_at) else {
             return false;
         };
-        write_atomic(&path, &encoded)
+        let name = format!("{}.json", metadata_key(source, canonical_request));
+        let _guard = cache_operation_guard();
+        cache_fs::write(root, &["meta", source.key()], &name, &encoded).is_ok()
     }
 
     /// Read fresh thumbnail bytes. Any cache error degrades to a miss.
     #[must_use]
     pub fn read_thumbnail(&self, canonical_url: &str, now: SystemTime) -> Option<CachedThumbnail> {
-        let path = self.thumbnail_path(canonical_url)?;
-        let entry = fs::read(&path)
+        let root = self.root.as_ref()?;
+        let name = format!("{}.bin", thumbnail_key(canonical_url));
+        let _guard = cache_operation_guard();
+        let entry = cache_fs::read(root, &["thumbs"], &name)
             .ok()
             .and_then(|bytes| decode_thumbnail_entry(&bytes))
             .filter(|entry| is_thumbnail_fresh(entry.fetched_at, now));
@@ -94,7 +142,7 @@ impl Cache {
                 media_type: entry.media_type,
             }),
             None => {
-                let _ = fs::remove_file(path);
+                let _ = cache_fs::remove(root, &["thumbs"], &name);
                 None
             }
         }
@@ -109,13 +157,15 @@ impl Cache {
         bytes: &[u8],
         fetched_at: SystemTime,
     ) -> bool {
-        let Some(path) = self.thumbnail_path(canonical_url) else {
+        let Some(root) = self.root.as_ref() else {
             return false;
         };
         let Some(encoded) = encode_thumbnail_entry(media_type, bytes, fetched_at) else {
             return false;
         };
-        write_atomic(&path, &encoded)
+        let name = format!("{}.bin", thumbnail_key(canonical_url));
+        let _guard = cache_operation_guard();
+        cache_fs::write(root, &["thumbs"], &name, &encoded).is_ok()
     }
 
     /// Remove expired or corrupt metadata and thumbnail entries.
@@ -124,24 +174,90 @@ impl Cache {
         let Some(root) = self.root.as_ref() else {
             return 0;
         };
-        prune_metadata_directory(root.join("meta"), now)
-            + prune_thumbnail_directory(root.join("thumbs"), now)
+        let _guard = cache_operation_guard();
+        cache_fs::prune(root, "meta", now, CacheLayer::Metadata)
+            + cache_fs::prune(root, "thumbs", now, CacheLayer::Thumbnail)
     }
 
+    #[cfg(test)]
     fn metadata_path(&self, source: SourceKind, canonical_request: &str) -> Option<PathBuf> {
-        self.root.as_ref().map(|root| {
-            root.join("meta")
-                .join(source.key())
-                .join(format!("{}.json", metadata_key(source, canonical_request)))
-        })
+        let root = self.root.as_ref()?;
+        let metadata = root.join("meta");
+        let source_directory = metadata.join(source.key());
+        Some(source_directory.join(format!("{}.json", metadata_key(source, canonical_request))))
     }
 
+    #[cfg(test)]
     fn thumbnail_path(&self, canonical_url: &str) -> Option<PathBuf> {
-        self.root.as_ref().map(|root| {
-            root.join("thumbs")
-                .join(format!("{}.bin", thumbnail_key(canonical_url)))
-        })
+        let root = self.root.as_ref()?;
+        let thumbnails = root.join("thumbs");
+        Some(thumbnails.join(format!("{}.bin", thumbnail_key(canonical_url))))
     }
+}
+
+fn cache_operation_guard() -> MutexGuard<'static, ()> {
+    match CACHE_OPERATIONS.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    }
+}
+
+/// File count and byte total for one freshness class.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CacheUsage {
+    pub files: usize,
+    pub bytes: u64,
+}
+
+impl CacheUsage {
+    fn add_file(&mut self, bytes: u64) {
+        self.files = self.files.saturating_add(1);
+        self.bytes = self.bytes.saturating_add(bytes);
+    }
+}
+
+/// Fresh and expired use for one cache layer. Corrupt entries are expired.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CacheLayerStats {
+    pub fresh: CacheUsage,
+    pub expired: CacheUsage,
+}
+
+/// A best-effort snapshot of the resolved cache root and both cache layers.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CacheStats {
+    pub root: Option<PathBuf>,
+    pub metadata: CacheLayerStats,
+    pub thumbnails: CacheLayerStats,
+}
+
+impl CacheStats {
+    #[must_use]
+    pub const fn disabled() -> Self {
+        Self {
+            root: None,
+            metadata: CacheLayerStats {
+                fresh: CacheUsage { files: 0, bytes: 0 },
+                expired: CacheUsage { files: 0, bytes: 0 },
+            },
+            thumbnails: CacheLayerStats {
+                fresh: CacheUsage { files: 0, bytes: 0 },
+                expired: CacheUsage { files: 0, bytes: 0 },
+            },
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CacheLayer {
+    Metadata,
+    Thumbnail,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Freshness {
+    Fresh,
+    Expired,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -322,62 +438,18 @@ fn is_thumbnail_fresh(fetched_at: SystemTime, now: SystemTime) -> bool {
         .is_ok_and(|age| age < THUMBNAIL_TTL)
 }
 
-fn write_atomic(path: &std::path::Path, bytes: &[u8]) -> bool {
-    let Some(parent) = path.parent() else {
-        return false;
-    };
-    if fs::create_dir_all(parent).is_err() {
-        return false;
-    }
-    let sequence = TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
-    let temp_path = parent.join(format!(".entry-{}-{sequence}.tmp", std::process::id()));
-    let write_result = fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&temp_path)
-        .and_then(|mut file| {
-            file.write_all(bytes)?;
-            file.sync_all()
-        });
-    if write_result.is_err() || fs::rename(&temp_path, path).is_err() {
-        let _ = fs::remove_file(temp_path);
-        return false;
-    }
-    true
-}
-
-fn prune_metadata_directory(root: PathBuf, now: SystemTime) -> usize {
-    let Ok(source_directories) = fs::read_dir(root) else {
-        return 0;
-    };
-    source_directories
-        .filter_map(Result::ok)
-        .filter_map(|entry| fs::read_dir(entry.path()).ok())
-        .flat_map(|entries| entries.filter_map(Result::ok))
-        .filter(|entry| {
-            fs::read(entry.path())
-                .ok()
-                .and_then(|bytes| decode_entry(&bytes))
-                .is_none_or(|cached| !is_fresh(cached.fetched_at, now))
-        })
-        .filter(|entry| fs::remove_file(entry.path()).is_ok())
-        .count()
-}
-
-fn prune_thumbnail_directory(root: PathBuf, now: SystemTime) -> usize {
-    let Ok(entries) = fs::read_dir(root) else {
-        return 0;
-    };
-    entries
-        .filter_map(Result::ok)
-        .filter(|entry| {
-            fs::read(entry.path())
-                .ok()
-                .and_then(|bytes| decode_thumbnail_entry(&bytes))
-                .is_none_or(|cached| !is_thumbnail_fresh(cached.fetched_at, now))
-        })
-        .filter(|entry| fs::remove_file(entry.path()).is_ok())
-        .count()
+fn classify_entry(bytes: &[u8], now: SystemTime, layer: CacheLayer) -> Option<Freshness> {
+    let fresh = match layer {
+        CacheLayer::Metadata => decode_entry(bytes).map(|entry| is_fresh(entry.fetched_at, now)),
+        CacheLayer::Thumbnail => {
+            decode_thumbnail_entry(bytes).map(|entry| is_thumbnail_fresh(entry.fetched_at, now))
+        }
+    }?;
+    Some(if fresh {
+        Freshness::Fresh
+    } else {
+        Freshness::Expired
+    })
 }
 
 #[cfg(test)]
@@ -797,12 +869,17 @@ mod tests {
 
     #[test]
     fn cache_without_a_user_directory_is_disabled() {
-        let cache = Cache { root: None };
+        let cache = Cache::disabled();
         assert_eq!(
             cache.read_metadata(SourceKind::ArtInstituteChicago, REQUEST, SystemTime::now()),
             None
         );
         assert_eq!(cache.prune_expired(SystemTime::now()), 0);
         assert_eq!(cache.read_thumbnail(REQUEST, SystemTime::now()), None);
+        assert_eq!(cache.stats(SystemTime::now()), CacheStats::disabled());
+        assert_eq!(cache.clear().expect("disabled clear succeeds"), 0);
     }
+
+    #[path = "management_tests.rs"]
+    mod management_tests;
 }
