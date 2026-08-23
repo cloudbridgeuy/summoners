@@ -26,7 +26,13 @@ async fn main() -> ExitCode {
             };
             cceroby::search::run(seed).await
         }
-        Command::Cache(args) => run_cache(args.action),
+        Command::Cache(args) => match run_cache(args.action) {
+            Ok(()) => Ok(()),
+            Err(_) => {
+                eprintln!("Cannot clear the cache safely.");
+                return ExitCode::FAILURE;
+            }
+        },
     };
 
     match result {
@@ -38,7 +44,7 @@ async fn main() -> ExitCode {
     }
 }
 
-fn run_cache(action: CacheAction) -> color_eyre::eyre::Result<()> {
+fn run_cache(action: CacheAction) -> std::io::Result<()> {
     let cache = Cache::from_user_cache_dir();
     match action {
         CacheAction::Info => print_cache_info(&cache.stats(SystemTime::now())),

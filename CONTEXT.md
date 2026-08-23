@@ -171,15 +171,23 @@ server. Ctrl-C stops either mode and closes open event streams cleanly.
   for metadata and thumbnails
 - **WHEN** the user runs `cceroby cache clear`
 - **THEN** the command reports the number of removed files
-- **AND** it removes only the Cceroby cache root without following symbolic
-  links
+- **AND** on Apple platforms, Linux, and Android it atomically detaches and
+  removes only the Cceroby cache root without following symbolic links
+- **AND** a cache root that a writer creates after the detach operation remains
+- **AND** a permission, inspection, count, or removal error makes the command
+  fail without a success report
 - **AND** a missing or disabled cache is a safe no-op
+- **AND** on a platform without the required atomic no-replace rename, the
+  command refuses removal
 
 #### Scenario: Startup prunes old cache entries
 
 - **WHEN** a search starts with expired or corrupt metadata or thumbnails
-- **THEN** startup removes those entries on a best-effort basis
+- **THEN** on Unix startup removes those entries on a best-effort basis with
+  handle-relative operations that do not follow symbolic links
 - **AND** a cache I/O error does not stop normal search work
+- **AND** on a platform without safe handle-relative cache operations, normal
+  search work continues without cache reads, writes, or pruning
 
 #### Scenario: A connected provider fails
 

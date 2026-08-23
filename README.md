@@ -55,6 +55,13 @@ cargo run -p cceroby -- cache info
 cargo run -p cceroby -- cache clear
 ```
 
+On Unix, cache access and pruning use no-follow file handles. On Apple
+platforms, Linux, and Android, cache removal first detaches the exact cache
+root. Thus, a new cache that a running search creates remains. A removal error
+returns a failure and does not print a success report. A platform without the
+required atomic rename refuses cache removal. On non-Unix platforms, Cceroby
+keeps search work available without cache I/O.
+
 ## License
 
 Summoners is available under the [MIT License](LICENSE).

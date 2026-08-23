@@ -82,6 +82,34 @@ fn cache_clear_removes_only_the_isolated_cceroby_root() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn cache_clear_reports_permission_failure_without_false_success() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let home = tempdir().unwrap_or_else(|error| panic!("cannot create temporary home: {error}"));
+    let root = cache_root_for_test(home.path());
+    std::fs::create_dir_all(&root)
+        .unwrap_or_else(|error| panic!("cannot create cache fixture: {error}"));
+    let Some(parent) = root.parent() else {
+        panic!("cache root has no parent");
+    };
+    std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o000))
+        .unwrap_or_else(|error| panic!("cannot lock cache parent: {error}"));
+
+    let output = isolated_command(home.path())
+        .args(["cache", "clear"])
+        .output()
+        .unwrap_or_else(|error| panic!("cannot run cceroby: {error}"));
+
+    std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700))
+        .unwrap_or_else(|error| panic!("cannot restore cache parent: {error}"));
+    assert!(!output.status.success());
+    assert_eq!(output.stdout, b"");
+    assert_eq!(output.stderr, b"Cannot clear the cache safely.\n");
+    assert!(root.exists());
+}
+
 fn isolated_command(home: &std::path::Path) -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_cceroby"));
     command
