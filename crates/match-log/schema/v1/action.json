@@ -324,6 +324,23 @@
             "prize_index"
           ],
           "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "resign",
+              "type": "string"
+            },
+            "player": {
+              "$ref": "#/$defs/player_id"
+            }
+          },
+          "required": [
+            "kind",
+            "player"
+          ],
+          "type": "object"
         }
       ]
     },

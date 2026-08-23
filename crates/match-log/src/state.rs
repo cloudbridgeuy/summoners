@@ -539,6 +539,7 @@ impl From<LossReason> for LossReasonV1 {
             LossReason::ThirdMainLoss => Self::ThirdMainLoss,
             LossReason::NoPromotionAvailable => Self::NoPromotionAvailable,
             LossReason::EmptyDeckDraw => Self::EmptyDeckDraw,
+            LossReason::Resignation => Self::Resignation,
         }
     }
 }
@@ -549,6 +550,7 @@ impl From<LossReasonV1> for LossReason {
             LossReasonV1::ThirdMainLoss => Self::ThirdMainLoss,
             LossReasonV1::NoPromotionAvailable => Self::NoPromotionAvailable,
             LossReasonV1::EmptyDeckDraw => Self::EmptyDeckDraw,
+            LossReasonV1::Resignation => Self::Resignation,
         }
     }
 }

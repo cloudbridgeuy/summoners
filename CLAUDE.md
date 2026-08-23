@@ -11,9 +11,12 @@ It must not read files, call a network, use a clock, or own another I/O effect.
 bytes without file I/O, applies content policy, and converts valid definitions
 into core entities. It also assembles loaded Sets into one shared card library,
 resolves strict Deck documents, and exposes the embedded catalog through one
-cached runtime path. There is no product runtime shell yet. Add a CLI, server,
-simulator, runtime file loader, client, protocol adapter, or FFI crate only
-after its boundary and dependency set are explicit.
+cached runtime path. `crates/shell` is the current imperative shell: the
+`summoners` binary owns argument mapping, exit-code classification, and the
+file effects around `crates/core` and `crates/cards`, and it owns no game
+rule or transcript rule of its own. Add a server, network client, simulator,
+runtime file loader, protocol adapter, or FFI crate only after its boundary
+and dependency set are explicit.
 
 Keep gameplay concerns as modules in `summoners_core`. Do not create one crate
 per rule or concept.

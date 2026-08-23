@@ -12,7 +12,7 @@ use crate::domain::actions::GameAction;
 use crate::domain::errors::ActionError;
 use crate::domain::events::GameEvent;
 use crate::domain::ids::PlayerId;
-use crate::domain::state::{GameState, GameStatus, PendingInput};
+use crate::domain::state::{GameOutcome, GameState, GameStatus, LossReason, PendingInput};
 use crate::engine::{destruction, resolution, stack, turn};
 
 /// The result of one accepted action: the next state and the ordered facts
@@ -39,6 +39,10 @@ pub fn apply(state: &GameState, action: &GameAction) -> Result<ActionOutcome, Ac
         GameStatus::Broken(_) => return Err(ActionError::GameBroken),
     }
 
+    if let GameAction::Resign { player } = action {
+        return Ok(resign(state, *player));
+    }
+
     check_actor(state, action.actor())?;
 
     let outcome = dispatch(state, action)?;
@@ -50,12 +54,41 @@ pub fn apply(state: &GameState, action: &GameAction) -> Result<ActionOutcome, Ac
     Ok(ActionOutcome { state, events })
 }
 
+/// End the match in `player`'s resignation. This bypasses the actor gate
+/// entirely — either player may resign regardless of `pending`, an open
+/// Priority window, or whose turn it is — and it never reaches `dispatch`
+/// or `resolution::drain`, so the stack, the work queue, and `pending` stay
+/// exactly as they were.
+fn resign(state: &GameState, player: PlayerId) -> ActionOutcome {
+    let mut state = state.clone();
+    let outcome = GameOutcome {
+        winner: player.opponent(),
+        reason: LossReason::Resignation,
+    };
+    state.status = GameStatus::Ended(outcome);
+
+    ActionOutcome {
+        state,
+        events: vec![GameEvent::GameEnded {
+            winner: outcome.winner,
+            reason: outcome.reason,
+        }],
+    }
+}
+
 /// The one player currently allowed to act (decision 15). A window can be
 /// open regardless of which phase is resting (a Spell cast proactively in
 /// Main, a respondable trigger during Upkeep or Main resolution, or a
 /// declared attack in Combat), so this checks `state.turn.window` directly
 /// rather than matching on the phase.
-fn required_actor(state: &GameState) -> PlayerId {
+///
+/// Public so a caller that only needs to know who the engine will accept an
+/// action from — an interactive shell rendering a status line, for example
+/// — can read this one rule instead of re-deriving it from `pending`, the
+/// Stack window, and the active player itself. There is exactly one
+/// definition of this rule; a caller must not duplicate it.
+#[must_use]
+pub fn required_actor(state: &GameState) -> PlayerId {
     if let Some(pending) = &state.pending {
         return pending_actor(pending);
     }
@@ -143,6 +176,9 @@ fn dispatch(state: &GameState, action: &GameAction) -> Result<ActionOutcome, Act
             player,
             prize_index,
         } => destruction::answer_prize(state, *player, *prize_index),
+        // `apply` handles `Resign` before `dispatch` is ever reached; this
+        // arm only keeps the match total.
+        GameAction::Resign { player } => Ok(resign(state, *player)),
     }
 }
 

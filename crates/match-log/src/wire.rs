@@ -282,6 +282,7 @@ pub enum LossReasonV1 {
     ThirdMainLoss,
     NoPromotionAvailable,
     EmptyDeckDraw,
+    Resignation,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

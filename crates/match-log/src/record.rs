@@ -92,7 +92,14 @@ impl<W: Write> RecordedMatch<W> {
         self.writer
     }
 
-    fn submit_with(
+    /// Record one action, resolved by a caller-supplied transition instead
+    /// of the engine's own `apply`.
+    ///
+    /// `submit` is `submit_with(action, apply)`. This exists so a caller
+    /// can drive a recording with an alternative transition — for example,
+    /// to reproduce one deliberate engine-output difference in a test,
+    /// without widening what `submit` itself can do.
+    pub fn submit_with(
         &mut self,
         action: &GameAction,
         apply_action: impl FnOnce(&GameState, &GameAction) -> Result<ActionOutcome, ActionError>,

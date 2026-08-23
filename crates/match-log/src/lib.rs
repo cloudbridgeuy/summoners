@@ -23,6 +23,9 @@ pub use error::{
 pub use parse::{TranscriptStepResultV1, TranscriptStepV1, TranscriptV1};
 pub use parse_error::{LifecycleError, ParseContext, ParseError, ParseErrorKind};
 pub use record::{RecordedMatch, RecordedStep};
+pub use replay::{
+    PreparedAction, PreparedScenario, prepare_scenario, verify_parsed_transcript, verify_transcript,
+};
 pub use state::{StateDigestV1, StateProjectionV1};
 pub use wire::{
     ActionV1, ErrorV1, EventV1, HeaderMetadataV1, HeaderV1, MatchCreatedV1, RecordV1,

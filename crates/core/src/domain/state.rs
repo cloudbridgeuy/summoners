@@ -251,6 +251,7 @@ pub enum LossReason {
     ThirdMainLoss,
     NoPromotionAvailable,
     EmptyDeckDraw,
+    Resignation,
 }
 
 /// The match's final result, set once. Every action after this point is
@@ -639,8 +640,9 @@ mod tests {
             LossReason::ThirdMainLoss,
             LossReason::NoPromotionAvailable,
             LossReason::EmptyDeckDraw,
+            LossReason::Resignation,
         ];
-        assert_eq!(reasons.len(), 3);
+        assert_eq!(reasons.len(), 4);
     }
 
     #[test]

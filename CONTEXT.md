@@ -9,9 +9,13 @@ rules described below. The engine reads no file, calls no network, uses no
 clock, and uses no random source. Every entry point takes one state value and
 one action, and returns a new state value; it never mutates anything the caller
 still holds. A strict authored-card boundary parses caller-held Set bytes into
-core definitions without file I/O. There is no CLI, server, client, runtime
-file loader, Deck loader, or built-in catalog yet. This file is an index of
-stable product language, not an API contract.
+core definitions without file I/O, resolves strict Deck documents, and exposes
+one cached built-in catalog. A `summoners` command-line shell in `crates/shell`
+wraps this engine and catalog with three commands — `verify`, `replay`, and
+`play` — that read and write versioned NDJSON match transcripts; the shell
+owns no game rule and no transcript rule of its own. There is no server,
+network client, or runtime file loader yet. This file is an index of stable
+product language, not an API contract.
 
 ## Behavior
 
@@ -198,6 +202,9 @@ later actions without a new write or engine call.
 A **Match transcript** parser accepts only strict version 1 NDJSON with one
 complete record lifecycle. It returns normalized actions, ordered events,
 typed rejections, authoritative states, and completion data as typed values.
+Version 1 is the only format version the parser accepts today; a header that
+names any other `format_version` is malformed. Extending the wire contract
+means adding a new format version, not changing what version 1 means.
 
 #### Scenario: A complete transcript is parsed
 
@@ -633,6 +640,90 @@ final available card succeeds and does not cause an early loss.
 - **WHEN** an effect requires exactly the number of cards left in the Deck
 - **THEN** the draw succeeds and emptying the Deck alone does not end the game
 
+### Requirement: Resignation ends the match immediately
+
+Either player can resign at any time. Resignation bypasses the actor gate
+entirely — it is legal regardless of `pending`, an open Priority window, or
+whose turn it is — and it never reaches the normal action dispatcher, so the
+Stack, the work queue, and any pending choice are left exactly as they were.
+Resigning ends the game in the opponent's favor with loss reason
+Resignation, emitting exactly one `GameEnded` event.
+
+#### Scenario: A player resigns outside their own turn
+
+- **WHEN** a player submits Resign while it is not their turn, or while a
+  Priority window or a pending choice is open
+- **THEN** the game ends immediately in the opponent's favor with loss
+  reason Resignation, and the Stack, the work queue, and the pending choice
+  are left unchanged in the recorded final state
+
+### Requirement: The `summoners` command-line shell
+
+The `summoners` binary in `crates/shell` wraps the engine, the card boundary,
+and the match-transcript library with three commands. Every command reads
+its input transcript with the strict parser and the shared built-in catalog
+before it does anything else, and every command that writes a transcript
+follows the same file lifecycle: it writes to `<output>.partial` while work
+is in progress and renames that file to the final output path only once the
+result is complete and correct; ending any other way leaves the `.partial`
+file in place for diagnosis and never presents it as a valid transcript. A
+process exit code of 2 reports a command-line usage problem, 3 reports an
+invalid, diverging, or semantically different transcript, 4 reports a file,
+catalog, or recording failure, and 5 reports a broken or incomplete game;
+this contract is the same across every command.
+
+`verify <path>` parses one transcript, replays its recorded actions against
+the engine, and confirms every event, rejection, and final state it
+recorded. `replay --from <path> --output <path> [--force]` replays one
+transcript's recorded actions into a fresh recording and compares the
+result against the original. `play --from <path> --output <path> [--force]`
+reads only a scenario transcript's header metadata, its required Set
+revisions, and its initial state — never its recorded actions — and lets an
+operator drive the match interactively, one typed line at a time, echoing
+every accepted action's events and every rejection as it happens.
+
+#### Scenario: A command succeeds
+
+- **WHEN** `verify` confirms a transcript, or `replay` or `play` reaches a
+  terminal game outcome
+- **THEN** the command exits 0, and `replay` or `play` renames its
+  `.partial` file into the requested output path, leaving no `.partial`
+  file behind
+
+#### Scenario: A transcript fails verification or comparison
+
+- **WHEN** `verify` finds a divergence between a transcript and the engine,
+  or `replay` finds a difference between its observed result and the
+  original transcript
+- **THEN** the command exits 3 and reports the first typed difference
+
+#### Scenario: An output path already exists without `--force`
+
+- **WHEN** `replay` or `play` is given an `--output` path that already
+  exists and `--force` is not set
+- **THEN** the command exits 4, reports the existing path, and leaves it
+  untouched with no `.partial` file created
+
+#### Scenario: An output path names the same file as the input
+
+- **WHEN** `replay` or `play` is given `--output` and `--from` paths that
+  resolve to the same file
+- **THEN** the command exits 2 before any file is opened for writing, and
+  the input file is left untouched
+
+#### Scenario: An interactive `play` session ends without a terminal outcome
+
+- **WHEN** the operator types `quit`, or standard input reaches its end,
+  during a `play` session
+- **THEN** the command exits 5, the `.partial` recording is kept for
+  diagnosis, and no complete output file is created
+
+#### Scenario: An unparseable line does not stop an interactive session
+
+- **WHEN** the operator types a line `play`'s grammar does not recognize
+- **THEN** the command reports the parse problem on standard error and
+  keeps the session running, exactly as a rejected action does
+
 ## Sources
 
 - `designs/core_rules.md` defines the current prototype rules and their open areas.
@@ -672,10 +763,12 @@ types/archetypes document for content-design intent.
   running Damage total.
 - **Prize Card:** one of two face-down comeback resources recovered after the first two Main losses.
 - **Vault:** seven match-play cards outside the 20-card Deck.
+- **Resignation:** an action either player can submit at any time — regardless of whose turn it is, or whether a Priority window or a pending choice is open — that ends the game immediately in the opponent's favor.
 - **Set:** one versioned authored document that owns card definitions and their
   stable identities.
 - **Match transcript:** one versioned, append-only NDJSON record of a match's
-  initial state, actions, engine results, and final outcome.
+  initial state, actions, engine results, and final outcome. Its wire format
+  is versioned; only version 1 exists today.
 
 ## Important relationships
 
