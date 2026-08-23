@@ -14,7 +14,9 @@ unavailable.
 - `crates/cceroby`: local museum image search CLI and form with public-domain
   Art Institute of Chicago results, locally proxied artwork previews, exact
   attribution, a 24-hour metadata cache, a 30-day image cache, and a trusted
-  self-contained JPEG download path for provider image responses.
+  self-contained JPEG download path for provider image responses. The CLI can
+  inspect or clear its cache. A transient browser session stops after its last
+  tab closes; `--serve` keeps it available until Ctrl-C.
 - `xtask`: repository lint and Git hook automation.
 
 ## Design inputs
@@ -44,6 +46,13 @@ Run the workspace tests directly with:
 
 ```sh
 cargo test --workspace --all-targets
+```
+
+Inspect or clear Cceroby's user cache with:
+
+```sh
+cargo run -p cceroby -- cache info
+cargo run -p cceroby -- cache clear
 ```
 
 ## License
