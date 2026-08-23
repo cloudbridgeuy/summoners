@@ -7,6 +7,7 @@
 //! effects.
 #![deny(clippy::unwrap_used, clippy::expect_used)]
 
+use std::io;
 use std::process::ExitCode;
 
 use clap::Parser;
@@ -14,7 +15,7 @@ use summoners_cards::{CardLibrary, built_in_catalog};
 use summoners_shell::cli::{Cli, Command};
 use summoners_shell::error::ShellError;
 use summoners_shell::exit::exit_code;
-use summoners_shell::{replay, report, verify};
+use summoners_shell::{play, replay, report, verify};
 
 fn main() -> ExitCode {
     let command = Command::from(Cli::parse());
@@ -46,6 +47,24 @@ fn run(command: Command, library: &CardLibrary) -> Result<String, ShellError> {
         } => {
             let summary = replay::run_replay(&from, &output, force, library)?;
             Ok(report::replay_success(&from, &output, &summary))
+        }
+        Command::Play {
+            from,
+            output,
+            force,
+        } => {
+            let summary = play::run_play(
+                &from,
+                &output,
+                force,
+                library,
+                play::PlayStreams {
+                    input: io::stdin().lock(),
+                    output: io::stdout(),
+                    errors: io::stderr(),
+                },
+            )?;
+            Ok(report::play_success(&output, &summary))
         }
     }
 }

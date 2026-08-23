@@ -4,6 +4,7 @@ use std::path::Path;
 
 use summoners_match_log::compare::TranscriptDifference;
 
+use crate::play::PlaySummary;
 use crate::replay::ReplaySummary;
 use crate::verify::VerifySummary;
 
@@ -29,6 +30,18 @@ pub fn replay_success(from: &Path, output: &Path, summary: &ReplaySummary) -> St
     format!(
         "replay: expected {}, observed {}: ok ({} steps, {} events)",
         from.display(),
+        output.display(),
+        summary.steps,
+        summary.events
+    )
+}
+
+/// The stdout line for one interactive `play` session that reached a
+/// terminal outcome and was renamed into place.
+#[must_use]
+pub fn play_success(output: &Path, summary: &PlaySummary) -> String {
+    format!(
+        "play: {}: ok ({} steps, {} events)",
         output.display(),
         summary.steps,
         summary.events
@@ -132,6 +145,19 @@ mod tests {
                 &summary
             ),
             "replay: expected expected.ndjson, observed observed.ndjson: ok (4 steps, 5 events)"
+        );
+    }
+
+    #[test]
+    fn play_success_names_the_path_and_the_counts() {
+        let summary = PlaySummary {
+            steps: 3,
+            events: 2,
+        };
+
+        assert_eq!(
+            play_success(&PathBuf::from("played.ndjson"), &summary),
+            "play: played.ndjson: ok (3 steps, 2 events)"
         );
     }
 

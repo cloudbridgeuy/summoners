@@ -37,6 +37,19 @@ pub enum CliCommand {
         #[arg(long)]
         force: bool,
     },
+    /// Run an interactive session from a scenario's header metadata,
+    /// required Set revisions, and initial state, into a fresh recording.
+    Play {
+        /// Path to the NDJSON scenario transcript to start from.
+        #[arg(long = "from")]
+        from: PathBuf,
+        /// Path to write the played transcript to.
+        #[arg(long = "output")]
+        output: PathBuf,
+        /// Overwrite an existing output path.
+        #[arg(long)]
+        force: bool,
+    },
 }
 
 /// The strict, engine-facing command this process will run.
@@ -46,6 +59,11 @@ pub enum Command {
         path: PathBuf,
     },
     Replay {
+        from: PathBuf,
+        output: PathBuf,
+        force: bool,
+    },
+    Play {
         from: PathBuf,
         output: PathBuf,
         force: bool,
@@ -61,6 +79,15 @@ impl From<Cli> for Command {
                 output,
                 force,
             } => Self::Replay {
+                from,
+                output,
+                force,
+            },
+            CliCommand::Play {
+                from,
+                output,
+                force,
+            } => Self::Play {
                 from,
                 output,
                 force,
@@ -123,6 +150,49 @@ mod tests {
             Command::Replay {
                 from: PathBuf::from("expected.ndjson"),
                 output: PathBuf::from("observed.ndjson"),
+                force: false,
+            }
+        );
+    }
+
+    #[test]
+    fn play_maps_its_arguments() {
+        let cli = Cli::parse_from([
+            "summoners",
+            "play",
+            "--from",
+            "scenario.ndjson",
+            "--output",
+            "played.ndjson",
+            "--force",
+        ]);
+
+        assert_eq!(
+            Command::from(cli),
+            Command::Play {
+                from: PathBuf::from("scenario.ndjson"),
+                output: PathBuf::from("played.ndjson"),
+                force: true,
+            }
+        );
+    }
+
+    #[test]
+    fn play_defaults_force_to_false() {
+        let cli = Cli::parse_from([
+            "summoners",
+            "play",
+            "--from",
+            "scenario.ndjson",
+            "--output",
+            "played.ndjson",
+        ]);
+
+        assert_eq!(
+            Command::from(cli),
+            Command::Play {
+                from: PathBuf::from("scenario.ndjson"),
+                output: PathBuf::from("played.ndjson"),
                 force: false,
             }
         );
