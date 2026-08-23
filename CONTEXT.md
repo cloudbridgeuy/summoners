@@ -252,6 +252,49 @@ It keeps all normative values and array order exact.
 - **THEN** comparison returns a typed fault that identifies the expected or
   actual input
 
+### Requirement: Exact match transcript replay
+
+A caller can verify one complete **Match transcript** against an exact card
+library and the current game engine. Verification first uses the strict
+transcript parser. It checks every recorded Set revision before it gets the
+shared card pool or rebuilds the initial state. It then verifies the rebuilt
+initial projection and digest, and submits each normalized action to the real
+engine.
+
+An accepted action must have the exact ordered engine events and resulting
+state digest. A rejected action must have the exact typed engine error and
+must not change any state field, the shared card-pool identity, or the prior
+digest. Completion must have the full final state, exactly one `GameEnded`
+outcome, the same winner and loss reason, the exact step and event counts, and
+the final digest.
+
+#### Scenario: Replay prerequisites do not match
+
+- **WHEN** strict parsing fails, or a required Set is missing or has a wrong
+  revision
+- **THEN** verification returns the matching typed parser fault or Set
+  divergence before it gets the card pool or rebuilds the initial state
+
+#### Scenario: Accepted and rejected actions match
+
+- **WHEN** every normalized action produces its recorded accepted events or
+  recorded rejected error
+- **THEN** verification confirms every accepted digest and confirms that each
+  rejected action kept the complete state and digest unchanged
+
+#### Scenario: One replay value differs
+
+- **WHEN** an action result, ordered event, typed error, state, digest, count,
+  winner, or loss reason differs
+- **THEN** verification returns the first typed divergence with its phase,
+  available step and event index, stable path, expected value, and actual value
+
+#### Scenario: Terminal completion matches
+
+- **WHEN** replay reaches the recorded terminal action
+- **THEN** the engine state, the one `GameEnded` outcome, completion counts,
+  winner, loss reason, and final digests all match the transcript
+
 ### Requirement: Deterministic match transcript contract
 
 The version 1 **Match transcript** contract contains exactly one JSON Schema
