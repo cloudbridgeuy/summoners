@@ -15,3 +15,5 @@
 
 # Bacon
 .bacon-locations
+
+.env
