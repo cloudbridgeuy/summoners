@@ -1,0 +1,7 @@
+[default.extend-words]
+artic = "artic"
+nd = "nd"
+visuales = "visuales"
+
+[default.extend-identifiers]
+WRONLY = "WRONLY"
