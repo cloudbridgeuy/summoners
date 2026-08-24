@@ -9,11 +9,290 @@ rules described below. The engine reads no file, calls no network, uses no
 clock, and uses no random source. Every entry point takes one state value and
 one action, and returns a new state value; it never mutates anything the caller
 still holds. A strict authored-card boundary parses caller-held Set bytes into
-core definitions without file I/O. There is no CLI, server, client, runtime
-file loader, Deck loader, or built-in catalog yet. This file is an index of
-stable product language, not an API contract.
+core definitions without file I/O. A separate CLI serves a local museum image
+search form. It connects to the Art Institute of Chicago, the Cleveland Museum
+of Art, the Metropolitan Museum of Art, and Wikimedia Commons. It attempts
+Smithsonian Open Access requests when `SMITHSONIAN_API_KEY` has a non-empty
+value that is valid as an HTTP header. There is no game client or
+runtime file loader yet. Detail pages include a trusted self-contained JPEG
+download path for provider image responses. This file is an index of stable
+product language, not an API contract.
 
 ## Behavior
+
+### Requirement: Local museum image search
+
+The `cceroby search` command parses a non-empty query, one or more of five
+museum sources, an optional culture or region, an output directory, and local
+server options before it starts a loopback-only server on an operating-system
+assigned port. The local page keeps valid query and filter values in its form.
+The Art Institute of Chicago search keeps only records that the response marks
+as public domain. The Cleveland Museum of Art search requires exact CC0 records
+with display images and supports a culture filter. The Metropolitan Museum of
+Art and configured Smithsonian Open Access searches also keep only records with
+an accepted public-use license. All connected sources show normalized result
+cards. Smithsonian requests use the configured key without putting it in
+browser content, diagnostics, or cache names. Metadata responses stay in the
+user cache for 24 hours. Card and preview image bytes stay in a separate user
+cache for 30 days. Cards use local image and detail routes that accept only a
+known source and object ID. The detail route reconstructs trusted provider
+metadata and shows a local-proxy preview, normalized metadata, a compact
+URL-free card credit, and separate license and source-object links. Provider
+slots that do not have a connection return an unavailable notice, and a
+connected-provider failure returns one failure notice without stopping the
+page. A corrupt metadata or thumbnail cache entry degrades to a cache miss
+instead of stopping the search. Startup removes expired and corrupt cache
+entries on a best-effort basis. The cache commands report the resolved cache
+path and separate fresh and expired file counts and byte totals for metadata
+and thumbnails, or remove only the Cceroby cache root. Cache inspection does
+not follow symbolic links.
+The detail page accepts an editable safe file name and free-form tags. A
+download requires the Host and Origin to match the exact authority assigned to
+the loopback listener. It strictly parses the complete form before provider I/O
+and reconstructs all policy and remote-request data from the provider, keeps
+native JPEG scan data, converts TIFF input once, embeds attribution and tags as
+standard XMP, and atomically writes one JPEG in the selected output directory.
+Each search batch requests each active selected source once. The session keeps
+an independent provider cursor, removes duplicate `(source, object ID)` values,
+and interleaves accepted records in fixed source order. A local Load more
+control requests only `/more`, appends trusted local card fragments, updates
+the count, and removes itself when no provider has another cursor. Wikimedia
+Commons requests use a descriptive User-Agent. It accepts only CC0, Public
+Domain Mark, or CC BY from trusted `extmetadata` license fields. It accepts
+`MNAV` and `CdF` in the culture or region field as Uruguay institution category
+filters. Each complete search or detail page holds one local event stream while its tab
+is open. Without `--serve`, the server stops after a same-authority POST quit
+request or after the last connected tab stays disconnected for 10 seconds. It
+does not stop before a page has connected, and a reconnect restarts the grace
+period. With `--serve`, browser quit and disconnect events do not stop the
+server. Ctrl-C stops either mode and closes open event streams cleanly.
+
+#### Scenario: A valid local search starts
+
+- **WHEN** a user starts a search with a valid query, source set, and output
+  directory
+- **THEN** the CLI reports a `127.0.0.1` URL with an assigned port
+- **AND** the root page contains the initial query, sources, culture or region,
+  and search control
+- **AND** the page contains the initial search results and provider notices
+
+#### Scenario: An Art Institute search succeeds
+
+- **WHEN** the Art Institute of Chicago returns matching public-domain records
+- **THEN** the page shows the loaded result count
+- **AND** each accepted record has a locally proxied thumbnail, detail link,
+  title, institution, and public-domain license badge
+- **AND** a record that is not public domain does not appear
+
+#### Scenario: A Metropolitan Museum search succeeds
+
+- **WHEN** the Metropolitan Museum of Art returns object IDs for a query
+- **THEN** the server loads one bounded page of object records through the
+  metadata cache
+- **AND** the page shows only public-domain objects with an identity, title,
+  canonical HTTPS object page, and required canonical HTTPS image URLs
+- **AND** one failed or rejected object does not remove other accepted objects
+  from the page
+
+#### Scenario: A Smithsonian Open Access search succeeds
+
+- **WHEN** `SMITHSONIAN_API_KEY` contains a valid api.data.gov key and
+  Smithsonian returns matching records
+- **THEN** the page shows only records with an official `edanmdm:` identity,
+  a canonical HTTPS object page, and canonical HTTPS image URLs
+- **AND** the selected media item has the exact type `Images` and the exact
+  access value `CC0`
+- **AND** African, Asian, and pre-Columbian filters use their documented museum
+  unit codes
+- **AND** provider requests, diagnostics, cache names, and browser content do
+  not contain the key value
+- **AND** a redirect does not send the key to another server
+
+#### Scenario: A Smithsonian key is not usable as a header
+
+- **WHEN** a user selects Smithsonian while `SMITHSONIAN_API_KEY` is missing,
+  empty, or not valid as an HTTP header
+- **THEN** the page shows one Smithsonian unavailable notice
+- **AND** other selected connected sources can return their results
+
+#### Scenario: The Smithsonian service rejects a key
+
+- **WHEN** `SMITHSONIAN_API_KEY` is valid as an HTTP header but the Smithsonian
+  service rejects it
+- **THEN** the page shows one Smithsonian failure notice after the request
+- **AND** it does not describe Smithsonian as unavailable
+
+#### Scenario: A Cleveland Museum search succeeds
+
+- **WHEN** the Cleveland Museum of Art returns matching CC0 records for an
+  optional culture filter
+- **THEN** the page shows normalized records with the museum's exact object URL
+  and credit line
+- **AND** records with a missing ID, title, exact CC0 state, absolute HTTP(S)
+  object URL, or valid absolute HTTP(S) display image do not appear
+- **AND** card and preview requests use the best available JPEG sizes
+- **AND** a download uses the highest-resolution TIFF when available or the best
+  JPEG otherwise
+
+#### Scenario: A user opens one artwork
+
+- **WHEN** the user follows a result card's detail link
+- **THEN** the server reconstructs the artwork from its known source and object
+  ID through the provider and metadata cache
+- **AND** the page shows a full local-proxy preview, title, institution, source
+  ID, and compact card credit without raw URLs
+- **AND** separate License and Source object rows link to the accepted license
+  and trusted source object
+- **AND** creator, date, and culture or region appear when available
+- **AND** the Back link returns to the accumulated search results
+
+#### Scenario: An artwork route receives untrusted input
+
+- **WHEN** a thumbnail, preview, or detail request has an unknown source,
+  malformed object ID, duplicate field, unrecognized field, or remote URL
+- **THEN** the server rejects the request with a short error
+- **AND** it does not fetch the browser-provided remote URL
+
+#### Scenario: A trusted artwork download succeeds
+
+- **WHEN** the user submits the source, object ID, safe file name, and optional
+  comma- or newline-separated tags from a detail page
+- **THEN** the server reconstructs the artwork, license, exact attribution, and
+  best image request from trusted provider data
+- **AND** the full image request uses the provider rate limit and headers
+  without writing the response to the metadata or thumbnail cache
+- **AND** the server writes `<output>/<file-name>.jpg` with the attribution and
+  ordered, de-duplicated tags in standard XMP
+- **AND** the detail page reports the created path
+
+#### Scenario: A download target exists
+
+- **WHEN** the user downloads the same safe file name again
+- **THEN** a durable same-directory temporary write atomically replaces the
+  existing JPEG
+- **AND** the detail page reports that it replaced the path
+- **AND** no metadata sidecar remains
+- **AND** two concurrent writes for the same new name report one creation and
+  one replacement and leave one complete JPEG
+
+#### Scenario: A downloaded image is JPEG or TIFF
+
+- **WHEN** the provider returns a native JPEG
+- **THEN** XMP embedding preserves its scan data and all non-XMP marker data
+- **WHEN** the provider returns TIFF data
+- **THEN** the server converts it once to JPEG at quality 100 before it uses the
+  same XMP and atomic-write path
+- **WHEN** any metadata or tag contains a code point that XML 1.0 does not
+  permit
+- **THEN** XMP construction returns a typed error before a JPEG is written
+
+#### Scenario: A download form contains untrusted fields
+
+- **WHEN** a download form contains an unknown, duplicate, missing, malformed,
+  path, remote URL, license, or attribution value
+- **THEN** the server rejects the untrusted input or shows a short typed error
+- **AND** browser data cannot select a remote request or output path
+- **WHEN** the form has malformed percent or UTF-8 encoding, or its Host and
+  Origin do not exactly match the authority assigned to the loopback listener
+- **OR WHEN** a hostile Host and Origin match each other but not that assigned
+  authority
+- **THEN** the server rejects it before provider or storage I/O
+
+#### Scenario: A thumbnail is still fresh
+
+- **WHEN** the local proxy requests the same provider-derived image less than
+  30 days after a successful image response
+- **THEN** it uses the cached image bytes without a second image request
+
+#### Scenario: A thumbnail cache entry is corrupt or expired
+
+- **WHEN** a thumbnail cache entry is malformed or reaches its 30-day boundary
+- **THEN** the proxy treats the entry as a cache miss and removes it on a
+  best-effort basis
+- **AND** the provider image request can continue
+
+#### Scenario: Search form values change
+
+- **WHEN** a user submits a non-empty query and source set from the local page
+- **THEN** the page keeps the submitted query and filters
+- **AND** each selected source without a connection has an unavailable notice
+
+#### Scenario: A metadata response is still fresh
+
+- **WHEN** the user repeats the same connected-provider request less than 24
+  hours after a successful metadata response
+- **THEN** the page uses the cached metadata without a second provider request
+
+#### Scenario: A metadata cache entry is corrupt
+
+- **WHEN** a metadata cache entry is malformed or has a time that the system
+  cannot represent
+- **THEN** the search treats the entry as a cache miss and removes it on a
+  best-effort basis
+- **AND** the provider request can continue
+
+#### Scenario: A user inspects or clears the cache
+
+- **WHEN** the user runs `cceroby cache info`
+- **THEN** the command reports the resolved cache path
+- **AND** it reports fresh and expired file counts and byte totals separately
+  for metadata and thumbnails
+- **WHEN** the user runs `cceroby cache clear`
+- **THEN** the command reports the number of removed files
+- **AND** on Apple platforms, Linux, and Android it atomically detaches and
+  removes only the Cceroby cache root without following symbolic links
+- **AND** a cache root that a writer creates after the detach operation remains
+- **AND** if the detached root or a nested entry changes identity, the command
+  fails without deleting the replacement
+- **AND** a permission, inspection, count, or removal error makes the command
+  fail without a success report
+- **AND** a missing or disabled cache is a safe no-op
+- **AND** on a platform without the required atomic no-replace rename, the
+  command refuses removal
+
+#### Scenario: Startup prunes old cache entries
+
+- **WHEN** a search starts with expired or corrupt metadata or thumbnails
+- **THEN** on Unix startup removes those entries on a best-effort basis with
+  handle-relative operations that do not follow symbolic links
+- **AND** a cache I/O error does not stop normal search work
+- **AND** on a platform without safe handle-relative cache operations, normal
+  search work continues without cache reads, writes, or pruning
+
+#### Scenario: A connected provider fails
+
+- **WHEN** a selected connected provider cannot complete its search
+- **THEN** the page shows one failure notice for that provider
+- **AND** the page remains available with an empty result set
+
+#### Scenario: Command input is invalid
+
+- **WHEN** a user supplies an empty source set or an output path that is not an
+  available directory
+- **THEN** the command reports the input error before it starts the server
+
+#### Scenario: A browser controls a transient server
+
+- **WHEN** the first search or detail page connects to the local event stream
+  and all connected pages then stay disconnected for 10 seconds
+- **THEN** the server completes graceful shutdown
+- **WHEN** a page reconnects during the 10-second grace period
+- **THEN** the server stays available and restarts the full grace period after
+  the next disconnect
+- **WHEN** no page has connected
+- **THEN** the disconnect timer does not stop the server
+- **WHEN** the user presses Esc on a search or detail page
+- **THEN** the page sends a POST quit request with the same exact Host and
+  Origin authority required by trusted downloads
+- **AND** a missing, hostile, or mismatched authority cannot request shutdown
+
+#### Scenario: The user keeps or stops the local server
+
+- **WHEN** the local server receives Ctrl-C
+- **THEN** it completes graceful shutdown and the command exits
+- **WHEN** the user starts the search with `--serve`
+- **THEN** tab disconnects and browser quit requests do not stop the server
+- **AND** Ctrl-C remains available
 
 ### Requirement: Complete local quality gate
 

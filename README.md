@@ -2,12 +2,31 @@
 
 Home of Summoners, a two-player card game.
 
-This repository currently contains the Rust workspace and development tools.
-It does not yet implement the game rules.
+This repository contains the deterministic game rules, authored card data, a
+local museum image search shell, and development tools. The search shell
+connects to the Art Institute of Chicago, the Cleveland Museum of Art, the
+Metropolitan Museum of Art, and Wikimedia Commons. It connects to Smithsonian
+Open Access when `SMITHSONIAN_API_KEY` contains an api.data.gov key.
 
 ## Workspace
 
 - `crates/core`: the dependency-free deterministic rules and state-transition library.
+- `crates/cards`: strict authored Set and Deck loading with built-in content.
+- `crates/cceroby`: local museum image search CLI and form with public-domain
+  Art Institute of Chicago, CC0 Cleveland Museum, Metropolitan Museum of Art,
+  configured Smithsonian Open Access results, and Wikimedia Commons results;
+  locally proxied artwork
+  previews; compact URL-free card credit with separate license and source
+  links; full attribution in downloaded JPEG XMP; a 24-hour metadata cache; a
+  30-day image cache; and a trusted self-contained JPEG download path.
+  Cleveland downloads use valid absolute HTTP(S) full TIFF originals when
+  available and the best valid absolute HTTP(S) JPEG otherwise. The CLI can
+  inspect or clear its cache. A transient browser session stops after its last
+  tab closes; `--serve` keeps it available until Ctrl-C. Results load in fixed
+  source order and can load the next independent source page without duplicate
+  source objects. Wikimedia Commons keeps only CC0, Public Domain Mark, and CC
+  BY files from trusted file metadata. The culture or region field accepts
+  `MNAV` and `CdF` as Uruguay institution filters.
 - `xtask`: repository lint and Git hook automation.
 
 ## Design inputs
@@ -38,6 +57,34 @@ Run the workspace tests directly with:
 ```sh
 cargo test --workspace --all-targets
 ```
+
+To enable Smithsonian Open Access, get an api.data.gov key and set it only in
+the process environment:
+
+```sh
+export SMITHSONIAN_API_KEY='<api.data.gov key>'
+```
+
+The Smithsonian source stays unavailable when this variable is missing, empty,
+or not valid as an HTTP header. A syntactically valid key that the service
+rejects produces one provider failure after the request. The search page does
+not show the variable name or its value.
+
+Inspect or clear Cceroby's user cache with:
+
+```sh
+cargo run -p cceroby -- cache info
+cargo run -p cceroby -- cache clear
+```
+
+On Unix, cache access and pruning use no-follow file handles. On Apple
+platforms, Linux, and Android, cache removal first detaches the exact cache
+root. Thus, a new cache that a running search creates remains. A removal error
+returns a failure and does not print a success report. If the detached root or
+a nested entry changes during removal, Cceroby stops and does not delete the
+replacement. A platform without the required atomic rename refuses cache
+removal. On non-Unix platforms, Cceroby keeps search work available without
+cache I/O.
 
 ## License
 

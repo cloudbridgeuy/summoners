@@ -1,0 +1,10 @@
+{
+  "pagination": {
+    "current_page": 1,
+    "total_pages": 1
+  },
+  "data": [],
+  "config": {
+    "iiif_url": "  "
+  }
+}

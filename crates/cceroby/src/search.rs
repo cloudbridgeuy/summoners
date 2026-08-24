@@ -1,0 +1,846 @@
+//! Listener, browser, and process-signal shell for local search.
+
+use std::future::Future;
+use std::net::SocketAddr;
+use std::sync::Arc;
+use std::time::{Duration, SystemTime};
+
+use color_eyre::eyre::{Result, WrapErr};
+use futures::future::join_all;
+use thiserror::Error;
+use tokio::net::TcpListener;
+use tokio::sync::{Notify, broadcast};
+
+use crate::artwork::ArtworkKey;
+use crate::asset_writer::write_atomic_replace;
+use crate::cache::Cache;
+use crate::core::{
+    ProviderCursor, ProviderOutcome, ProviderPage, SearchQuery, SearchSeed, SearchSession,
+};
+use crate::download::{DownloadError, DownloadJob, SavedAsset};
+use crate::http::HttpClient;
+use crate::image::{DownloadedImage, ImageError};
+use crate::providers::{
+    DisplayImageSize, DisplayMediaType, HttpRequest, Provider, ProviderCandidate,
+    ProviderConfigError, ProviderEntry, ProviderSet,
+};
+use crate::rate_limit::RateLimiters;
+use crate::server::{self, AppState, LiveConnections};
+use crate::xmp::{build_xmp_packet, embed_xmp};
+
+/// Provider I/O dependencies shared by startup and form searches.
+#[derive(Debug, Clone)]
+pub struct SearchServices {
+    providers: ProviderSet,
+    cache: Cache,
+    http: HttpClient,
+    rate_limiters: RateLimiters,
+}
+
+impl SearchServices {
+    pub fn from_env() -> std::result::Result<Self, ProviderConfigError> {
+        let cache = Cache::from_user_cache_dir();
+        let _ = cache.prune_expired(SystemTime::now());
+        Ok(Self {
+            providers: ProviderSet::from_env()?,
+            cache,
+            http: HttpClient::new(),
+            rate_limiters: RateLimiters::new(),
+        })
+    }
+
+    #[must_use]
+    pub fn new(
+        providers: ProviderSet,
+        cache: Cache,
+        http: HttpClient,
+        rate_limiters: RateLimiters,
+    ) -> Self {
+        Self {
+            providers,
+            cache,
+            http,
+            rate_limiters,
+        }
+    }
+
+    pub async fn search_batch(&self, query: &SearchQuery) -> Vec<ProviderOutcome> {
+        let cursors = query
+            .sources
+            .as_slice()
+            .iter()
+            .copied()
+            .map(|source| ProviderCursor {
+                source,
+                cursor: None,
+            })
+            .collect::<Vec<_>>();
+        self.search_batch_with_cursors(query, &cursors).await
+    }
+
+    pub async fn search_batch_with_cursors(
+        &self,
+        query: &SearchQuery,
+        cursors: &[ProviderCursor],
+    ) -> Vec<ProviderOutcome> {
+        let now = SystemTime::now();
+        let searches = cursors.iter().filter_map(|cursor| {
+            let entry = self.providers.get(cursor.source);
+            query
+                .sources
+                .contains(cursor.source)
+                .then(|| self.search_one(entry, query, cursor.cursor.as_deref(), now))
+        });
+        join_all(searches).await
+    }
+
+    /// Reconstruct one trusted artwork from its provider and metadata cache.
+    pub async fn load_artwork(
+        &self,
+        key: &ArtworkKey,
+    ) -> std::result::Result<crate::core::Artwork, ArtworkLoadError> {
+        let ProviderEntry::Available(provider) = self.providers.get(key.source()) else {
+            return Err(ArtworkLoadError::SourceUnavailable);
+        };
+        let request = provider
+            .artwork_request(key)
+            .map_err(|_| ArtworkLoadError::ArtworkUnavailable)?;
+        let bytes = self
+            .get_metadata(provider, &request, SystemTime::now())
+            .await
+            .map_err(|_| ArtworkLoadError::ArtworkUnavailable)?;
+        provider
+            .parse_artwork_response_for_key(key, &bytes)
+            .map_err(|_| ArtworkLoadError::ArtworkUnavailable)
+    }
+
+    /// Load one provider-derived display image through the thumbnail byte cache.
+    pub async fn load_display_image(
+        &self,
+        key: &ArtworkKey,
+        size: DisplayImageSize,
+    ) -> std::result::Result<DisplayImage, ArtworkLoadError> {
+        let artwork = self.load_artwork(key).await?;
+        let ProviderEntry::Available(provider) = self.providers.get(key.source()) else {
+            return Err(ArtworkLoadError::SourceUnavailable);
+        };
+        let display_request = provider
+            .display_image_request(&artwork, size)
+            .map_err(|_| ArtworkLoadError::ImageUnavailable)?;
+        let now = SystemTime::now();
+        if let Some(cached) = self
+            .cache
+            .read_thumbnail(display_request.request().canonical(), now)
+        {
+            return Ok(DisplayImage {
+                bytes: cached.bytes,
+                media_type: cached.media_type,
+            });
+        }
+        self.rate_limiters.acquire(provider).await;
+        let bytes = self
+            .http
+            .execute(display_request.request())
+            .await
+            .map_err(|_| ArtworkLoadError::ImageUnavailable)?;
+        let fetched_at = SystemTime::now();
+        let media_type = display_request.media_type();
+        let _ = self.cache.write_thumbnail(
+            display_request.request().canonical(),
+            media_type,
+            &bytes,
+            fetched_at,
+        );
+        Ok(DisplayImage { bytes, media_type })
+    }
+
+    /// Fetch one full provider image without caching it, then write its self-contained JPEG.
+    pub(crate) async fn download(
+        &self,
+        job: DownloadJob<'_>,
+    ) -> std::result::Result<SavedAsset, DownloadError> {
+        let ProviderEntry::Available(provider) = self.providers.get(job.artwork.source) else {
+            return Err(DownloadError::Provider);
+        };
+        let request = provider
+            .best_image_request(job.artwork)
+            .map_err(|_| DownloadError::Provider)?;
+        self.rate_limiters.acquire(provider).await;
+        let bytes = self
+            .http
+            .execute(&request)
+            .await
+            .map_err(|_| DownloadError::Provider)?;
+        let downloaded = DownloadedImage::try_from_magic(bytes).map_err(|error| match error {
+            ImageError::UnsupportedFormat => DownloadError::UnsupportedFormat,
+            ImageError::ConversionFailed => DownloadError::Image,
+        })?;
+        let jpeg = downloaded
+            .into_jpeg_quality_100()
+            .map_err(|_| DownloadError::Image)?;
+        let packet = build_xmp_packet(job.artwork, job.attribution, job.tags)
+            .map_err(|_| DownloadError::Xmp)?;
+        let embedded = embed_xmp(&jpeg, &packet).map_err(|_| DownloadError::Xmp)?;
+        write_atomic_replace(job.output, job.slug, &embedded).map_err(|_| DownloadError::Write)
+    }
+
+    async fn search_one(
+        &self,
+        entry: ProviderEntry<'_>,
+        query: &SearchQuery,
+        cursor: Option<&str>,
+        now: SystemTime,
+    ) -> ProviderOutcome {
+        let ProviderEntry::Available(provider) = entry else {
+            return ProviderOutcome::Unavailable {
+                source: entry.kind(),
+            };
+        };
+        if provider.validate_search_cursor(cursor).is_err() {
+            return ProviderOutcome::Failed {
+                source: provider.kind(),
+            };
+        }
+        let request = provider.search_request(query, cursor);
+        let result: std::result::Result<ProviderPage, ()> = async {
+            let bytes = self.get_metadata(provider, &request, now).await?;
+            let page = provider.parse_search(&bytes, cursor).map_err(|_| ())?;
+            let candidates = page
+                .candidates
+                .iter()
+                .map(|candidate| self.resolve_candidate(provider, candidate, now));
+            let artworks = join_all(candidates).await.into_iter().flatten().collect();
+            Ok(ProviderPage {
+                source: provider.kind(),
+                artworks,
+                next_cursor: page.next_cursor,
+            })
+        }
+        .await;
+        ProviderOutcome::from_result(provider.kind(), result)
+    }
+
+    async fn resolve_candidate(
+        &self,
+        provider: &dyn Provider,
+        candidate: &ProviderCandidate,
+        now: SystemTime,
+    ) -> Option<crate::core::Artwork> {
+        let object_bytes = match provider.object_request(candidate) {
+            Some(request) => Some(self.get_metadata(provider, &request, now).await.ok()?),
+            None => None,
+        };
+        provider
+            .parse_artwork(candidate, object_bytes.as_deref())
+            .ok()
+    }
+
+    async fn get_metadata(
+        &self,
+        provider: &dyn Provider,
+        request: &HttpRequest,
+        now: SystemTime,
+    ) -> std::result::Result<Vec<u8>, ()> {
+        if let Some(bytes) = self
+            .cache
+            .read_metadata(provider.kind(), request.canonical(), now)
+        {
+            return Ok(bytes);
+        }
+        self.rate_limiters.acquire(provider).await;
+        let bytes = self.http.execute(request).await.map_err(|_| ())?;
+        let _ = self
+            .cache
+            .write_metadata(provider.kind(), request.canonical(), &bytes, now);
+        Ok(bytes)
+    }
+}
+
+/// Provider image bytes paired with a browser-safe media type.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DisplayImage {
+    pub bytes: Vec<u8>,
+    pub media_type: DisplayMediaType,
+}
+
+/// A short artwork load failure that contains no transport data.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum ArtworkLoadError {
+    #[error("the artwork source is not available")]
+    SourceUnavailable,
+    #[error("the artwork is not available")]
+    ArtworkUnavailable,
+    #[error("the artwork image is not available")]
+    ImageUnavailable,
+}
+
+/// Bind a loopback-only listener on a free operating-system assigned port.
+pub async fn bind_listener(address: &str) -> std::io::Result<TcpListener> {
+    TcpListener::bind(address).await
+}
+
+/// Start the local page and stop it after Ctrl-C.
+pub async fn run(seed: SearchSeed) -> Result<()> {
+    let should_open = seed.open;
+    let output = seed.output.clone();
+    let query = SearchQuery::from_seed(&seed);
+    let services = SearchServices::from_env().wrap_err("cannot configure providers")?;
+    let mut session = SearchSession::new(query);
+    let outcomes = services
+        .search_batch_with_cursors(session.view().query, &session.next_batch())
+        .await;
+    let _ = session.merge_batch(outcomes);
+    let listener = bind_listener("127.0.0.1:0")
+        .await
+        .wrap_err("cannot bind the local search server")?;
+    let address = listener
+        .local_addr()
+        .wrap_err("cannot read the local search address")?;
+    let url = serving_url(address);
+    let (shutdown, receiver) = broadcast::channel(1);
+    let state = AppState::new(session, services, output, address, shutdown);
+
+    eprintln!("Serving {url}");
+    eprintln!("Press Ctrl-C to stop.");
+    if should_open && webbrowser::open(&url).is_err() {
+        eprintln!("Could not open the default browser. Open {url} manually.");
+    }
+
+    let signal = shutdown_signal(
+        state.live_connections(),
+        state.quit_notifier(),
+        seed.serve,
+        state.shutdown_sender(),
+    );
+    let server = server::run(listener, state, receiver);
+    let (signal_result, server_result) = tokio::join!(signal, server);
+    signal_result?;
+    server_result.wrap_err("the local search server stopped with an error")
+}
+
+/// The event that selected transient or persistent shutdown.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShutdownReason {
+    CtrlC,
+    BrowserQuit,
+    BrowserClosed,
+}
+
+/// Wait for the selected lifecycle event and notify all local server tasks.
+pub async fn shutdown_signal(
+    live: LiveConnections,
+    quit: Arc<Notify>,
+    persistent: bool,
+    shutdown: broadcast::Sender<()>,
+) -> Result<()> {
+    let reason = select_shutdown(live, quit, persistent, async {
+        tokio::signal::ctrl_c()
+            .await
+            .wrap_err("cannot install the Ctrl-C handler")
+    })
+    .await?;
+    eprintln!("{}", shutdown_message(reason));
+    let _ = shutdown.send(());
+    Ok(())
+}
+
+/// Select the lifecycle event. The Ctrl-C future is injected for direct tests.
+pub async fn select_shutdown<F>(
+    live: LiveConnections,
+    quit: Arc<Notify>,
+    persistent: bool,
+    ctrl_c: F,
+) -> Result<ShutdownReason>
+where
+    F: Future<Output = Result<()>>,
+{
+    if persistent {
+        ctrl_c.await?;
+        return Ok(ShutdownReason::CtrlC);
+    }
+
+    tokio::select! {
+        result = ctrl_c => {
+            result?;
+            Ok(ShutdownReason::CtrlC)
+        }
+        () = quit.notified() => Ok(ShutdownReason::BrowserQuit),
+        () = browser_closed(live) => Ok(ShutdownReason::BrowserClosed),
+    }
+}
+
+async fn browser_closed(live: LiveConnections) {
+    const GRACE: Duration = Duration::from_secs(10);
+
+    let mut changes = live.subscribe();
+    loop {
+        let snapshot = *changes.borrow_and_update();
+        if !snapshot.ever_connected || snapshot.active > 0 {
+            let _ = changes.changed().await;
+            continue;
+        }
+        let generation = snapshot.generation;
+        tokio::select! {
+            _ = tokio::time::sleep(GRACE) => {
+                let current = live.snapshot();
+                if current.active == 0 && current.generation == generation {
+                    return;
+                }
+            }
+            result = changes.changed() => {
+                let _ = result;
+            }
+        }
+    }
+}
+
+#[must_use]
+const fn shutdown_message(reason: ShutdownReason) -> &'static str {
+    match reason {
+        ShutdownReason::CtrlC => "Stopping after Ctrl-C.",
+        ShutdownReason::BrowserQuit => "Stopping after the browser request.",
+        ShutdownReason::BrowserClosed => "Stopping after the browser closed.",
+    }
+}
+
+fn serving_url(address: SocketAddr) -> String {
+    format!("http://{address}")
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::expect_used)]
+
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use axum::Router;
+    use axum::extract::State;
+    use axum::routing::get;
+    use tempfile::tempdir;
+    use url::Url;
+
+    use crate::core::{
+        Artwork, CommercialLicense, Culture, ImageUrls, QueryText, SourceKind, SourceSet,
+    };
+    use crate::providers::{ArtworkDropReason, ProviderError, ProviderSearchPage};
+
+    use super::*;
+
+    struct ObjectProvider {
+        endpoint: Url,
+    }
+
+    impl Provider for ObjectProvider {
+        fn kind(&self) -> SourceKind {
+            SourceKind::ClevelandMuseum
+        }
+
+        fn rate_policy(&self) -> crate::providers::RatePolicy {
+            crate::providers::RatePolicy::Unlimited
+        }
+
+        fn search_request(&self, _query: &SearchQuery, _cursor: Option<&str>) -> HttpRequest {
+            HttpRequest::get(self.endpoint.join("search").expect("search URL is valid"))
+        }
+
+        fn parse_search(
+            &self,
+            _bytes: &[u8],
+            _cursor: Option<&str>,
+        ) -> Result<ProviderSearchPage, ProviderError> {
+            Ok(ProviderSearchPage {
+                candidates: vec![ProviderCandidate {
+                    raw: serde_json::json!({ "id": "1" }),
+                    context: None,
+                }],
+                next_cursor: None,
+            })
+        }
+
+        fn object_request(&self, _candidate: &ProviderCandidate) -> Option<HttpRequest> {
+            Some(HttpRequest::get(
+                self.endpoint.join("object/1").expect("object URL is valid"),
+            ))
+        }
+
+        fn parse_artwork(
+            &self,
+            _candidate: &ProviderCandidate,
+            object_bytes: Option<&[u8]>,
+        ) -> Result<Artwork, ArtworkDropReason> {
+            if object_bytes != Some(b"object".as_slice()) {
+                return Err(ArtworkDropReason::MissingImage);
+            }
+            Ok(Artwork {
+                source: self.kind(),
+                source_id: "1".into(),
+                title: "Mask".into(),
+                creator: None,
+                date: None,
+                culture: None,
+                license: CommercialLicense::PublicDomain,
+                image_urls: ImageUrls {
+                    thumbnail: "https://example.test/thumb.jpg".into(),
+                    display: "https://example.test/display.jpg".into(),
+                    original: None,
+                },
+                institution: self.kind().label().into(),
+                provider_credit: None,
+                object_url: "https://example.test/object/1".into(),
+            })
+        }
+
+        fn artwork_request(&self, _key: &ArtworkKey) -> Result<HttpRequest, ProviderError> {
+            Ok(HttpRequest::get(
+                self.endpoint.join("object/1").expect("object URL is valid"),
+            ))
+        }
+
+        fn parse_artwork_response(&self, bytes: &[u8]) -> Result<Artwork, ProviderError> {
+            self.parse_artwork(
+                &ProviderCandidate {
+                    raw: serde_json::json!({ "id": "1" }),
+                    context: None,
+                },
+                Some(bytes),
+            )
+            .map_err(|_| ProviderError::MalformedResponse)
+        }
+
+        fn display_image_request(
+            &self,
+            artwork: &Artwork,
+            size: DisplayImageSize,
+        ) -> Result<crate::providers::DisplayImageRequest, ProviderError> {
+            let raw = match size {
+                DisplayImageSize::Card => &artwork.image_urls.thumbnail,
+                DisplayImageSize::Preview => &artwork.image_urls.display,
+            };
+            Url::parse(raw)
+                .map(HttpRequest::get)
+                .map(|request| {
+                    crate::providers::DisplayImageRequest::new(
+                        request,
+                        crate::providers::DisplayMediaType::Jpeg,
+                    )
+                })
+                .map_err(|_| ProviderError::InvalidImageRequest)
+        }
+    }
+
+    async fn counted_response(
+        State(requests): State<Arc<AtomicUsize>>,
+        body: &'static str,
+    ) -> &'static str {
+        requests.fetch_add(1, Ordering::SeqCst);
+        body
+    }
+
+    #[tokio::test]
+    async fn listener_uses_loopback_and_an_assigned_port() {
+        let listener = bind_listener("127.0.0.1:0").await.expect("listener binds");
+        let address = listener.local_addr().expect("address is available");
+        assert!(address.ip().is_loopback());
+        assert_ne!(address.port(), 0);
+    }
+
+    #[test]
+    fn serving_url_includes_the_assigned_address() {
+        let address: SocketAddr = "127.0.0.1:45123".parse().expect("address is valid");
+        assert_eq!(serving_url(address), "http://127.0.0.1:45123");
+    }
+
+    #[tokio::test]
+    async fn generic_search_path_fetches_an_optional_object_request() {
+        let requests = Arc::new(AtomicUsize::new(0));
+        let app = Router::new()
+            .route("/search", get(|state| counted_response(state, "search")))
+            .route("/object/1", get(|state| counted_response(state, "object")))
+            .with_state(requests.clone());
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("mock listener binds");
+        let address = listener.local_addr().expect("mock address exists");
+        let task = tokio::spawn(async move {
+            axum::serve(listener, app).await.expect("mock server runs");
+        });
+        let endpoint = Url::parse(&format!("http://{address}/")).expect("endpoint is valid");
+        let provider = ObjectProvider { endpoint };
+        let cache_root = tempdir().expect("temporary cache exists");
+        let services = SearchServices::new(
+            ProviderSet::from_env().expect("provider set is valid"),
+            Cache::new(cache_root.path().to_path_buf()),
+            HttpClient::new(),
+            RateLimiters::new(),
+        );
+        let query = SearchQuery {
+            query: QueryText::parse("mask").expect("query is valid"),
+            sources: SourceSet::parse(&[SourceKind::ClevelandMuseum]).expect("source is valid"),
+            culture: Culture::parse(None),
+        };
+
+        let outcome = services
+            .search_one(
+                ProviderEntry::Available(&provider),
+                &query,
+                None,
+                SystemTime::now(),
+            )
+            .await;
+
+        let ProviderOutcome::Success(page) = outcome else {
+            panic!("provider succeeds");
+        };
+        assert_eq!(page.artworks.len(), 1);
+        assert_eq!(requests.load(Ordering::SeqCst), 2);
+        task.abort();
+    }
+    #[tokio::test]
+    async fn invalid_smithsonian_cursor_fails_before_metadata_io() {
+        let requests = Arc::new(AtomicUsize::new(0));
+        let app = Router::new()
+            .route(
+                "/search",
+                get(|State(requests): State<Arc<AtomicUsize>>| async move {
+                    requests.fetch_add(1, Ordering::SeqCst);
+                    r#"{"response":{"rowCount":0,"rows":[]}}"#
+                }),
+            )
+            .with_state(requests.clone());
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("mock listener binds");
+        let address = listener.local_addr().expect("mock address exists");
+        let task = tokio::spawn(async move {
+            axum::serve(listener, app).await.expect("mock server runs");
+        });
+        let provider = crate::providers::smithsonian::SmithsonianProvider::new(
+            Url::parse(&format!("http://{address}/search")).expect("endpoint is valid"),
+            Some("test-key".into()),
+        );
+        let cache_root = tempdir().expect("temporary cache exists");
+        let services = SearchServices::new(
+            ProviderSet::from_env().expect("provider set is valid"),
+            Cache::new(cache_root.path().to_path_buf()),
+            HttpClient::new(),
+            RateLimiters::new(),
+        );
+        let query = SearchQuery {
+            query: QueryText::parse("mask").expect("query is valid"),
+            sources: SourceSet::parse(&[SourceKind::Smithsonian]).expect("source is valid"),
+            culture: Culture::parse(None),
+        };
+
+        assert_eq!(
+            services
+                .search_one(
+                    ProviderEntry::Available(&provider),
+                    &query,
+                    Some("not-an-offset"),
+                    SystemTime::now(),
+                )
+                .await,
+            ProviderOutcome::Failed {
+                source: SourceKind::Smithsonian
+            }
+        );
+        assert_eq!(requests.load(Ordering::SeqCst), 0);
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn every_invalid_met_cursor_fails_before_metadata_io() {
+        let requests = Arc::new(AtomicUsize::new(0));
+        let app = Router::new()
+            .route(
+                "/search",
+                get(|State(requests): State<Arc<AtomicUsize>>| async move {
+                    requests.fetch_add(1, Ordering::SeqCst);
+                    r#"{"total":0,"objectIDs":[]}"#
+                }),
+            )
+            .with_state(requests.clone());
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("mock listener binds");
+        let address = listener.local_addr().expect("mock address exists");
+        let task = tokio::spawn(async move {
+            axum::serve(listener, app).await.expect("mock server runs");
+        });
+        let provider = crate::providers::met::MetProvider::new(
+            Url::parse(&format!("http://{address}/search")).expect("endpoint is valid"),
+        );
+        let cache_root = tempdir().expect("temporary cache exists");
+        let services = SearchServices::new(
+            ProviderSet::from_env().expect("provider set is valid"),
+            Cache::new(cache_root.path().to_path_buf()),
+            HttpClient::new(),
+            RateLimiters::new(),
+        );
+        let query = SearchQuery {
+            query: QueryText::parse("mask").expect("query is valid"),
+            sources: SourceSet::parse(&[SourceKind::MetropolitanMuseum]).expect("source is valid"),
+            culture: Culture::parse(None),
+        };
+
+        for cursor in ["", "-1", "+1", "1.0", "184467440737095516160"] {
+            assert_eq!(
+                services
+                    .search_one(
+                        ProviderEntry::Available(&provider),
+                        &query,
+                        Some(cursor),
+                        SystemTime::now(),
+                    )
+                    .await,
+                ProviderOutcome::Failed {
+                    source: SourceKind::MetropolitanMuseum
+                },
+                "{cursor}"
+            );
+        }
+        assert_eq!(requests.load(Ordering::SeqCst), 0);
+        task.abort();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn transient_never_connected_state_does_not_stop() {
+        let live = LiveConnections::new();
+        let task = tokio::spawn(select_shutdown(
+            live,
+            Arc::new(Notify::new()),
+            false,
+            futures::future::pending::<Result<()>>(),
+        ));
+        tokio::task::yield_now().await;
+        tokio::time::advance(Duration::from_secs(60)).await;
+        tokio::task::yield_now().await;
+
+        assert!(!task.is_finished());
+        task.abort();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn transient_disconnect_stops_at_the_grace_boundary() {
+        let live = LiveConnections::new();
+        drop(crate::server::LiveGuard::new(&live));
+        let task = tokio::spawn(select_shutdown(
+            live,
+            Arc::new(Notify::new()),
+            false,
+            futures::future::pending::<Result<()>>(),
+        ));
+        tokio::task::yield_now().await;
+        tokio::time::advance(Duration::from_secs(9)).await;
+        tokio::task::yield_now().await;
+        assert!(!task.is_finished());
+
+        tokio::time::advance(Duration::from_secs(1)).await;
+        let reason = task
+            .await
+            .expect("shutdown task completes")
+            .expect("shutdown selection succeeds");
+        assert_eq!(reason, ShutdownReason::BrowserClosed);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn reconnect_during_grace_restarts_the_full_interval() {
+        let live = LiveConnections::new();
+        drop(crate::server::LiveGuard::new(&live));
+        let task = tokio::spawn(select_shutdown(
+            live.clone(),
+            Arc::new(Notify::new()),
+            false,
+            futures::future::pending::<Result<()>>(),
+        ));
+        tokio::task::yield_now().await;
+        tokio::time::advance(Duration::from_secs(9)).await;
+        let reconnected = crate::server::LiveGuard::new(&live);
+        tokio::task::yield_now().await;
+        tokio::time::advance(Duration::from_secs(2)).await;
+        assert!(!task.is_finished());
+
+        drop(reconnected);
+        tokio::task::yield_now().await;
+        tokio::time::advance(Duration::from_secs(9)).await;
+        tokio::task::yield_now().await;
+        assert!(!task.is_finished());
+        tokio::time::advance(Duration::from_secs(1)).await;
+        assert_eq!(
+            task.await
+                .expect("shutdown task completes")
+                .expect("shutdown selection succeeds"),
+            ShutdownReason::BrowserClosed
+        );
+    }
+
+    #[tokio::test]
+    async fn browser_quit_and_ctrl_c_have_direct_selection_paths() {
+        let quit = Arc::new(Notify::new());
+        quit.notify_one();
+        assert_eq!(
+            select_shutdown(
+                LiveConnections::new(),
+                quit,
+                false,
+                futures::future::pending::<Result<()>>()
+            )
+            .await
+            .expect("browser quit selection succeeds"),
+            ShutdownReason::BrowserQuit
+        );
+        assert_eq!(
+            select_shutdown(
+                LiveConnections::new(),
+                Arc::new(Notify::new()),
+                false,
+                futures::future::ready(Ok(()))
+            )
+            .await
+            .expect("Ctrl-C selection succeeds"),
+            ShutdownReason::CtrlC
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn persistent_serve_ignores_browser_disconnect_and_quit() {
+        let live = LiveConnections::new();
+        drop(crate::server::LiveGuard::new(&live));
+        let quit = Arc::new(Notify::new());
+        quit.notify_one();
+        let (send_ctrl_c, receive_ctrl_c) = tokio::sync::oneshot::channel();
+        let task = tokio::spawn(select_shutdown(live, quit, true, async {
+            let _ = receive_ctrl_c.await;
+            Ok(())
+        }));
+        tokio::task::yield_now().await;
+        tokio::time::advance(Duration::from_secs(60)).await;
+        tokio::task::yield_now().await;
+        assert!(!task.is_finished());
+
+        send_ctrl_c.send(()).expect("Ctrl-C seam remains open");
+        assert_eq!(
+            task.await
+                .expect("shutdown task completes")
+                .expect("shutdown selection succeeds"),
+            ShutdownReason::CtrlC
+        );
+    }
+
+    #[test]
+    fn shutdown_messages_cover_each_reason() {
+        assert_eq!(
+            shutdown_message(ShutdownReason::CtrlC),
+            "Stopping after Ctrl-C."
+        );
+        assert_eq!(
+            shutdown_message(ShutdownReason::BrowserQuit),
+            "Stopping after the browser request."
+        );
+        assert_eq!(
+            shutdown_message(ShutdownReason::BrowserClosed),
+            "Stopping after the browser closed."
+        );
+    }
+}

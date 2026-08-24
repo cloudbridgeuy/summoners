@@ -1,0 +1,13 @@
+{
+  "pagination": { "current_page": 1, "total_pages": 1 },
+  "data": [
+    {
+      "id": 3001,
+      "title": "Restricted Mask",
+      "image_id": "restricted-image",
+      "is_public_domain": false,
+      "copyright_notice": "All rights reserved"
+    }
+  ],
+  "config": { "iiif_url": "https://www.artic.edu/iiif/2" }
+}

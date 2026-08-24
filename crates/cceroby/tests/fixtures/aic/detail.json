@@ -1,0 +1,15 @@
+{
+  "data": {
+    "id": 1001,
+    "title": "Ceremonial Mask",
+    "artist_display": "Maker unknown",
+    "date_display": "1900-1920",
+    "place_of_origin": "Côte d’Ivoire",
+    "image_id": "image-one",
+    "is_public_domain": true,
+    "credit_line": "Gift of A & B"
+  },
+  "config": {
+    "iiif_url": "https://www.artic.edu/iiif/2"
+  }
+}
