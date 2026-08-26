@@ -5,6 +5,7 @@
 //! runs every quality check in order and manages the Git pre-commit hook.
 #![deny(clippy::unwrap_used, clippy::expect_used)]
 
+mod golden;
 mod lint;
 
 use clap::{Parser, Subcommand};
@@ -22,6 +23,8 @@ enum Commands {
     /// Run every quality check: fmt, check, clippy, test, file length, and the
     /// `#[allow(clippy::too_many_arguments)]` ban
     Lint(lint::LintArgs),
+    /// Record the checked-in replay transcripts from scripted engine drives
+    Golden(golden::GoldenArgs),
 }
 
 fn main() -> Result<()> {
@@ -30,5 +33,6 @@ fn main() -> Result<()> {
 
     match app.command {
         Commands::Lint(args) => lint::run(&args),
+        Commands::Golden(args) => golden::run(&args),
     }
 }
