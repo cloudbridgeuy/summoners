@@ -6,6 +6,7 @@
 
 pub mod app;
 pub mod error;
+pub mod replay;
 
 use error::CliError;
 
@@ -29,11 +30,14 @@ pub fn run_play(_args: &PlayArgs) -> Result<(), CliError> {
     Err(CliError::NotYetAvailable { command: "play" })
 }
 
-/// Replays a recorded match transcript.
+/// Replays a recorded match transcript and confirms its verification.
 ///
 /// # Errors
 ///
-/// Returns [`CliError`] while replay behavior is not part of this build.
-pub fn run_replay(_args: &ReplayArgs) -> Result<(), CliError> {
-    Err(CliError::NotYetAvailable { command: "replay" })
+/// Returns [`CliError`] when the transcript cannot be opened, the card
+/// catalog cannot be loaded, or the transcript does not verify.
+pub fn run_replay(args: &ReplayArgs) -> Result<(), CliError> {
+    let summary = replay::run_replay(&args.transcript)?;
+    println!("{}", summary.confirmation_line());
+    Ok(())
 }
