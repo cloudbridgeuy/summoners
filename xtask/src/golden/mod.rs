@@ -339,9 +339,8 @@ fn record_transcript(
     }
 
     let status = recording.state().status;
-    let outcome = match status {
-        GameStatus::Ended(outcome) => outcome,
-        _ => return Err(GenerationError::NotEnded { status }),
+    let GameStatus::Ended(outcome) = status else {
+        return Err(GenerationError::NotEnded { status });
     };
     if outcome.reason != LossReason::EmptyDeckDraw {
         return Err(GenerationError::NotAnEmptyDeckLoss { outcome });
