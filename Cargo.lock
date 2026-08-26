@@ -1766,6 +1766,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 
 [[package]]
+name = "summoners-cli"
+version = "0.0.0"
+dependencies = [
+ "clap",
+ "color-eyre",
+ "serde_json",
+ "summoners_cards",
+ "summoners_match_log",
+ "tempfile",
+ "thiserror",
+]
+
+[[package]]
 name = "summoners_cards"
 version = "0.0.0"
 dependencies = [
@@ -2457,6 +2470,9 @@ dependencies = [
  "chrono",
  "clap",
  "color-eyre",
+ "summoners_cards",
+ "summoners_core",
+ "summoners_match_log",
 ]
 
 [[package]]

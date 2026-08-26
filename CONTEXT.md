@@ -13,7 +13,14 @@ core definitions without file I/O. A separate CLI serves a local museum image
 search form. It connects to the Art Institute of Chicago, the Cleveland Museum
 of Art, the Metropolitan Museum of Art, and Wikimedia Commons. It attempts
 Smithsonian Open Access requests when `SMITHSONIAN_API_KEY` has a non-empty
-value that is valid as an HTTP header. There is no game client or
+value that is valid as an HTTP header. A second CLI, the game's
+`summoners` binary from workspace member `summoners-cli`, declares `serve`
+and `play` subcommands that refuse by name until their behavior lands, and
+ships `replay <transcript.ndjson>` verifying any version-1 NDJSON match
+transcript end to end against the built-in catalog: exit 0 on a valid stream,
+exit 1 with a typed message otherwise. There is no game client yet, and
+decks and Sets still reach the engine only through caller-held bytes. Detail
+pages include a trusted self-contained JPEG
 runtime file loader yet. Detail pages include a trusted self-contained JPEG
 download path for provider image responses. This file is an index of stable
 product language, not an API contract.
@@ -573,6 +580,66 @@ the final digest.
 - **WHEN** replay reaches the recorded terminal action
 - **THEN** the engine state, the one `GameEnded` outcome, completion counts,
   winner, loss reason, and final digests all match the transcript
+
+### Requirement: Game CLI command surface
+
+One binary, `summoners`, ships from workspace member `summoners-cli` with a
+fixed subcommand surface: `serve`, `play`, and `replay`. Help and version
+render through clap derive doc comments; `serve` names its bind default
+(`127.0.0.1`), OS-assigned port default, and two deck arguments; `play`
+restricts `--player` to 1 or 2. Until hosting and joining behavior land,
+`serve` and `play` refuse by name: the exact message is
+`` `<command>` is not part of this build yet. `` on standard error, exit
+code 1. Invalid command-line values fail at parse time with clap usage
+errors.
+
+#### Scenario: Declared stubs refuse
+
+- **WHEN** the operator runs `summoners serve ...` or `summoners play ...`
+  with valid arguments
+- **THEN** nothing else executes and the binary prints the refusal naming
+  that subcommand on stderr and exits 1
+
+#### Scenario: Usage errors stay at parse time
+
+- **WHEN** an invocation carries wrong-shaped values (one or three decks, a
+  player outside 1–2, a missing transcript path)
+- **THEN** no subcommand behavior starts and clap reports the usage error
+
+### Requirement: Command-line match transcript replay
+
+The `replay` subcommand verifies one version-1 NDJSON **Match transcript**
+named by path, end to end: it opens the file, loads the built-in catalog,
+runs the exact-replay verifier, and prints exactly one confirmation line to
+stdout — `OK <path>: transcript verified (<set> revision <n>[, ...])` — with
+exit code 0. Every failure exits 1 with one typed message on stderr:
+cannot open, card catalog failed to load, or transcript is invalid. The
+committed replay fixtures under `crates/cli/tests/goldens/` are recorded by
+the repository's golden tooling and prove round-trip through this runner in
+tests: each verifies as-is, and a mutated event line fails verification
+naming the diverging step.
+
+#### Scenario: A valid transcript confirms once
+
+- **WHEN** the named file is a complete version-1 transcript whose required
+  Sets resolve against the built-in catalog
+- **THEN** stdout carries exactly the confirmation line with the path and
+  each verified Set revision, stderr stays empty, and the exit code is 0
+
+#### Scenario: Failures name their cause
+
+- **WHEN** the file cannot be opened, the catalog cannot load, or the stream
+  does not verify
+- **THEN** the matching typed message appears on stderr — including the
+  diverging step and index for verification faults — stdout stays empty, and
+  the exit code is 1
+
+#### Scenario: Committed goldens round-trip
+
+- **WHEN** the crate's test suite runs over the checked-in goldens directory
+- **THEN** every fixture verifies through the same runner the operator uses,
+  an empty corpus fails discovery, and a mutated copy of any fixture fails
+  with the named step
 
 ### Requirement: Reviewed golden match corpus
 

@@ -13,6 +13,9 @@ description = "Repository automation for Summoners"
 chrono.workspace = true
 clap.workspace = true
 color-eyre.workspace = true
+summoners_cards = { path = "../crates/cards" }
+summoners_core = { path = "../crates/core" }
+summoners_match_log = { path = "../crates/match-log" }
 
 [lints]
 workspace = true
