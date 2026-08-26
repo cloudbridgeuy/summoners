@@ -2470,6 +2470,9 @@ dependencies = [
  "chrono",
  "clap",
  "color-eyre",
+ "summoners_cards",
+ "summoners_core",
+ "summoners_match_log",
 ]
 
 [[package]]
