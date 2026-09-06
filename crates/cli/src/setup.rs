@@ -106,10 +106,24 @@ mod tests {
         assert_eq!(state.coin, Some(Coin));
         let ids = [one, two]
             .into_iter()
-            .flat_map(|player| player.hand.iter().chain(&player.prizes).chain(&player.deck))
+            .flat_map(|player| {
+                player
+                    .hand
+                    .iter()
+                    .chain(&player.prizes)
+                    .chain(&player.deck)
+                    .chain(player.main.iter().flat_map(|summon| summon.chain.layers()))
+                    .chain(
+                        player
+                            .bench
+                            .iter()
+                            .flatten()
+                            .flat_map(|summon| summon.chain.layers()),
+                    )
+            })
             .map(|card| card.instance)
             .collect::<HashSet<_>>();
-        assert_eq!(ids.len(), 40);
+        assert_eq!(ids.len(), 42);
     }
 
     #[test]

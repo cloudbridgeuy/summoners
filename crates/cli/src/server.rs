@@ -173,6 +173,10 @@ fn create_default_output() -> Result<(File, PathBuf), ServeError> {
             source: io::Error::other(error),
         })?
         .as_secs();
+    create_default_output_at(directory, seconds)
+}
+
+fn create_default_output_at(directory: &Path, seconds: u64) -> Result<(File, PathBuf), ServeError> {
     for suffix in 0..1000_u16 {
         let path = directory.join(format!("{seconds}-{suffix}.ndjson"));
         match create_explicit_output(&path) {
@@ -230,6 +234,38 @@ mod tests {
     }
 
     #[test]
+    fn both_deck_positions_are_read_and_parsed() {
+        let directory = TempDir::new().expect("directory");
+        let one = directory.path().join("one.toml");
+        let two = directory.path().join("two.toml");
+        fs::write(&one, include_bytes!("../../cards/data/set-paths.toml")).expect("one");
+        fs::write(&two, include_bytes!("../../cards/data/barrow-herd.toml")).expect("two");
+        let catalog = built_in_catalog().expect("catalog");
+        let decks = load_decks(&[one, two], catalog.library()).expect("decks");
+        assert_eq!(decks[0].id(), "set-paths");
+        assert_eq!(decks[1].id(), "barrow-herd");
+    }
+
+    #[test]
+    fn invalid_deck_fails_in_each_position() {
+        let directory = TempDir::new().expect("directory");
+        let valid = directory.path().join("valid.toml");
+        let invalid = directory.path().join("invalid.toml");
+        fs::write(&valid, include_bytes!("../../cards/data/set-paths.toml")).expect("valid");
+        fs::write(&invalid, "not a deck").expect("invalid");
+        let catalog = built_in_catalog().expect("catalog");
+        for paths in [
+            [invalid.clone(), valid.clone()],
+            [valid.clone(), invalid.clone()],
+        ] {
+            assert!(matches!(
+                load_decks(&paths, catalog.library()),
+                Err(ServeError::ParseDeck { path, .. }) if path == invalid
+            ));
+        }
+    }
+
+    #[test]
     fn explicit_output_never_overwrites() {
         let directory = TempDir::new().expect("directory");
         let path = directory.path().join("match.ndjson");
@@ -247,6 +283,16 @@ mod tests {
         assert!(
             matches!(create_explicit_output(&path), Err(ServeError::Output { source, .. }) if source.kind() == io::ErrorKind::NotFound)
         );
+    }
+
+    #[test]
+    fn default_output_collision_uses_the_next_exclusive_name() {
+        let directory = TempDir::new().expect("directory");
+        let occupied = directory.path().join("10-0.ndjson");
+        fs::write(&occupied, "existing").expect("occupied");
+        let (_, path) = create_default_output_at(directory.path(), 10).expect("output");
+        assert_eq!(path, directory.path().join("10-1.ndjson"));
+        assert_eq!(fs::read_to_string(occupied).expect("existing"), "existing");
     }
 
     #[test]
