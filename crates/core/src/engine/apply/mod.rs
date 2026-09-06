@@ -4,7 +4,8 @@
 //! `GameAction` always produce the same `ActionOutcome`, and a rejected
 //! action leaves the caller's state untouched (the design's transition
 //! contract). Before any handler runs, the actor gate enforces decision 15:
-//! a finished or broken game rejects everything, then `pending` (if set)
+//! a finished or broken game rejects everything. Resignation then bypasses
+//! the actor gate and resolution; for ordinary actions, `pending` (if set)
 //! names the only legal actor, then an open Priority window, then the
 //! active player.
 
@@ -12,7 +13,7 @@ use crate::domain::actions::GameAction;
 use crate::domain::errors::ActionError;
 use crate::domain::events::GameEvent;
 use crate::domain::ids::PlayerId;
-use crate::domain::state::{GameState, GameStatus, PendingInput};
+use crate::domain::state::{GameOutcome, GameState, GameStatus, LossReason, PendingInput};
 use crate::engine::{destruction, resolution, stack, turn};
 
 /// The result of one accepted action: the next state and the ordered facts
@@ -31,12 +32,17 @@ pub struct ActionOutcome {
 /// that lands — before the state and events are handed back (the design's
 /// resolution loop: "the loop runs inside `apply` after every accepted
 /// action"). A rejected action never reaches the drain, so its typed error
-/// is the only thing the caller sees.
+/// is the only thing the caller sees. Resignation also bypasses the drain:
+/// either player may end a Playing game without resolving pending work.
 pub fn apply(state: &GameState, action: &GameAction) -> Result<ActionOutcome, ActionError> {
     match &state.status {
         GameStatus::Playing => {}
         GameStatus::Ended(_) => return Err(ActionError::GameAlreadyOver),
         GameStatus::Broken(_) => return Err(ActionError::GameBroken),
+    }
+
+    if let GameAction::Resign { player } = action {
+        return Ok(resign(state, *player));
     }
 
     check_actor(state, action.actor())?;
@@ -48,6 +54,22 @@ pub fn apply(state: &GameState, action: &GameAction) -> Result<ActionOutcome, Ac
     events.extend(drained_events);
 
     Ok(ActionOutcome { state, events })
+}
+
+fn resign(state: &GameState, player: PlayerId) -> ActionOutcome {
+    let mut state = state.clone();
+    let outcome = GameOutcome {
+        winner: player.opponent(),
+        reason: LossReason::Resignation,
+    };
+    state.status = GameStatus::Ended(outcome);
+    ActionOutcome {
+        state,
+        events: vec![GameEvent::GameEnded {
+            winner: outcome.winner,
+            reason: outcome.reason,
+        }],
+    }
 }
 
 /// The one player currently allowed to act (decision 15). A window can be
@@ -143,6 +165,8 @@ fn dispatch(state: &GameState, action: &GameAction) -> Result<ActionOutcome, Act
             player,
             prize_index,
         } => destruction::answer_prize(state, *player, *prize_index),
+        // `apply` handles resignation before the actor gate and drain.
+        GameAction::Resign { player } => Ok(resign(state, *player)),
     }
 }
 

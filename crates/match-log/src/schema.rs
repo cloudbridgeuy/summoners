@@ -22,6 +22,10 @@ const LIFECYCLE: &str = r#"# Summoners match log lifecycle, version 1
 
 The JSON Schema files define each record. This document defines the rules that apply across records in one strict NDJSON transcript.
 
+## Pre-release compatibility
+
+Version 1 remains under development until public release. Its contract may change in place, including destructive changes that improve development and deployment velocity. Readers must be updated with the engine; older readers reject the new `resign` action and `resignation` loss reason. No compatibility layer or new format version is required for this addition.
+
 ## JSON integer tokens
 
 Every integer-valued wire field uses a JSON integer token. Floating-point spellings such as `1.0` are invalid, even when their mathematical value is an integer.
@@ -55,6 +59,8 @@ The transcript contains exactly one `game_ended` event. It is in the final accep
 ### Terminal outcome agreement
 
 The winner and loss reason in the `game_ended` event, the ended status in `final_state`, and `match_completed` are equal. `final_state` must contain an ended state; a playing or broken state is invalid.
+
+Resignation changes only status. The recorded final state retains the Stack, queued work, pending choice, and turn window exactly as they stood. These values remain part of the final-state digest; ended status prevents any further gameplay even when pending work remains.
 
 ### Digest agreement
 

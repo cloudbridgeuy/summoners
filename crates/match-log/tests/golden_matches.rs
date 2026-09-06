@@ -12,6 +12,15 @@ use std::{
 use summoners_cards::{BuiltInError, built_in_catalog};
 use summoners_match_log::replay::{ReplayDivergenceKind, ReplayError, verify_transcript};
 
+mod support;
+
+#[test]
+fn the_resignation_golden_is_reproducible_from_its_generator() {
+    let checked_in = fs::read(checked_in_corpus().join("resignation.ndjson"))
+        .expect("the resignation golden is readable");
+    assert_eq!(support::resignation_transcript_bytes(), checked_in);
+}
+
 #[derive(Debug)]
 enum GoldenCorpusError {
     Catalog(BuiltInError),

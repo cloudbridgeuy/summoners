@@ -479,11 +479,39 @@ later actions without a new write or engine call.
   completion record
 - **AND** each later submission fails before a write or engine call
 
+### Requirement: Resignation ends a Playing match immediately
+
+Either player may submit Resign while Playing, regardless of whose turn it
+is, who holds Priority, or who must answer a pending choice. The opponent
+wins with loss reason Resignation and exactly one `GameEnded` event.
+Resignation changes only status: the Stack, queued work, pending input, and
+all other state remain unchanged. The caller's state is untouched.
+
+#### Scenario: A player resigns during another player's pending choice
+
+- **WHEN** either player resigns while a ManaProduction, Promotion, or
+  PrizePick choice is pending
+- **THEN** the match ends without answering the choice or draining resolution
+- **AND** the complete transcript retains that pending work in its final
+  state, and replay reproduces its events, outcome, and digest
+
+#### Scenario: Resignation is submitted to a terminal game
+
+- **WHEN** a player resigns after the game has Ended or become Broken
+- **THEN** the engine rejects the action without changing state
+- **AND** actions submitted after a successful resignation remain rejected
+
 ### Requirement: Complete match transcript parsing
 
 A **Match transcript** parser accepts only strict version 1 NDJSON with one
 complete record lifecycle. It returns normalized actions, ordered events,
 typed rejections, authoritative states, and completion data as typed values.
+
+Version 1 remains mutable until public release. Pre-release changes may be
+destructive, especially when they improve deployment velocity. Readers are
+updated with the engine; older readers do not understand resignation-bearing
+v1 transcripts. Existing fixtures provide regression evidence, not a promise
+of pre-release compatibility.
 
 #### Scenario: A complete transcript is parsed
 

@@ -394,6 +394,7 @@ fn loss_reason_name(reason: LossReason) -> &'static str {
         LossReason::ThirdMainLoss => "third_main_loss",
         LossReason::NoPromotionAvailable => "no_promotion_available",
         LossReason::EmptyDeckDraw => "empty_deck_draw",
+        LossReason::Resignation => "resignation",
     }
 }
 
@@ -568,6 +569,7 @@ mod tests {
 
     #[test]
     fn loss_reason_names_match_the_wire_snake_case() {
+        assert_eq!(loss_reason_name(LossReason::Resignation), "resignation");
         assert_eq!(
             loss_reason_name(LossReason::ThirdMainLoss),
             "third_main_loss"

@@ -229,8 +229,8 @@ pub enum ManaSource {
 }
 
 /// A paused decision, held as plain data rather than a closure (decision
-/// 2). While set, the actor gate accepts only the named player's matching
-/// answer (decision 15).
+/// 2). While set, ordinary actions require the named player's matching
+/// answer (decision 15). Either player may still resign while Playing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PendingInput {
     ManaProduction {
@@ -251,6 +251,7 @@ pub enum LossReason {
     ThirdMainLoss,
     NoPromotionAvailable,
     EmptyDeckDraw,
+    Resignation,
 }
 
 /// The match's final result, set once. Every action after this point is
@@ -639,8 +640,9 @@ mod tests {
             LossReason::ThirdMainLoss,
             LossReason::NoPromotionAvailable,
             LossReason::EmptyDeckDraw,
+            LossReason::Resignation,
         ];
-        assert_eq!(reasons.len(), 3);
+        assert_eq!(reasons.len(), 4);
     }
 
     #[test]

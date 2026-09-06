@@ -8,6 +8,14 @@ fn checked_in_corpus() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/goldens")
 }
 
+#[test]
+fn resignation_replays_through_the_cli_runner() {
+    let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../match-log/tests/goldens/resignation.ndjson");
+    let summary = run_replay(&fixture).expect("the resignation golden verifies");
+    assert!(summary.confirmation_line().starts_with("OK "));
+}
+
 #[derive(Debug)]
 enum CorpusDiscoveryError {
     ReadDirectory {

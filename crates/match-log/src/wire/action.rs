@@ -75,6 +75,9 @@ pub enum ActionV1 {
         player: PlayerIdV1,
         prize_index: u64,
     },
+    Resign {
+        player: PlayerIdV1,
+    },
 }
 
 impl From<ManaType> for ManaTypeV1 {
@@ -181,6 +184,9 @@ impl From<&GameAction> for ActionV1 {
                 player: (*player).into(),
                 prize_index: *prize_index as u64,
             },
+            GameAction::Resign { player } => Self::Resign {
+                player: (*player).into(),
+            },
         }
     }
 }
@@ -264,6 +270,9 @@ impl TryFrom<ActionV1> for GameAction {
                 player: player.into(),
                 slot: slot.into(),
             }),
+            ActionV1::Resign { player } => Ok(Self::Resign {
+                player: player.into(),
+            }),
             ActionV1::ChoosePrize {
                 player,
                 prize_index,
@@ -346,6 +355,9 @@ mod tests {
             GameAction::ChoosePrize {
                 player: PlayerId::Two,
                 prize_index: 7,
+            },
+            GameAction::Resign {
+                player: PlayerId::One,
             },
         ];
 

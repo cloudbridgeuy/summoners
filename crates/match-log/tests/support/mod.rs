@@ -46,7 +46,19 @@ pub fn valid_transcript_bytes() -> Vec<u8> {
     recording.into_writer()
 }
 
-fn initial_state() -> summoners_core::domain::state::GameState {
+pub fn resignation_transcript_bytes() -> Vec<u8> {
+    let mut recording =
+        RecordedMatch::start(Vec::new(), HeaderMetadataV1::new(), vec![], initial_state())
+            .expect("the fixture writer is available");
+    recording
+        .submit(&GameAction::Resign {
+            player: PlayerId::One,
+        })
+        .expect("resignation is legal while Playing");
+    recording.into_writer()
+}
+
+pub fn initial_state() -> summoners_core::domain::state::GameState {
     let player = PlayerState {
         main: None,
         bench: [None, None, None],
