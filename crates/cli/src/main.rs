@@ -1,4 +1,3 @@
-//! Command-line entry point for playing Summoners matches.
 #![deny(clippy::unwrap_used, clippy::expect_used)]
 
 use clap::Parser;
@@ -13,7 +12,7 @@ fn main() -> ExitCode {
     let app = App::parse();
 
     let result = match app.command {
-        Command::Serve(_) => summoners_cli::run_serve(),
+        Command::Serve(args) => summoners_cli::run_serve(&args),
         Command::Play(args) => summoners_cli::run_play(&args),
         Command::Replay(args) => summoners_cli::run_replay(&args),
     };

@@ -1,41 +1,23 @@
-//! Command-line runners for playing Summoners matches.
-//!
-//! Parsing lives in [`app`]; reported failures live in [`error`]. Each runner
-//! below is the single place one subcommand's behavior belongs.
 #![deny(clippy::unwrap_used, clippy::expect_used)]
 
 pub mod app;
 pub mod error;
 pub mod replay;
+pub mod server;
+pub mod setup;
 
 use error::CliError;
 
-use crate::app::{PlayArgs, ReplayArgs};
+use crate::app::{PlayArgs, ReplayArgs, ServeArgs};
 
-/// Hosts a match for two players and reports the address to join.
-///
-/// # Errors
-///
-/// Returns [`CliError`] while the host behavior is not part of this build.
-pub fn run_serve() -> Result<(), CliError> {
-    Err(CliError::NotYetAvailable { command: "serve" })
+pub fn run_serve(args: &ServeArgs) -> Result<(), CliError> {
+    server::serve(args).map_err(CliError::Serve)
 }
 
-/// Joins a hosted match as one player.
-///
-/// # Errors
-///
-/// Returns [`CliError`] while the client behavior is not part of this build.
 pub fn run_play(_args: &PlayArgs) -> Result<(), CliError> {
     Err(CliError::NotYetAvailable { command: "play" })
 }
 
-/// Replays a recorded match transcript and confirms its verification.
-///
-/// # Errors
-///
-/// Returns [`CliError`] when the transcript cannot be opened, the card
-/// catalog cannot be loaded, or the transcript does not verify.
 pub fn run_replay(args: &ReplayArgs) -> Result<(), CliError> {
     let summary = replay::run_replay(&args.transcript)?;
     println!("{}", summary.confirmation_line());

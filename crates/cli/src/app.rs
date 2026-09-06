@@ -1,11 +1,8 @@
-//! Command-line parsing at the process boundary.
-
 use std::net::IpAddr;
 use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand};
 
-/// Play Summoners against another local player.
 #[derive(Debug, Parser)]
 #[command(name = "summoners", version, about)]
 pub struct App {
@@ -13,49 +10,42 @@ pub struct App {
     pub command: Command,
 }
 
-/// One operation selected by the user.
 #[derive(Debug, Subcommand)]
 pub enum Command {
-    /// Host a match for one other player.
     Serve(ServeArgs),
-    /// Join a hosted match as one of two players.
     Play(PlayArgs),
-    /// Replay a recorded match transcript.
     Replay(ReplayArgs),
 }
 
-/// Raw command-line values for hosting a match.
 #[derive(Debug, Args)]
 pub struct ServeArgs {
-    /// Address to listen on.
     #[arg(long, default_value = "127.0.0.1")]
     pub bind: IpAddr,
 
-    /// Port to listen on. Left out, the operating system assigns a free port.
     #[arg(long)]
     pub port: Option<u16>,
 
-    /// The two decks that face each other in hosting order.
     #[arg(long, required = true, num_args = 2)]
-    pub decks: Vec<String>,
+    pub decks: Vec<PathBuf>,
+
+    #[arg(long)]
+    pub output: Option<PathBuf>,
+
+    #[arg(long)]
+    pub seed: Option<u64>,
 }
 
-/// Raw command-line values for joining a hosted match.
 #[derive(Debug, Args)]
 pub struct PlayArgs {
-    /// Seat to take: 1 or 2.
     #[arg(long, value_parser = clap::value_parser!(u8).range(1..=2))]
     pub player: u8,
 
-    /// Port the host listens on.
     #[arg(long)]
     pub port: Option<u16>,
 }
 
-/// Raw command-line values for replaying a transcript.
 #[derive(Debug, Args)]
 pub struct ReplayArgs {
-    /// Recorded transcript to replay.
     pub transcript: PathBuf,
 }
 
@@ -64,6 +54,7 @@ mod tests {
     #![allow(clippy::expect_used)]
 
     use clap::Parser;
+    use std::path::PathBuf;
 
     use super::{App, Command};
 
@@ -76,7 +67,7 @@ mod tests {
         };
         assert_eq!(args.bind, std::net::IpAddr::from([127, 0, 0, 1]));
         assert_eq!(args.port, None);
-        assert_eq!(args.decks, vec!["a".to_string(), "b".to_string()]);
+        assert_eq!(args.decks, vec![PathBuf::from("a"), PathBuf::from("b")]);
     }
 
     #[test]
