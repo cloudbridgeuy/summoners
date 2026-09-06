@@ -34,7 +34,7 @@ pub fn play(args: &PlayArgs) -> Result<(), PlayError> {
     let revision = Arc::new(Mutex::new(0_u64));
     let reader = stream.try_clone().map_err(PlayError::Socket)?;
     let observed = Arc::clone(&revision);
-    let listener = std::thread::spawn(move || receive(reader, observed));
+    let listener = std::thread::spawn(move || receive(reader, &observed));
     let stdin = io::stdin();
     let mut lines = stdin.lock().lines();
     while let Some(line) = lines.next() {
@@ -78,7 +78,7 @@ fn send(stream: &mut TcpStream, message: &ClientEnvelope) -> Result<(), PlayErro
     bytes.push(b'\n');
     stream.write_all(&bytes).map_err(PlayError::Socket)
 }
-fn receive(stream: TcpStream, revision: Arc<Mutex<u64>>) {
+fn receive(stream: TcpStream, revision: &Arc<Mutex<u64>>) {
     let mut reader = BufReader::new(stream);
     let mut line = String::new();
     loop {
@@ -101,7 +101,7 @@ fn receive(stream: TcpStream, revision: Arc<Mutex<u64>>) {
             }
             ServerEnvelope::Finished { outcome, .. } => {
                 println!("Finished {outcome}");
-                return;
+                std::process::exit(0);
             }
             ServerEnvelope::Waiting { .. } => println!("Waiting"),
             ServerEnvelope::Rejected { reason, .. } => println!("Rejected {reason}"),
