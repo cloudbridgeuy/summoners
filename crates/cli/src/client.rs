@@ -1,6 +1,7 @@
 use std::io::{self, BufRead, BufReader, Write};
 use std::net::TcpStream;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use crate::app::PlayArgs;
 use crate::protocol::{ClientEnvelope, Seat, ServerEnvelope, VERSION};
@@ -34,14 +35,27 @@ pub fn play(args: &PlayArgs) -> Result<(), PlayError> {
     let revision = Arc::new(Mutex::new(0_u64));
     let reader = stream.try_clone().map_err(PlayError::Socket)?;
     let observed = Arc::clone(&revision);
-    let listener = std::thread::spawn(move || receive(reader, &observed));
-    let stdin = io::stdin();
-    let mut lines = stdin.lock().lines();
-    while let Some(line) = lines.next() {
+    let (terminal_sender, terminal_receiver) = std::sync::mpsc::channel();
+    let listener = std::thread::spawn(move || receive(reader, &observed, &terminal_sender));
+    let (input_sender, input_receiver) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        for line in io::stdin().lock().lines() {
+            if input_sender.send(line).is_err() {
+                return;
+            }
+        }
+    });
+    loop {
+        if terminal_receiver.try_recv().is_ok() {
+            break;
+        }
+        let Ok(line) = input_receiver.recv_timeout(Duration::from_millis(50)) else {
+            continue;
+        };
         let line = line.map_err(PlayError::Socket)?;
         if line.trim().eq_ignore_ascii_case("give up") {
             println!("Confirm Give up with yes");
-            let Some(answer) = lines.next() else {
+            let Ok(answer) = input_receiver.recv() else {
                 break;
             };
             if answer
@@ -65,7 +79,6 @@ pub fn play(args: &PlayArgs) -> Result<(), PlayError> {
                         action: ActionV1::Resign { player },
                     },
                 )?;
-                break;
             }
         }
     }
@@ -78,7 +91,7 @@ fn send(stream: &mut TcpStream, message: &ClientEnvelope) -> Result<(), PlayErro
     bytes.push(b'\n');
     stream.write_all(&bytes).map_err(PlayError::Socket)
 }
-fn receive(stream: TcpStream, revision: &Arc<Mutex<u64>>) {
+fn receive(stream: TcpStream, revision: &Arc<Mutex<u64>>, terminal: &std::sync::mpsc::Sender<()>) {
     let mut reader = BufReader::new(stream);
     let mut line = String::new();
     loop {
@@ -101,12 +114,14 @@ fn receive(stream: TcpStream, revision: &Arc<Mutex<u64>>) {
             }
             ServerEnvelope::Finished { outcome, .. } => {
                 println!("Finished {outcome}");
-                std::process::exit(0);
+                let _ = terminal.send(());
+                return;
             }
             ServerEnvelope::Waiting { .. } => println!("Waiting"),
             ServerEnvelope::Rejected { reason, .. } => println!("Rejected {reason}"),
             ServerEnvelope::Stopped { reason } => {
                 println!("Stopped {reason}");
+                let _ = terminal.send(());
                 return;
             }
         }
