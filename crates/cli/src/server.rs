@@ -1,20 +1,26 @@
 use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, Read, Write};
-use std::net::{SocketAddr, TcpListener};
+use std::io::{self, BufRead, BufReader, Read, Write};
+use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use rand::RngExt;
 use serde_json::json;
 use summoners_cards::{BuiltInError, DeckLoadError, built_in_catalog, parse_deck};
+use summoners_core::domain::state::GameStatus;
 use summoners_match_log::{RecordedMatch, RecordingError, SetRequirementV1};
 
 use crate::app::ServeArgs;
+use crate::protocol::{
+    ClientEnvelope, ProtocolError, Seat, ServerEnvelope, VERSION, normalize_action, player_view,
+};
 use crate::setup::{SetupError, initial_state};
 
 const MAX_DECK_BYTES: u64 = 1024 * 1024;
 const SHUFFLE_VERSION: &str = "std_rng_v1";
+const MAX_CLIENT_LINE: usize = 64 * 1024;
+const MAX_SERVER_LINE: usize = 1024 * 1024;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ServeError {
@@ -68,7 +74,241 @@ pub fn serve(args: &ServeArgs) -> Result<(), ServeError> {
             .map_err(|source| ServeError::Bind { address, source })?,
         output.1.display()
     );
-    wait_for_interrupt(recorder)
+    serve_session(listener, recorder)
+}
+
+struct Client {
+    seat: Seat,
+    stream: TcpStream,
+}
+
+fn serve_session(
+    listener: TcpListener,
+    mut recorder: RecordedMatch<File>,
+) -> Result<(), ServeError> {
+    listener
+        .set_nonblocking(true)
+        .map_err(ServeError::Interrupt)?;
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    let mut clients = Vec::new();
+    while clients.len() < 2 {
+        if std::time::Instant::now() >= deadline {
+            return Ok(());
+        }
+        match listener.accept() {
+            Ok((mut stream, _)) => match read_join(&mut stream) {
+                Ok(seat) if clients.iter().all(|client: &Client| client.seat != seat) => {
+                    write_envelope(&mut stream, &ServerEnvelope::Waiting { seat })
+                        .map_err(ServeError::Interrupt)?;
+                    clients.push(Client { seat, stream });
+                }
+                Ok(_) => {
+                    let _ = write_envelope(
+                        &mut stream,
+                        &ServerEnvelope::Rejected {
+                            request_id: None,
+                            reason: "seat is occupied".to_string(),
+                        },
+                    );
+                }
+                Err(reason) => {
+                    let _ = write_envelope(
+                        &mut stream,
+                        &ServerEnvelope::Rejected {
+                            request_id: None,
+                            reason,
+                        },
+                    );
+                }
+            },
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                std::thread::sleep(Duration::from_millis(10))
+            }
+            Err(source) => {
+                return Err(ServeError::Bind {
+                    address: listener.local_addr().map_err(ServeError::Interrupt)?,
+                    source,
+                });
+            }
+        }
+    }
+    let (sender, receiver) = std::sync::mpsc::sync_channel(16);
+    for client in &clients {
+        let stream = client.stream.try_clone().map_err(ServeError::Interrupt)?;
+        let sender = sender.clone();
+        let seat = client.seat;
+        std::thread::spawn(move || read_frames(stream, seat, sender));
+    }
+    drop(sender);
+    let mut revision = 0_u64;
+    broadcast(&mut clients, &recorder, revision, None, false)?;
+    loop {
+        let Ok((seat, item)) = receiver.recv() else {
+            stop_clients(&mut clients, "connection closed")?;
+            return Ok(());
+        };
+        let ClientEnvelope::Submit {
+            request_id,
+            based_on_revision,
+            action,
+        } = item
+        else {
+            stop_clients(&mut clients, "protocol violation")?;
+            return Ok(());
+        };
+        let normalized = normalize_action(seat.into(), action);
+        let action = match normalized {
+            Ok(action) => action,
+            Err(ProtocolError::Actor) => {
+                reject(
+                    client_for(&mut clients, seat),
+                    Some(request_id),
+                    "actor does not own this connection",
+                )?;
+                continue;
+            }
+            Err(ProtocolError::Conversion(error)) => {
+                reject(client_for(&mut clients, seat), Some(request_id), &error)?;
+                continue;
+            }
+        };
+        if based_on_revision != revision
+            && !matches!(
+                action,
+                summoners_core::domain::actions::GameAction::Resign { .. }
+            )
+        {
+            reject(
+                client_for(&mut clients, seat),
+                Some(request_id),
+                "stale revision",
+            )?;
+            continue;
+        }
+        let result = recorder.submit(&action).map_err(ServeError::Recording)?;
+        revision += 1;
+        let terminal = matches!(recorder.state().status, GameStatus::Ended(_));
+        let reply = Some(request_id);
+        let _ = result;
+        broadcast(&mut clients, &recorder, revision, reply, terminal)?;
+        if terminal {
+            return Ok(());
+        }
+    }
+}
+
+fn read_join(stream: &mut TcpStream) -> Result<Seat, String> {
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .map_err(|error| error.to_string())?;
+    let mut reader = BufReader::new(stream.try_clone().map_err(|error| error.to_string())?);
+    let frame = read_frame(&mut reader)?;
+    match serde_json::from_slice::<ClientEnvelope>(&frame).map_err(|error| error.to_string())? {
+        ClientEnvelope::Join {
+            version: VERSION,
+            seat,
+        } => Ok(seat),
+        ClientEnvelope::Join { .. } => Err("unsupported version".to_string()),
+        ClientEnvelope::Submit { .. } => Err("join required".to_string()),
+    }
+}
+fn read_frames(
+    stream: TcpStream,
+    seat: Seat,
+    sender: std::sync::mpsc::SyncSender<(Seat, ClientEnvelope)>,
+) {
+    let mut reader = BufReader::new(stream);
+    loop {
+        let Ok(frame) = read_frame(&mut reader) else {
+            return;
+        };
+        let Ok(envelope) = serde_json::from_slice::<ClientEnvelope>(&frame) else {
+            return;
+        };
+        if sender.send((seat, envelope)).is_err() {
+            return;
+        }
+    }
+}
+fn read_frame(reader: &mut impl BufRead) -> Result<Vec<u8>, String> {
+    let mut bytes = Vec::with_capacity(256);
+    let size = reader
+        .read_until(b'\n', &mut bytes)
+        .map_err(|error| error.to_string())?;
+    if size == 0 {
+        return Err("connection closed".to_string());
+    }
+    if bytes.len() > MAX_CLIENT_LINE || !bytes.ends_with(b"\n") {
+        return Err("invalid frame".to_string());
+    }
+    bytes.pop();
+    Ok(bytes)
+}
+fn write_envelope(stream: &mut TcpStream, envelope: &ServerEnvelope) -> io::Result<()> {
+    stream.set_write_timeout(Some(Duration::from_secs(5)))?;
+    let mut bytes = serde_json::to_vec(envelope).map_err(io::Error::other)?;
+    if bytes.len() > MAX_SERVER_LINE {
+        return Err(io::Error::other("server frame exceeds limit"));
+    }
+    bytes.push(b'\n');
+    stream.write_all(&bytes)
+}
+fn client_for(clients: &mut [Client], seat: Seat) -> &mut TcpStream {
+    let client = clients
+        .iter_mut()
+        .find(|client| client.seat == seat)
+        .unwrap_or_else(|| unreachable!());
+    &mut client.stream
+}
+fn reject(stream: &mut TcpStream, request_id: Option<u64>, reason: &str) -> Result<(), ServeError> {
+    write_envelope(
+        stream,
+        &ServerEnvelope::Rejected {
+            request_id,
+            reason: reason.to_string(),
+        },
+    )
+    .map_err(ServeError::Interrupt)
+}
+fn broadcast(
+    clients: &mut [Client],
+    recorder: &RecordedMatch<File>,
+    revision: u64,
+    reply: Option<u64>,
+    terminal: bool,
+) -> Result<(), ServeError> {
+    for client in clients {
+        let view = player_view(recorder.state(), client.seat.into());
+        let envelope = if terminal {
+            ServerEnvelope::Finished {
+                outcome: view.outcome.clone().unwrap_or(serde_json::Value::Null),
+                view,
+                notices: vec!["resignation".to_string()],
+                reply,
+            }
+        } else {
+            ServerEnvelope::Update {
+                revision,
+                view,
+                notices: Vec::new(),
+                reply,
+            }
+        };
+        write_envelope(&mut client.stream, &envelope).map_err(ServeError::Interrupt)?;
+    }
+    Ok(())
+}
+fn stop_clients(clients: &mut [Client], reason: &str) -> Result<(), ServeError> {
+    for client in clients {
+        write_envelope(
+            &mut client.stream,
+            &ServerEnvelope::Stopped {
+                reason: reason.to_string(),
+            },
+        )
+        .map_err(ServeError::Interrupt)?;
+    }
+    Ok(())
 }
 
 fn load_decks(
@@ -193,15 +433,6 @@ fn create_default_output_at(directory: &Path, seconds: u64) -> Result<(File, Pat
             "no unique transcript output name",
         ),
     })
-}
-
-fn wait_for_interrupt(recorder: RecordedMatch<File>) -> Result<(), ServeError> {
-    let runtime = tokio::runtime::Runtime::new().map_err(ServeError::Interrupt)?;
-    runtime
-        .block_on(tokio::signal::ctrl_c())
-        .map_err(ServeError::Interrupt)?;
-    drop(recorder);
-    Ok(())
 }
 
 #[cfg(test)]

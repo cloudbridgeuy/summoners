@@ -40,8 +40,11 @@ pub struct PlayArgs {
     #[arg(long, value_parser = clap::value_parser!(u8).range(1..=2))]
     pub player: u8,
 
+    #[arg(long, default_value = "127.0.0.1")]
+    pub host: String,
+
     #[arg(long)]
-    pub port: Option<u16>,
+    pub port: u16,
 }
 
 #[derive(Debug, Args)]
@@ -110,13 +113,20 @@ mod tests {
     #[test]
     fn parser_accepts_both_player_seats() {
         for seat in 1..=2 {
-            let app = App::try_parse_from(["summoners", "play", "--player", &seat.to_string()])
-                .expect("play command line is valid");
+            let app = App::try_parse_from([
+                "summoners",
+                "play",
+                "--player",
+                &seat.to_string(),
+                "--port",
+                "40000",
+            ])
+            .expect("play command line is valid");
             let Command::Play(args) = app.command else {
                 panic!("expected play command");
             };
             assert_eq!(args.player, seat);
-            assert_eq!(args.port, None);
+            assert_eq!(args.port, 40000);
         }
     }
 
@@ -136,7 +146,7 @@ mod tests {
             panic!("expected play command");
         };
         assert_eq!(args.player, 2);
-        assert_eq!(args.port, Some(40000));
+        assert_eq!(args.port, 40000);
     }
 
     #[test]
