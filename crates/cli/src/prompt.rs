@@ -17,9 +17,7 @@ pub enum Form {
     UpgradeCard,
     UpgradePosition { card: u32 },
     RetreatSlot,
-    RetreatMana { slot: BenchSlotV1 },
     AttackTarget,
-    AttackMana { target: PositionV1 },
     EndTurn,
     Mana { action: ManaAction },
     Promotion,
@@ -46,12 +44,14 @@ pub fn revised(state: &PromptState, revision: u64) -> (PromptState, Vec<PromptEf
             *old != revision
         }
     };
-    let effects = if changed {
-        vec![PromptEffect::Cancelled]
+    if changed {
+        (
+            PromptState::Menu { revision },
+            vec![PromptEffect::Cancelled],
+        )
     } else {
-        Vec::new()
-    };
-    (PromptState::Menu { revision }, effects)
+        (*state, Vec::new())
+    }
 }
 
 pub fn prompt(view: &PlayerView, _revision: u64) -> Vec<String> {
@@ -132,8 +132,8 @@ fn menu(
     };
     let lines = match form {
         Form::PlayCard | Form::UpgradeCard => hand_lines(view),
-        Form::RetreatSlot | Form::Promotion => bench_lines(),
-        Form::AttackTarget | Form::UpgradePosition { .. } => position_lines(),
+        Form::RetreatSlot => bench_lines(),
+        Form::AttackTarget => position_lines(),
         Form::EndTurn => vec!["Enter 1 to confirm, or cancel".to_string()],
         Form::Resign => vec!["Confirm Give up with yes".to_string()],
         Form::Mana { .. } => mana_lines(),
@@ -152,7 +152,9 @@ fn form_step(
     n: Option<usize>,
 ) -> (PromptState, Vec<PromptEffect>) {
     match form {
-        Form::PlayCard => card_next(revision, view, n, |card| Form::PlaySlot { card }),
+        Form::PlayCard => card_next(revision, view, n, bench_lines(), |card| Form::PlaySlot {
+            card,
+        }),
         Form::PlaySlot { card } => {
             slot_submit(revision, actor, card, n, |slot| ActionV1::PlaySummon {
                 player: actor,
@@ -160,7 +162,9 @@ fn form_step(
                 slot,
             })
         }
-        Form::UpgradeCard => card_next(revision, view, n, |card| Form::UpgradePosition { card }),
+        Form::UpgradeCard => card_next(revision, view, n, position_lines(), |card| {
+            Form::UpgradePosition { card }
+        }),
         Form::UpgradePosition { card } => {
             position_submit(revision, actor, n, |position| ActionV1::UpgradeSummon {
                 player: actor,
@@ -193,23 +197,24 @@ fn form_step(
                 )
             },
         ),
-        Form::RetreatMana { .. } | Form::AttackMana { .. } => invalid(revision),
     }
 }
 fn card_next(
     revision: u64,
     view: &PlayerView,
     n: Option<usize>,
+    lines: Vec<String>,
     next: impl FnOnce(u32) -> Form,
 ) -> (PromptState, Vec<PromptEffect>) {
-    n.and_then(|n| view.hand.get(n.saturating_sub(1)))
+    n.filter(|n| *n >= 1)
+        .and_then(|n| view.hand.get(n - 1))
         .map_or_else(
             || invalid(revision),
             |card| {
                 let form = next(card.instance);
                 (
                     PromptState::Form { revision, form },
-                    vec![PromptEffect::Render(position_lines())],
+                    vec![PromptEffect::Render(lines)],
                 )
             },
         )
@@ -225,7 +230,7 @@ fn slot_next(
             let form = next(slot);
             (
                 PromptState::Form { revision, form },
-                vec![PromptEffect::Render(mana_lines())],
+                vec![PromptEffect::Render(mana_hint_lines())],
             )
         },
     )
@@ -241,7 +246,7 @@ fn position_next(
             let form = next(p);
             (
                 PromptState::Form { revision, form },
-                vec![PromptEffect::Render(mana_lines())],
+                vec![PromptEffect::Render(mana_hint_lines())],
             )
         },
     )
@@ -269,41 +274,58 @@ fn mana_submit(
     action: ManaAction,
     n: Option<usize>,
 ) -> (PromptState, Vec<PromptEffect>) {
-    mana(n).map_or_else(
-        || invalid(revision),
-        |mana_type| match action {
-            ManaAction::Convert => submit(
-                revision,
-                ActionV1::ConvertCoin {
-                    player: actor,
-                    mana_type,
-                },
-            ),
-            ManaAction::Choose => submit(
-                revision,
-                ActionV1::ChooseManaType {
-                    player: actor,
-                    mana_type,
-                },
-            ),
-            ManaAction::Retreat(slot) => submit(
-                revision,
-                ActionV1::Retreat {
-                    player: actor,
-                    slot,
-                    mana_hint: Some(mana_type),
-                },
-            ),
-            ManaAction::Attack(target) => submit(
-                revision,
-                ActionV1::DeclareAttack {
-                    player: actor,
-                    target,
-                    mana_hint: Some(mana_type),
-                },
-            ),
-        },
-    )
+    match action {
+        ManaAction::Convert => mana(n).map_or_else(
+            || invalid(revision),
+            |mana_type| {
+                submit(
+                    revision,
+                    ActionV1::ConvertCoin {
+                        player: actor,
+                        mana_type,
+                    },
+                )
+            },
+        ),
+        ManaAction::Choose => mana(n).map_or_else(
+            || invalid(revision),
+            |mana_type| {
+                submit(
+                    revision,
+                    ActionV1::ChooseManaType {
+                        player: actor,
+                        mana_type,
+                    },
+                )
+            },
+        ),
+        ManaAction::Retreat(slot) => mana_hint(n).map_or_else(
+            || invalid(revision),
+            |mana_hint| {
+                submit(
+                    revision,
+                    ActionV1::Retreat {
+                        player: actor,
+                        slot,
+                        mana_hint,
+                    },
+                )
+            },
+        ),
+        ManaAction::Attack(target) => mana_hint(n).map_or_else(
+            || invalid(revision),
+            |mana_hint| {
+                submit(
+                    revision,
+                    ActionV1::DeclareAttack {
+                        player: actor,
+                        target,
+                        mana_hint,
+                    },
+                )
+            },
+        ),
+    }
 }
 fn confirm_submit(
     revision: u64,
@@ -367,6 +389,15 @@ fn mana(n: Option<usize>) -> Option<ManaTypeV1> {
         _ => None,
     }
 }
+fn mana_hint(n: Option<usize>) -> Option<Option<ManaTypeV1>> {
+    match n {
+        Some(1) => Some(Some(ManaTypeV1::Matter)),
+        Some(2) => Some(Some(ManaTypeV1::Mind)),
+        Some(3) => Some(Some(ManaTypeV1::Spirit)),
+        Some(4) => Some(None),
+        _ => None,
+    }
+}
 fn hand_lines(view: &PlayerView) -> Vec<String> {
     view.hand
         .iter()
@@ -386,7 +417,7 @@ fn position_lines() -> Vec<String> {
         "1. Main".to_string(),
         "2. Bench 1".to_string(),
         "3. Bench 2".to_string(),
-        "4 Bench 3".to_string(),
+        "4. Bench 3".to_string(),
     ]
 }
 fn mana_lines() -> Vec<String> {
@@ -394,6 +425,14 @@ fn mana_lines() -> Vec<String> {
         "1. Matter".to_string(),
         "2. Mind".to_string(),
         "3. Spirit".to_string(),
+    ]
+}
+fn mana_hint_lines() -> Vec<String> {
+    vec![
+        "1. Matter".to_string(),
+        "2. Mind".to_string(),
+        "3. Spirit".to_string(),
+        "4. No hint".to_string(),
     ]
 }
 
@@ -408,111 +447,4 @@ pub fn forced_form(view: &PlayerView) -> Option<Form> {
 }
 
 #[cfg(test)]
-mod tests {
-    #![allow(clippy::expect_used)]
-    use super::*;
-    use crate::protocol::{
-        BoardView, CardDescription, HandCardView, ManaView, PhaseView, PlayerPublicView, SeatsView,
-    };
-
-    fn view() -> PlayerView {
-        let player = PlayerPublicView {
-            board: BoardView {
-                main: None,
-                bench: [None, None, None],
-            },
-            mana: ManaView {
-                matter: 1,
-                mind: 1,
-                spirit: 1,
-            },
-            main_losses: 0,
-            discard: Vec::new(),
-            persistent: Vec::new(),
-            deck_count: 3,
-            prize_count: 2,
-            hand_count: 1,
-        };
-        PlayerView {
-            you: Seat::One,
-            hand: vec![HandCardView {
-                instance: 9,
-                card: CardDescription {
-                    name: "Base".to_string(),
-                    life: None,
-                    retreat_cost: None,
-                    mana_types: Vec::new(),
-                    cost: None,
-                    abilities: Vec::new(),
-                    effects: Vec::new(),
-                },
-            }],
-            players: SeatsView {
-                one: player.clone(),
-                two: player,
-            },
-            coin: false,
-            stack: Vec::new(),
-            phase: PhaseView::Main,
-            active_player: Seat::One,
-            priority_holder: None,
-            pending: None,
-            outcome: None,
-        }
-    }
-    #[test]
-    fn play_form_maps_numbered_hand_and_bench_to_wire_action() {
-        let view = view();
-        let (state, _) = reduce(PromptState::Menu { revision: 4 }, &view, "1");
-        let (state, _) = reduce(state, &view, "1");
-        let (_, effects) = reduce(state, &view, "3");
-        assert_eq!(
-            effects,
-            vec![PromptEffect::Submit {
-                revision: 4,
-                action: ActionV1::PlaySummon {
-                    player: PlayerIdV1::One,
-                    card: 9,
-                    slot: BenchSlotV1::Third
-                }
-            }]
-        );
-    }
-    #[test]
-    fn prize_number_is_one_based_and_wire_index_is_zero_based() {
-        let view = view();
-        let (_, effects) = form_step(2, &view, PlayerIdV1::One, Form::Prize, Some(2));
-        assert_eq!(
-            effects,
-            vec![PromptEffect::Submit {
-                revision: 2,
-                action: ActionV1::ChoosePrize {
-                    player: PlayerIdV1::One,
-                    prize_index: 1
-                }
-            }]
-        );
-    }
-    #[test]
-    fn revision_cancels_active_form() {
-        let (state, effects) = revised(
-            &PromptState::Form {
-                revision: 1,
-                form: Form::Prize,
-            },
-            2,
-        );
-        assert_eq!(state, PromptState::Menu { revision: 2 });
-        assert_eq!(effects, vec![PromptEffect::Cancelled]);
-    }
-    #[test]
-    fn position_order_is_main_then_bench() {
-        assert_eq!(position(Some(1)), Some(PositionV1::Main));
-        assert_eq!(
-            position(Some(4)),
-            Some(PositionV1::Bench {
-                slot: BenchSlotV1::Third
-            })
-        );
-    }
-}
+mod tests;

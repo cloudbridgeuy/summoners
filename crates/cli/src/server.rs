@@ -630,6 +630,9 @@ fn create_default_output_at(directory: &Path, seconds: u64) -> Result<(File, Pat
 }
 
 #[cfg(test)]
+mod envelope_tests;
+
+#[cfg(test)]
 mod tests {
     #![allow(clippy::expect_used)]
     use super::*;

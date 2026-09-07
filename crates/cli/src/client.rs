@@ -23,6 +23,16 @@ pub enum PlayError {
     Encode(serde_json::Error),
 }
 
+#[derive(Debug, Clone, Default)]
+struct Snapshot {
+    revision: u64,
+    view: Option<PlayerView>,
+}
+
+fn is_stale(tagged_revision: u64, snapshot_revision: u64) -> bool {
+    tagged_revision < snapshot_revision
+}
+
 pub fn play(args: &PlayArgs) -> Result<(), PlayError> {
     let mut stream =
         TcpStream::connect((args.host.as_str(), args.port)).map_err(PlayError::Connect)?;
@@ -41,20 +51,17 @@ pub fn play(args: &PlayArgs) -> Result<(), PlayError> {
             seat,
         },
     )?;
-    let revision = Arc::new(Mutex::new(0_u64));
-    let view = Arc::new(Mutex::new(None));
+    let snapshot = Arc::new(Mutex::new(Snapshot::default()));
     let reader = stream.try_clone().map_err(PlayError::Socket)?;
-    let observed = Arc::clone(&revision);
-    let observed_view = Arc::clone(&view);
+    let observed = Arc::clone(&snapshot);
     let (terminal_sender, terminal_receiver) = std::sync::mpsc::channel();
-    let listener =
-        std::thread::spawn(move || receive(reader, &observed, &observed_view, &terminal_sender));
+    let listener = std::thread::spawn(move || receive(reader, &observed, &terminal_sender));
     let (input_sender, input_receiver) = std::sync::mpsc::channel();
-    let input_revision = Arc::clone(&revision);
+    let input_snapshot = Arc::clone(&snapshot);
     std::thread::spawn(move || {
         for line in io::stdin().lock().lines() {
-            let tagged = match input_revision.lock() {
-                Ok(revision) => *revision,
+            let tagged = match input_snapshot.lock() {
+                Ok(snapshot) => snapshot.revision,
                 Err(_) => return,
             };
             if input_sender.send((line, tagged)).is_err() {
@@ -72,9 +79,10 @@ pub fn play(args: &PlayArgs) -> Result<(), PlayError> {
         let (line, tagged_revision) = match input_receiver.recv_timeout(POLL_INTERVAL) {
             Ok((line, tagged)) => (line.map_err(PlayError::Socket)?, tagged),
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                let current = *revision
+                let current = snapshot
                     .lock()
-                    .map_err(|_| PlayError::Socket(io::Error::other("revision lock")))?;
+                    .map_err(|_| PlayError::Socket(io::Error::other("snapshot lock")))?
+                    .revision;
                 let (next, effects) = crate::prompt::revised(&prompt, current);
                 if effects.contains(&PromptEffect::Cancelled) {
                     giveup_pending = false;
@@ -85,10 +93,11 @@ pub fn play(args: &PlayArgs) -> Result<(), PlayError> {
             }
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
         };
-        let current = *revision
+        let current_snapshot = snapshot
             .lock()
-            .map_err(|_| PlayError::Socket(io::Error::other("revision lock")))?;
-        if tagged_revision < current {
+            .map_err(|_| PlayError::Socket(io::Error::other("snapshot lock")))?
+            .clone();
+        if is_stale(tagged_revision, current_snapshot.revision) {
             println!("Discarded stale input");
             continue;
         }
@@ -100,15 +109,12 @@ pub fn play(args: &PlayArgs) -> Result<(), PlayError> {
         if giveup_pending && line.trim().eq_ignore_ascii_case("yes") {
             giveup_pending = false;
             request_id += 1;
-            let based_on_revision = *revision
-                .lock()
-                .map_err(|_| PlayError::Socket(io::Error::other("revision lock")))?;
             send(
                 &mut stream,
                 &ClientEnvelope::Submit {
                     version: VERSION,
                     request_id,
-                    based_on_revision,
+                    based_on_revision: current_snapshot.revision,
                     action: ActionV1::Resign {
                         player: match seat {
                             Seat::One => PlayerIdV1::One,
@@ -124,16 +130,10 @@ pub fn play(args: &PlayArgs) -> Result<(), PlayError> {
             println!("Give up cancelled");
             continue;
         }
-        let latest = view
-            .lock()
-            .map_err(|_| PlayError::Socket(io::Error::other("view lock")))?
-            .clone();
-        let Some(latest) = latest else {
+        let Some(latest) = current_snapshot.view.clone() else {
             continue;
         };
-        let current = *revision
-            .lock()
-            .map_err(|_| PlayError::Socket(io::Error::other("revision lock")))?;
+        let current = current_snapshot.revision;
         let (revised_prompt, revision_effects) = crate::prompt::revised(&prompt, current);
         prompt = revised_prompt;
         if revision_effects.contains(&PromptEffect::Cancelled) {
@@ -204,8 +204,7 @@ fn send(stream: &mut TcpStream, message: &ClientEnvelope) -> Result<(), PlayErro
 
 fn receive(
     stream: TcpStream,
-    revision: &Arc<Mutex<u64>>,
-    latest: &Arc<Mutex<Option<PlayerView>>>,
+    snapshot: &Arc<Mutex<Snapshot>>,
     terminal: &std::sync::mpsc::Sender<()>,
 ) {
     let mut reader = BufReader::new(stream);
@@ -221,11 +220,9 @@ fn receive(
                 result,
                 ..
             } => {
-                if let Ok(mut current) = revision.lock() {
-                    *current = next;
-                }
-                if let Ok(mut current) = latest.lock() {
-                    *current = Some(view.clone());
+                if let Ok(mut current) = snapshot.lock() {
+                    current.revision = next;
+                    current.view = Some(view.clone());
                 }
                 println!("{}", render_view(&view));
                 for notice in notices {
@@ -440,5 +437,12 @@ mod tests {
     fn frame_bound_rejects_unterminated_server_input() {
         let bytes = vec![b'x'; MAX_SERVER_FRAME];
         assert!(read_frame(&mut bytes.as_slice()).is_err());
+    }
+
+    #[test]
+    fn input_tagged_behind_the_snapshot_revision_is_stale() {
+        assert!(is_stale(0, 1));
+        assert!(!is_stale(1, 1));
+        assert!(!is_stale(2, 1));
     }
 }

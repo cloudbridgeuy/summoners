@@ -723,6 +723,9 @@ fn outcome_view(outcome: GameOutcome) -> OutcomeView {
 }
 
 #[cfg(test)]
+mod envelope_tests;
+
+#[cfg(test)]
 mod tests {
     #![allow(clippy::expect_used)]
     use super::*;
