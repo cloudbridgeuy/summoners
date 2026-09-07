@@ -9,14 +9,15 @@ use rand::RngExt;
 use serde_json::json;
 use summoners_cards::{BuiltInError, DeckLoadError, built_in_catalog, parse_deck};
 use summoners_core::domain::state::GameStatus;
-use summoners_match_log::{RecordedMatch, RecordingError, SetRequirementV1};
+use summoners_match_log::{RecordedMatch, RecordedStep, RecordingError, SetRequirementV1};
 use tokio::io::{AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::{Semaphore, mpsc, oneshot};
 
 use crate::app::ServeArgs;
 use crate::protocol::{
-    ClientEnvelope, ProtocolError, Seat, ServerEnvelope, VERSION, normalize_action, player_view,
+    ClientEnvelope, ProtocolError, Seat, ServerEnvelope, SubmissionResult, VERSION,
+    normalize_action, player_view,
 };
 use crate::setup::{SetupError, initial_state};
 
@@ -144,7 +145,7 @@ async fn serve_session(
                         clients[index] = Some(client);
                         let _ = admitted.send(Admission::Accepted);
                         if clients.iter().all(Option::is_some) {
-                            broadcast(&clients, Broadcast { recorder: &recorder, descriptions, revision, reply: None }).await?;
+                            broadcast(&clients, Broadcast { recorder: &recorder, descriptions, revision, reply: None, result: None }).await?;
                         }
                     }
                 }
@@ -181,10 +182,13 @@ async fn serve_session(
                         deliver(client, rejection(request_id, "stale revision")).await?;
                         continue;
                     }
-                    recorder.submit(&action).map_err(ServeError::Recording)?;
+                    let result = match recorder.submit(&action).map_err(ServeError::Recording)? {
+                        RecordedStep::Accepted { .. } => SubmissionResult::Accepted,
+                        RecordedStep::Rejected { error } => SubmissionResult::Rejected { reason: rejection_reason(error) },
+                    };
                     revision += 1;
                     let terminal = matches!(recorder.state().status, GameStatus::Ended(_));
-                    broadcast(&clients, Broadcast { recorder: &recorder, descriptions, revision, reply: Some(request_id) }).await?;
+                    broadcast(&clients, Broadcast { recorder: &recorder, descriptions, revision, reply: Some(request_id), result: Some(result) }).await?;
                     if terminal { return Ok(()); }
                 }
                 None => return Ok(()),
@@ -337,6 +341,7 @@ struct Broadcast<'a> {
     descriptions: &'a crate::protocol::CardDescriptions,
     revision: u64,
     reply: Option<u64>,
+    result: Option<SubmissionResult>,
 }
 
 async fn broadcast(
@@ -360,6 +365,7 @@ async fn broadcast(
                     view,
                     notices: Vec::new(),
                     reply: input.reply,
+                    result: input.result.clone(),
                 }
             };
             if let Err(error) = deliver(client, envelope).await {
@@ -421,6 +427,31 @@ fn rejection(request_id: u64, reason: &str) -> ServerEnvelope {
     ServerEnvelope::Rejected {
         request_id: Some(request_id),
         reason: reason.to_string(),
+    }
+}
+
+fn rejection_reason(error: summoners_core::domain::errors::ActionError) -> String {
+    use summoners_core::domain::errors::ActionError;
+    match error {
+        ActionError::NotYourDecision => "not your decision".to_string(),
+        ActionError::GameAlreadyOver => "game already over".to_string(),
+        ActionError::GameBroken => "game is broken".to_string(),
+        ActionError::WrongPhase => "wrong phase".to_string(),
+        ActionError::EmptyPosition => "empty position".to_string(),
+        ActionError::UnknownCard => "unknown card".to_string(),
+        ActionError::InsufficientMana { short } => format!(
+            "insufficient mana: matter {} mind {} spirit {}",
+            short.matter, short.mind, short.spirit
+        ),
+        ActionError::SummonExhausted => "summon exhausted".to_string(),
+        ActionError::NormalAttackAlreadyUsed => "normal attack already used".to_string(),
+        ActionError::NormalRetreatAlreadyUsed => "normal retreat already used".to_string(),
+        ActionError::AlreadyUpgradedThisTurn => "already upgraded this turn".to_string(),
+        ActionError::PlayedThisTurn => "played this turn".to_string(),
+        ActionError::IllegalUpgradeTarget => "illegal upgrade target".to_string(),
+        ActionError::InvalidTarget => "invalid target".to_string(),
+        ActionError::PendingInputMismatch => "pending input mismatch".to_string(),
+        ActionError::InvalidManaHint => "invalid mana hint".to_string(),
     }
 }
 
@@ -882,7 +913,8 @@ mod tests {
                     recorder: &recorder,
                     descriptions: &descriptions,
                     revision: 1,
-                    reply: Some(1)
+                    reply: Some(1),
+                    result: Some(SubmissionResult::Accepted),
                 }
             ),
             observe

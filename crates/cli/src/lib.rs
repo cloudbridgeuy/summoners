@@ -3,6 +3,7 @@
 pub mod app;
 pub mod client;
 pub mod error;
+pub mod prompt;
 pub mod protocol;
 pub mod replay;
 pub mod server;

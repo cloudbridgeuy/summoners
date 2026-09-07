@@ -66,6 +66,7 @@ pub enum ServerEnvelope {
         view: PlayerView,
         notices: Vec<String>,
         reply: Option<u64>,
+        result: Option<SubmissionResult>,
     },
     Finished {
         outcome: OutcomeView,
@@ -80,6 +81,13 @@ pub enum ServerEnvelope {
         request_id: Option<u64>,
         reason: String,
     },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SubmissionResult {
+    Accepted,
+    Rejected { reason: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

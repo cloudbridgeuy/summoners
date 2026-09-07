@@ -4,10 +4,10 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use crate::app::PlayArgs;
+use crate::prompt::{PromptEffect, PromptState, reduce};
 use crate::protocol::{
     ClientEnvelope, OutcomeReasonView, OutcomeView, PlayerView, Seat, ServerEnvelope, VERSION,
 };
-use summoners_match_log::{ActionV1, wire::PlayerIdV1};
 
 const MAX_SERVER_FRAME: usize = 1024 * 1024;
 const POLL_INTERVAL: Duration = Duration::from_millis(50);
@@ -41,10 +41,13 @@ pub fn play(args: &PlayArgs) -> Result<(), PlayError> {
         },
     )?;
     let revision = Arc::new(Mutex::new(0_u64));
+    let view = Arc::new(Mutex::new(None));
     let reader = stream.try_clone().map_err(PlayError::Socket)?;
     let observed = Arc::clone(&revision);
+    let observed_view = Arc::clone(&view);
     let (terminal_sender, terminal_receiver) = std::sync::mpsc::channel();
-    let listener = std::thread::spawn(move || receive(reader, &observed, &terminal_sender));
+    let listener =
+        std::thread::spawn(move || receive(reader, &observed, &observed_view, &terminal_sender));
     let (input_sender, input_receiver) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         for line in io::stdin().lock().lines() {
@@ -54,6 +57,7 @@ pub fn play(args: &PlayArgs) -> Result<(), PlayError> {
         }
     });
     let mut request_id = 0_u64;
+    let mut prompt = PromptState::Menu { revision: 0 };
     while matches!(
         terminal_receiver.try_recv(),
         Err(std::sync::mpsc::TryRecvError::Empty)
@@ -63,31 +67,65 @@ pub fn play(args: &PlayArgs) -> Result<(), PlayError> {
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
         };
-        if line.trim().eq_ignore_ascii_case("give up") {
-            println!("Confirm Give up with yes");
-            match confirmed(&input_receiver, &terminal_receiver)? {
-                Confirmation::Confirmed => {
+        let latest = view
+            .lock()
+            .map_err(|_| PlayError::Socket(io::Error::other("view lock")))?
+            .clone();
+        let Some(latest) = latest else {
+            continue;
+        };
+        let current = *revision
+            .lock()
+            .map_err(|_| PlayError::Socket(io::Error::other("revision lock")))?;
+        if matches!(prompt, PromptState::Menu { .. })
+            && latest
+                .pending
+                .as_ref()
+                .is_some_and(|pending| pending.owner == seat)
+            && let Some(form) = crate::prompt::forced_form(&latest)
+        {
+            prompt = PromptState::Form {
+                revision: current,
+                form,
+            };
+        }
+        let (next, effects) = reduce(
+            prompt,
+            &latest,
+            if line.trim().eq_ignore_ascii_case("give up") {
+                "8"
+            } else {
+                &line
+            },
+        );
+        prompt = next;
+        for effect in effects {
+            match effect {
+                PromptEffect::Render(lines) => {
+                    for line in lines {
+                        println!("{line}");
+                    }
+                }
+                PromptEffect::Cancelled => println!("Prompt cancelled"),
+                PromptEffect::Submit {
+                    revision: based_on_revision,
+                    action,
+                } => {
+                    if based_on_revision != current {
+                        println!("Prompt cancelled");
+                        continue;
+                    }
                     request_id += 1;
-                    let revision = *revision
-                        .lock()
-                        .map_err(|_| PlayError::Socket(io::Error::other("revision lock")))?;
-                    let player = if seat == Seat::One {
-                        PlayerIdV1::One
-                    } else {
-                        PlayerIdV1::Two
-                    };
                     send(
                         &mut stream,
                         &ClientEnvelope::Submit {
                             version: VERSION,
                             request_id,
-                            based_on_revision: revision,
-                            action: ActionV1::Resign { player },
+                            based_on_revision,
+                            action,
                         },
                     )?;
                 }
-                Confirmation::Cancelled => {}
-                Confirmation::Terminal => break,
             }
         }
     }
@@ -96,47 +134,18 @@ pub fn play(args: &PlayArgs) -> Result<(), PlayError> {
     Ok(())
 }
 
-enum Confirmation {
-    Confirmed,
-    Cancelled,
-    Terminal,
-}
-
-fn confirmed(
-    input: &std::sync::mpsc::Receiver<Result<String, io::Error>>,
-    terminal: &std::sync::mpsc::Receiver<()>,
-) -> Result<Confirmation, PlayError> {
-    loop {
-        match terminal.try_recv() {
-            Ok(()) | Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                return Ok(Confirmation::Terminal);
-            }
-            Err(std::sync::mpsc::TryRecvError::Empty) => {}
-        }
-        match input.recv_timeout(POLL_INTERVAL) {
-            Ok(Ok(answer)) => {
-                return Ok(if answer.trim().eq_ignore_ascii_case("yes") {
-                    Confirmation::Confirmed
-                } else {
-                    Confirmation::Cancelled
-                });
-            }
-            Ok(Err(error)) => return Err(PlayError::Socket(error)),
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
-            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-                return Ok(Confirmation::Cancelled);
-            }
-        }
-    }
-}
-
 fn send(stream: &mut TcpStream, message: &ClientEnvelope) -> Result<(), PlayError> {
     let mut bytes = serde_json::to_vec(message).map_err(PlayError::Encode)?;
     bytes.push(b'\n');
     stream.write_all(&bytes).map_err(PlayError::Socket)
 }
 
-fn receive(stream: TcpStream, revision: &Arc<Mutex<u64>>, terminal: &std::sync::mpsc::Sender<()>) {
+fn receive(
+    stream: TcpStream,
+    revision: &Arc<Mutex<u64>>,
+    latest: &Arc<Mutex<Option<PlayerView>>>,
+    terminal: &std::sync::mpsc::Sender<()>,
+) {
     let mut reader = BufReader::new(stream);
     while let Ok(frame) = read_frame(&mut reader) {
         let Ok(message) = serde_json::from_slice::<ServerEnvelope>(&frame) else {
@@ -146,12 +155,26 @@ fn receive(stream: TcpStream, revision: &Arc<Mutex<u64>>, terminal: &std::sync::
             ServerEnvelope::Update {
                 revision: next,
                 view,
+                notices,
+                result,
                 ..
             } => {
                 if let Ok(mut current) = revision.lock() {
                     *current = next;
                 }
+                if let Ok(mut current) = latest.lock() {
+                    *current = Some(view.clone());
+                }
                 println!("{}", render_view(&view));
+                for notice in notices {
+                    println!("{notice}");
+                }
+                if let Some(crate::protocol::SubmissionResult::Rejected { reason }) = result {
+                    println!("Rejected {reason}");
+                }
+                for line in crate::prompt::prompt(&view, next) {
+                    println!("{line}");
+                }
             }
             ServerEnvelope::Finished { outcome, view, .. } => {
                 println!("{}", render_view(&view));
@@ -355,38 +378,5 @@ mod tests {
     fn frame_bound_rejects_unterminated_server_input() {
         let bytes = vec![b'x'; MAX_SERVER_FRAME];
         assert!(read_frame(&mut bytes.as_slice()).is_err());
-    }
-
-    #[test]
-    fn confirmation_cancel_keeps_the_client_running() {
-        let (input_sender, input) = std::sync::mpsc::channel();
-        let (_terminal_sender, terminal) = std::sync::mpsc::channel();
-        input_sender.send(Ok("no".to_string())).expect("send");
-        assert!(matches!(
-            confirmed(&input, &terminal).expect("confirmation"),
-            Confirmation::Cancelled
-        ));
-    }
-
-    #[test]
-    fn confirmation_observes_terminal_message() {
-        let (_input_sender, input) = std::sync::mpsc::channel();
-        let (terminal_sender, terminal) = std::sync::mpsc::channel();
-        terminal_sender.send(()).expect("send");
-        assert!(matches!(
-            confirmed(&input, &terminal).expect("confirmation"),
-            Confirmation::Terminal
-        ));
-    }
-
-    #[test]
-    fn confirmation_observes_terminal_disconnect() {
-        let (_input_sender, input) = std::sync::mpsc::channel();
-        let (terminal_sender, terminal) = std::sync::mpsc::channel();
-        drop(terminal_sender);
-        assert!(matches!(
-            confirmed(&input, &terminal).expect("confirmation"),
-            Confirmation::Terminal
-        ));
     }
 }
