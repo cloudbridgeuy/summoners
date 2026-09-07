@@ -1,6 +1,6 @@
 use summoners_match_log::{
     ActionV1,
-    wire::{BenchSlotV1, ManaTypeV1, PlayerIdV1, PositionV1},
+    wire::{BenchSlotV1, EntityIdV1, ManaTypeV1, PlayerIdV1, PositionV1},
 };
 
 use crate::protocol::{PendingKindView, PlayerView, Seat};
@@ -13,16 +13,60 @@ pub enum PromptState {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Form {
     PlayCard,
-    PlaySlot { card: u32 },
+    PlaySlot {
+        card: u32,
+    },
     UpgradeCard,
-    UpgradePosition { card: u32 },
+    UpgradePosition {
+        card: u32,
+    },
     RetreatSlot,
     AttackTarget,
     EndTurn,
-    Mana { action: ManaAction },
+    Mana {
+        action: ManaAction,
+    },
     Promotion,
     Prize,
+    CastCard,
+    SkillPosition,
+    SkillAbility {
+        position: PositionV1,
+    },
+    Targets {
+        action: TargetAction,
+        targets: TargetList,
+    },
+    ManaHint {
+        action: TargetAction,
+        targets: TargetList,
+    },
     Resign,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TargetList(pub [Option<PositionV1>; 4]);
+impl TargetList {
+    fn empty() -> Self {
+        Self([None; 4])
+    }
+    fn values(self) -> Vec<PositionV1> {
+        self.0.into_iter().flatten().collect()
+    }
+    fn push(&mut self, target: PositionV1) {
+        if let Some(slot) = self.0.iter_mut().find(|slot| slot.is_none()) {
+            *slot = Some(target);
+        }
+    }
+    fn undo(&mut self) {
+        if let Some(slot) = self.0.iter_mut().rev().find(|slot| slot.is_some()) {
+            *slot = None;
+        }
+    }
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TargetAction {
+    Cast(u32),
+    Skill { position: PositionV1, skill: usize },
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ManaAction {
@@ -55,7 +99,7 @@ pub fn revised(state: &PromptState, revision: u64) -> (PromptState, Vec<PromptEf
 }
 
 pub fn prompt(view: &PlayerView, _revision: u64) -> Vec<String> {
-    let mut lines = vec!["Actions: 1. Play Summon 2. Upgrade Summon 3. Retreat 4. Declare Attack 5. End Turn 6. Pass Priority 7. Convert Coin 8. Resign".to_string()];
+    let mut lines = vec!["Actions: 1. Play Summon 2. Upgrade Summon 3. Retreat 4. Declare Attack 5. End Turn 6. Pass Priority 7. Convert Coin 8. Resign 9. Cast Spell 10. Activate Skill".to_string()];
     if let Some(pending) = &view.pending {
         lines.push(format!(
             "Awaiting {:?} from {:?}",
@@ -128,10 +172,13 @@ fn menu(
             action: ManaAction::Convert,
         },
         Some(8) => Form::Resign,
+        Some(9) => Form::CastCard,
+        Some(10) => Form::SkillPosition,
         _ => return invalid(revision),
     };
     let lines = match form {
-        Form::PlayCard | Form::UpgradeCard => hand_lines(view),
+        Form::PlayCard | Form::UpgradeCard | Form::CastCard => hand_lines(view),
+        Form::SkillPosition => position_lines(),
         Form::RetreatSlot => bench_lines(),
         Form::AttackTarget => position_lines(),
         Form::EndTurn => vec!["Enter 1 to confirm, or cancel".to_string()],
@@ -197,7 +244,155 @@ fn form_step(
                 )
             },
         ),
+        Form::CastCard => card_next(revision, view, n, target_lines(), |card| Form::Targets {
+            action: TargetAction::Cast(card),
+            targets: TargetList::empty(),
+        }),
+        Form::Targets { action, targets } => target_step(revision, action, targets, n),
+        Form::ManaHint { action, targets } => mana_hint(n).map_or_else(
+            || invalid(revision),
+            |mana_hint| target_submit(revision, view, actor, (action, targets), mana_hint),
+        ),
+        Form::SkillPosition => position(n).map_or_else(
+            || invalid(revision),
+            |position| {
+                (
+                    PromptState::Form {
+                        revision,
+                        form: Form::SkillAbility { position },
+                    },
+                    vec![PromptEffect::Render(skill_lines(view, position))],
+                )
+            },
+        ),
+        Form::SkillAbility { position } => skill_next(revision, view, position, n),
     }
+}
+fn target_step(
+    revision: u64,
+    action: TargetAction,
+    mut targets: TargetList,
+    n: Option<usize>,
+) -> (PromptState, Vec<PromptEffect>) {
+    match n {
+        Some(5) => (
+            PromptState::Form {
+                revision,
+                form: Form::ManaHint { action, targets },
+            },
+            vec![PromptEffect::Render(mana_hint_lines())],
+        ),
+        Some(6) => {
+            targets.undo();
+            target_form(revision, action, targets)
+        }
+        Some(7) => target_form(revision, action, TargetList::empty()),
+        _ => position(n).map_or_else(
+            || invalid(revision),
+            |position| {
+                targets.push(position);
+                target_form(revision, action, targets)
+            },
+        ),
+    }
+}
+fn target_form(
+    revision: u64,
+    action: TargetAction,
+    targets: TargetList,
+) -> (PromptState, Vec<PromptEffect>) {
+    (
+        PromptState::Form {
+            revision,
+            form: Form::Targets { action, targets },
+        },
+        vec![PromptEffect::Render(target_lines())],
+    )
+}
+fn target_submit(
+    revision: u64,
+    view: &PlayerView,
+    actor: PlayerIdV1,
+    target: (TargetAction, TargetList),
+    mana_hint: Option<ManaTypeV1>,
+) -> (PromptState, Vec<PromptEffect>) {
+    let (action, targets) = target;
+    let action = match action {
+        TargetAction::Cast(card) => ActionV1::CastSpell {
+            player: actor,
+            card,
+            targets: targets.values(),
+            mana_hint,
+        },
+        TargetAction::Skill { position, skill } => {
+            let skills = skills_at(view, position);
+            let Some(text) = skills.get(skill) else {
+                return invalid(revision);
+            };
+            let Some((id, _)) = text
+                .strip_prefix("Skill ")
+                .and_then(|text| text.split_once(' '))
+            else {
+                return invalid(revision);
+            };
+            ActionV1::ActivateSkill {
+                player: actor,
+                position,
+                ability: EntityIdV1(id.to_string()),
+                targets: targets.values(),
+                mana_hint,
+            }
+        }
+    };
+    submit(revision, action)
+}
+fn skill_next(
+    revision: u64,
+    view: &PlayerView,
+    position: PositionV1,
+    n: Option<usize>,
+) -> (PromptState, Vec<PromptEffect>) {
+    let skills = skills_at(view, position);
+    let skill = n.unwrap_or(0).saturating_sub(1);
+    if skills.get(skill).is_none() {
+        return invalid(revision);
+    }
+    target_form(
+        revision,
+        TargetAction::Skill { position, skill },
+        TargetList::empty(),
+    )
+}
+fn skills_at(view: &PlayerView, position: PositionV1) -> Vec<String> {
+    let board = match view.you {
+        Seat::One => &view.players.one.board,
+        Seat::Two => &view.players.two.board,
+    };
+    let summon = match position {
+        PositionV1::Main => board.main.as_ref(),
+        PositionV1::Bench { slot } => board.bench[match slot {
+            BenchSlotV1::First => 0,
+            BenchSlotV1::Second => 1,
+            BenchSlotV1::Third => 2,
+        }]
+        .as_ref(),
+    };
+    summon
+        .and_then(|summon| summon.chain.last())
+        .map_or_else(Vec::new, |card| {
+            card.abilities
+                .iter()
+                .filter(|text| text.starts_with("Skill "))
+                .cloned()
+                .collect()
+        })
+}
+fn skill_lines(view: &PlayerView, position: PositionV1) -> Vec<String> {
+    skills_at(view, position)
+        .into_iter()
+        .enumerate()
+        .map(|(index, skill)| format!("{}. {skill}", index + 1))
+        .collect()
 }
 fn card_next(
     revision: u64,
@@ -433,6 +628,17 @@ fn mana_hint_lines() -> Vec<String> {
         "2. Mind".to_string(),
         "3. Spirit".to_string(),
         "4. No hint".to_string(),
+    ]
+}
+fn target_lines() -> Vec<String> {
+    vec![
+        "1. Main".to_string(),
+        "2. Bench 1".to_string(),
+        "3. Bench 2".to_string(),
+        "4. Bench 3".to_string(),
+        "5. Done".to_string(),
+        "6. Undo".to_string(),
+        "7. Clear".to_string(),
     ]
 }
 

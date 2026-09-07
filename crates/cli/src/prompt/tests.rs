@@ -747,7 +747,7 @@ fn resign_confirms_with_yes_variants_and_one() {
 fn menu_invalid_selection_resets_with_message() {
     for seat in SEATS {
         let view = view(seat);
-        for input in ["0", "9", "", "abc"] {
+        for input in ["0", "11", "", "abc"] {
             let (state, effects) = reduce(PromptState::Menu { revision: 4 }, &view, input);
             assert_eq!(state, PromptState::Menu { revision: 4 });
             assert_eq!(effects, invalid_render());
@@ -949,7 +949,7 @@ fn prompt_lines_base_menu_only() {
     assert_eq!(
         prompt(&view, 4),
         vec![
-            "Actions: 1. Play Summon 2. Upgrade Summon 3. Retreat 4. Declare Attack 5. End Turn 6. Pass Priority 7. Convert Coin 8. Resign"
+            "Actions: 1. Play Summon 2. Upgrade Summon 3. Retreat 4. Declare Attack 5. End Turn 6. Pass Priority 7. Convert Coin 8. Resign 9. Cast Spell 10. Activate Skill"
                 .to_string()
         ]
     );

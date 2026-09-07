@@ -520,18 +520,26 @@ fn describe_card(card: &summoners_core::domain::cards::Entity) -> CardDescriptio
     CardDescription {
         name: card
             .get::<Name>()
-            .map_or_else(|| "Unnamed card".to_string(), |name| name.0.clone()),
+            .map_or_else(|| "Unnamed card".to_string(), |name| terminal_text(&name.0)),
         life: card.get::<Life>().map(|life| life.0),
         retreat_cost: card.get::<RetreatCost>().map(|cost| cost.0),
         mana_types: card.get::<ManaTypes>().map_or_else(Vec::new, |types| {
-            types.0.iter().map(|mana| format!("{mana:?}")).collect()
+            types
+                .0
+                .iter()
+                .map(|mana| mana_text(*mana).to_string())
+                .collect()
         }),
         cost: card.get::<Cost>().map(cost_text),
         abilities: card
             .all::<Skill>()
             .into_iter()
-            .chain(card.all::<Attack>())
-            .map(describe_ability)
+            .map(|ability| describe_named_ability("Skill", ability))
+            .chain(
+                card.all::<Attack>()
+                    .into_iter()
+                    .map(|ability| describe_named_ability("Attack", ability)),
+            )
             .collect(),
         effects: card
             .all::<EffectLeaf>()
@@ -633,7 +641,10 @@ fn stack_view(item: &StackItem, descriptions: &CardDescriptions) -> StackView {
     }
 }
 fn position_text(position: Position) -> String {
-    format!("{position:?}")
+    match position {
+        Position::Main => "Main".to_string(),
+        Position::Bench(slot) => bench_text(slot).to_string(),
+    }
 }
 fn cost_text(cost: &Cost) -> String {
     format!(
@@ -641,10 +652,28 @@ fn cost_text(cost: &Cost) -> String {
         cost.matter, cost.mind, cost.spirit, cost.generic
     )
 }
+fn describe_named_ability(kind: &str, ability: &summoners_core::domain::cards::Entity) -> String {
+    let name = ability.get::<Name>().map_or_else(
+        || "Unnamed ability".to_string(),
+        |name| terminal_text(&name.0),
+    );
+    let effects = ability
+        .all::<EffectLeaf>()
+        .into_iter()
+        .map(effect_text)
+        .collect::<Vec<_>>();
+    if effects.is_empty() {
+        format!("{kind} {} {name}", ability.id)
+    } else {
+        format!("{kind} {} {name}: {}", ability.id, effects.join(", "))
+    }
+}
+#[cfg(test)]
 fn describe_ability(ability: &summoners_core::domain::cards::Entity) -> String {
-    let name = ability
-        .get::<Name>()
-        .map_or_else(|| "Unnamed ability".to_string(), |name| name.0.clone());
+    let name = ability.get::<Name>().map_or_else(
+        || "Unnamed ability".to_string(),
+        |name| terminal_text(&name.0),
+    );
     let effects = ability
         .all::<EffectLeaf>()
         .into_iter()
@@ -655,6 +684,21 @@ fn describe_ability(ability: &summoners_core::domain::cards::Entity) -> String {
     } else {
         format!("{name}: {}", effects.join(", "))
     }
+}
+pub fn terminal_text(value: &str) -> String {
+    value
+        .chars()
+        .flat_map(|character| match character {
+            '\n' => "\\n".chars().collect::<Vec<_>>(),
+            '\r' => "\\r".chars().collect(),
+            '\t' => "\\t".chars().collect(),
+            '\x1b' => "\\x1b".chars().collect(),
+            character if character.is_control() => format!("\\\\u{{{:04x}}}", character as u32)
+                .chars()
+                .collect(),
+            character => vec![character],
+        })
+        .collect()
 }
 fn effect_text(effect: &EffectLeaf) -> String {
     match effect {

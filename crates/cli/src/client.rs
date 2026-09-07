@@ -133,6 +133,18 @@ pub fn play(args: &PlayArgs) -> Result<(), PlayError> {
         let Some(latest) = current_snapshot.view.clone() else {
             continue;
         };
+        if let Some(number) = line
+            .trim()
+            .strip_prefix("inspect ")
+            .and_then(|value| value.parse::<usize>().ok())
+        {
+            if let Some(card) = latest.hand.get(number.saturating_sub(1)) {
+                println!("{}", inspect_card(&card.card));
+            } else {
+                println!("Invalid inspection");
+            }
+            continue;
+        }
         let current = current_snapshot.revision;
         let (revised_prompt, revision_effects) = crate::prompt::revised(&prompt, current);
         prompt = revised_prompt;
@@ -318,6 +330,33 @@ fn render_card(card: &crate::protocol::CardDescription) -> String {
         format!(" [{}]", card.effects.join(", "))
     };
     format!("{}{}{}", card.name, life, effects)
+}
+fn inspect_card(card: &crate::protocol::CardDescription) -> String {
+    let abilities = if card.abilities.is_empty() {
+        String::new()
+    } else {
+        format!(" [{}]", card.abilities.join(", "))
+    };
+    let cost = card
+        .cost
+        .as_ref()
+        .map_or_else(String::new, |cost| format!(" cost {cost}"));
+    let retreat = card
+        .retreat_cost
+        .map_or_else(String::new, |cost| format!(" retreat {cost}"));
+    let mana = if card.mana_types.is_empty() {
+        String::new()
+    } else {
+        format!(" Mana {}", card.mana_types.join(", "))
+    };
+    format!(
+        "{}{}{}{}{}",
+        render_card(card),
+        retreat,
+        mana,
+        cost,
+        abilities
+    )
 }
 
 fn render_outcome(outcome: &OutcomeView) -> String {
