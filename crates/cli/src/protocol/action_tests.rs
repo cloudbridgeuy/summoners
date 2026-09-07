@@ -348,3 +348,34 @@ fn resign_checks_both_seats() {
         assert_matching_seat_ok_and_other_seat_rejected(player, action, expected);
     }
 }
+
+#[test]
+fn seat_and_player_id_convert_both_ways() {
+    assert_eq!(PlayerId::from(Seat::One), PlayerId::One);
+    assert_eq!(PlayerId::from(Seat::Two), PlayerId::Two);
+    assert_eq!(Seat::from(PlayerId::One), Seat::One);
+    assert_eq!(Seat::from(PlayerId::Two), Seat::Two);
+}
+
+#[test]
+fn public_player_and_summon_views_read_the_state_and_unknown_definitions_fall_back() {
+    let catalog = summoners_cards::built_in_catalog().expect("catalog");
+    let state = crate::setup::initial_state(
+        catalog.library(),
+        [catalog.set_paths(), catalog.barrow_herd()],
+        4,
+    )
+    .expect("state");
+    let descriptions = CardDescriptions::from_card_set(&state.cards);
+    let public = public_player(&state.players.one, &descriptions);
+    assert_eq!(public.hand_count, state.players.one.hand.len());
+    assert_eq!(public.deck_count, state.players.one.deck.len());
+    let summon = summon_view(
+        state.players.one.main.as_ref().expect("main"),
+        &descriptions,
+    );
+    assert_eq!(summon.damage, 0);
+    assert!(!summon.chain.is_empty());
+    let absent = EntityId::parse("ffffffffffffffffffffffffffffffff").expect("id");
+    assert_eq!(descriptions.get(absent).name, "Unknown card");
+}
