@@ -64,6 +64,7 @@ The host owns both Deck paths and the transcript. Start it with two repository
 Deck files and an explicit seed:
 
 ```sh
+mkdir -p matches
 cargo run -p summoners-cli -- serve --bind 127.0.0.1 --port 4000 --seed 0 --decks crates/cards/data/set-paths.toml crates/cards/data/barrow-herd.toml --output matches/local.ndjson
 ```
 
@@ -83,8 +84,8 @@ Clients show numbered prompts. Type `inspect <hand index>` or
 `inspect board <player> <position>` to inspect visible cards. Type `give up`,
 then `yes`, to resign deliberately. The host creates a unique file in
 `matches/` when `--output` is omitted and never overwrites an existing output
-path. A completed transcript replays; an interrupted or partial transcript
-does not:
+path. Change or remove an existing explicit output file before a rerun. A
+completed transcript replays; an interrupted or partial transcript does not:
 
 ```sh
 cargo run -p summoners-cli -- replay matches/local.ndjson

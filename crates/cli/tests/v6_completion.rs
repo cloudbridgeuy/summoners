@@ -68,7 +68,7 @@ fn repository_deck(name: &str) -> PathBuf {
 fn start_host(directory: &TempDir) -> Host {
     let transcript = directory.path().join("match.ndjson");
     let child = Command::new(binary())
-        .args(["serve", "--bind", "127.0.0.1", "--port", "0", "--seed"])
+        .args(["serve", "--bind", "0.0.0.0", "--port", "0", "--seed"])
         .arg(SEED.to_string())
         .args(["--decks"])
         .arg(repository_deck("set-paths.toml"))
@@ -252,7 +252,8 @@ fn real_clients_complete_an_empty_deck_loss_and_replay() {
     assert!(two_output.contains("empty deck draw"));
     for output in [&one_output, &two_output] {
         assert!(!output.contains("seed"));
-        assert!(!output.contains("GameState"));
+        assert!(!output.contains("match_created"));
+        assert!(!output.contains("final_state"));
     }
 
     assert!(one.process.wait().success(), "player one exits normally");

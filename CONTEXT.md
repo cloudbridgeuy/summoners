@@ -20,9 +20,8 @@ ships `replay <transcript.ndjson>` verifying completed version-1 NDJSON match
 transcripts end to end against the built-in catalog: exit 0 on a valid stream,
 exit 1 with a typed message otherwise. The game client uses numbered prompts,
 inspection, and deliberate resignation. The host owns Deck inputs and output;
-the engine still receives caller-held values. Detail pages include a trusted self-contained JPEG
-runtime file loader yet. Detail pages include a trusted self-contained JPEG
-download path for provider image responses. This file is an index of stable
+the engine still receives caller-held values. Detail pages include a trusted
+self-contained JPEG download path for provider image responses. This file is an index of stable
 product language, not an API contract.
 
 ## Behavior
