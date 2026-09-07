@@ -132,7 +132,7 @@ async fn serve_session(
     let mut requests = [0_u64; 2];
     loop {
         tokio::select! {
-            interrupted = tokio::signal::ctrl_c() => { interrupted.map_err(ServeError::Interrupt)?; stop_all(&clients, "interrupted").await?; return Ok(()); }
+            interrupted = tokio::signal::ctrl_c() => { interrupted.map_err(ServeError::Interrupt)?; stop_all(&clients, "interrupted").await; return Ok(()); }
             accepted = listener.accept() => {
                 let (mut stream, _) = accepted.map_err(ServeError::Interrupt)?;
                 if let Ok(permit) = permits.clone().try_acquire_owned() {
@@ -150,19 +150,22 @@ async fn serve_session(
                         let _ = admitted.send(Admission::Rejected);
                     } else {
                         if let Err(error) = deliver(&client, ServerEnvelope::Waiting { seat }).await {
-                            let _ = stop_all(&clients, "connection closed").await;
+                            stop_all(&clients, "connection closed").await;
                             return Err(error);
                         }
                         clients[index] = Some(client);
                         let _ = admitted.send(Admission::Accepted);
-                        if clients.iter().all(Option::is_some) {
-                            broadcast(&clients, Broadcast { recorder: &recorder, descriptions, identities, events: &[], revision, reply: None, requester: None, result: None }).await?;
+                        if clients.iter().all(Option::is_some)
+                            && let Err(error) = broadcast(&clients, Broadcast { recorder: &recorder, descriptions, identities, events: &[], revision, reply: None, requester: None, result: None }).await
+                        {
+                            stop_all(&clients, "connection closed").await;
+                            return Err(error);
                         }
                     }
                 }
                 Some(SessionEvent::Gone(seat)) => {
                     if clients[seat_index(seat)].is_some() {
-                        stop_all(&clients, "connection closed").await?;
+                        stop_all(&clients, "connection closed").await;
                         return Ok(());
                     }
                 }
@@ -170,7 +173,7 @@ async fn serve_session(
                     if let Some(client) = &clients[seat_index(seat)] {
                         deliver(client, rejection(request_id, "unsupported version")).await?;
                     }
-                    stop_all(&clients, "protocol error").await?;
+                    stop_all(&clients, "protocol error").await;
                     return Ok(());
                 }
                 Some(SessionEvent::Submit(seat, request_id, based_on_revision, action)) => {
@@ -193,13 +196,20 @@ async fn serve_session(
                         deliver(client, rejection(request_id, "stale revision")).await?;
                         continue;
                     }
-                    let (result, events) = match recorder.submit(&action).map_err(ServeError::Recording)? {
-                        RecordedStep::Accepted { events } => (SubmissionResult::Accepted, events),
-                        RecordedStep::Rejected { error } => (SubmissionResult::Rejected { reason: rejection_reason(error) }, Vec::new()),
+                    let (result, events) = match recorder.submit(&action) {
+                        Err(error) => {
+                            stop_all(&clients, "recording failed").await;
+                            return Err(ServeError::Recording(error));
+                        }
+                        Ok(RecordedStep::Accepted { events }) => (SubmissionResult::Accepted, events),
+                        Ok(RecordedStep::Rejected { error }) => (SubmissionResult::Rejected { reason: rejection_reason(error) }, Vec::new()),
                     };
                     revision += 1;
                     let terminal = matches!(recorder.state().status, GameStatus::Ended(_));
-                    broadcast(&clients, Broadcast { recorder: &recorder, descriptions, identities, events: &events, revision, reply: Some(request_id), requester: Some(seat), result: Some(result) }).await?;
+                    if let Err(error) = broadcast(&clients, Broadcast { recorder: &recorder, descriptions, identities, events: &events, revision, reply: Some(request_id), requester: Some(seat), result: Some(result) }).await {
+                        stop_all(&clients, "connection closed").await;
+                        return Err(error);
+                    }
                     if terminal { return Ok(()); }
                 }
                 None => return Ok(()),
@@ -397,24 +407,16 @@ async fn broadcast(
     }
     failure.map_or(Ok(()), Err)
 }
-async fn stop_all(
-    clients: &[Option<mpsc::Sender<Outbound>>; 2],
-    reason: &str,
-) -> Result<(), ServeError> {
-    let mut failure = None;
+async fn stop_all(clients: &[Option<mpsc::Sender<Outbound>>; 2], reason: &str) {
     for client in clients.iter().flatten() {
-        if let Err(error) = deliver(
+        let _ = deliver(
             client,
             ServerEnvelope::Stopped {
                 reason: reason.to_string(),
             },
         )
-        .await
-        {
-            failure.get_or_insert(error);
-        }
+        .await;
     }
-    failure.map_or(Ok(()), Err)
 }
 
 async fn deliver(
@@ -952,5 +954,21 @@ mod tests {
             observe
         );
         assert!(matches!(delivery, Err(ServeError::Delivery(_))));
+    }
+
+    #[tokio::test]
+    async fn interruption_delivery_ignores_a_closed_client_and_reaches_the_other_seat() {
+        let (closed, closed_messages) = mpsc::channel::<Outbound>(1);
+        drop(closed_messages);
+        let (open, mut open_messages) = mpsc::channel::<Outbound>(1);
+        let clients = [Some(closed), Some(open)];
+        let observe = async {
+            let message = open_messages.recv().await.expect("open seat receives stop");
+            assert!(
+                matches!(message.envelope, ServerEnvelope::Stopped { reason } if reason == "recording failed")
+            );
+            message.completed.send(Ok(())).expect("acknowledges stop");
+        };
+        tokio::join!(stop_all(&clients, "recording failed"), observe);
     }
 }

@@ -421,6 +421,31 @@ fn admitted_disconnect_stops_without_a_completed_transcript() {
 }
 
 #[test]
+fn client_stdin_eof_stops_the_session_and_replay_rejects_the_transcript() {
+    let directory = tempfile::tempdir().expect("temporary directory exists");
+    let mut host = start_host(&directory);
+    let mut one = start_player(&directory, 1, host.port);
+    let mut two = RawClient::connect(host.port);
+    assert_eq!(join(&mut two, "two")["kind"], "waiting");
+    assert_eq!(two.receive()["kind"], "update");
+    wait_for_text(&one.output, "Hand:");
+    drop(one.input);
+    assert!(one.process.wait().success());
+    assert_eq!(two.receive()["kind"], "stopped");
+    assert!(host.process.wait().success());
+    let output = std::fs::read_to_string(&one.output).expect("client output reads");
+    assert!(output.contains("Stopped input closed"));
+    let transcript = std::fs::read_to_string(&host.transcript).expect("transcript reads");
+    assert!(!transcript.contains("\"record\":\"match_completed\""));
+    let replay = Command::new(binary())
+        .arg("replay")
+        .arg(&host.transcript)
+        .output()
+        .expect("replay starts");
+    assert!(!replay.status.success(), "incomplete transcript replays");
+}
+
+#[test]
 fn ctrl_c_keeps_the_transcript_incomplete() {
     let directory = tempfile::tempdir().expect("temporary directory exists");
     let mut host = start_host(&directory);

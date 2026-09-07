@@ -1,5 +1,5 @@
 use std::io::{self, BufRead, BufReader, Read, Write};
-use std::net::TcpStream;
+use std::net::{Shutdown, TcpStream};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -72,6 +72,7 @@ pub fn play(args: &PlayArgs) -> Result<(), PlayError> {
     });
     let mut request_id = 0_u64;
     let mut giveup_pending = false;
+    let mut resignation_sent = false;
     let mut prompt = PromptState::Menu { revision: 0 };
     while matches!(
         terminal_receiver.try_recv(),
@@ -92,7 +93,17 @@ pub fn play(args: &PlayArgs) -> Result<(), PlayError> {
                 prompt = next;
                 continue;
             }
-            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                if resignation_sent
+                    && terminal_receiver
+                        .recv_timeout(Duration::from_secs(5))
+                        .is_ok()
+                {
+                    break;
+                }
+                println!("Stopped input closed");
+                break;
+            }
         };
         let current_snapshot = snapshot
             .lock()
@@ -110,6 +121,7 @@ pub fn play(args: &PlayArgs) -> Result<(), PlayError> {
         if giveup_pending && line.trim().eq_ignore_ascii_case("yes") {
             giveup_pending = false;
             request_id += 1;
+            resignation_sent = true;
             send(
                 &mut stream,
                 &ClientEnvelope::Submit {
@@ -185,6 +197,7 @@ pub fn play(args: &PlayArgs) -> Result<(), PlayError> {
                         continue;
                     }
                     request_id += 1;
+                    resignation_sent = matches!(&action, ActionV1::Resign { .. });
                     send(
                         &mut stream,
                         &ClientEnvelope::Submit {
@@ -198,7 +211,7 @@ pub fn play(args: &PlayArgs) -> Result<(), PlayError> {
             }
         }
     }
-    drop(stream);
+    let _ = stream.shutdown(Shutdown::Both);
     let _ = listener.join();
     Ok(())
 }
@@ -287,6 +300,7 @@ fn receive(
             }
         }
     }
+    println!("Stopped connection closed");
     let _ = terminal.send(());
 }
 
