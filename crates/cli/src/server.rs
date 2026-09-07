@@ -10,9 +10,9 @@ use serde_json::json;
 use summoners_cards::{BuiltInError, DeckLoadError, built_in_catalog, parse_deck};
 use summoners_core::domain::state::GameStatus;
 use summoners_match_log::{RecordedMatch, RecordingError, SetRequirementV1};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
-use tokio::sync::{Semaphore, mpsc};
+use tokio::sync::{Semaphore, mpsc, oneshot};
 
 use crate::app::ServeArgs;
 use crate::protocol::{
@@ -24,6 +24,9 @@ const MAX_DECK_BYTES: u64 = 1024 * 1024;
 const SHUFFLE_VERSION: &str = "std_rng_v1";
 const MAX_CLIENT_LINE: usize = 64 * 1024;
 const MAX_SERVER_LINE: usize = 1024 * 1024;
+const CONNECTION_QUEUE: usize = 16;
+const HANDSHAKE_LIMIT: usize = 4;
+const CONNECTION_DEADLINE: std::time::Duration = std::time::Duration::from_secs(5);
 
 #[derive(Debug, thiserror::Error)]
 pub enum ServeError {
@@ -53,6 +56,8 @@ pub enum ServeError {
     Recording(RecordingError),
     #[error("cannot wait for interruption: {0}")]
     Interrupt(io::Error),
+    #[error("client delivery failed: {0}")]
+    Delivery(io::Error),
 }
 
 pub fn serve(args: &ServeArgs) -> Result<(), ServeError> {
@@ -69,6 +74,7 @@ pub fn serve(args: &ServeArgs) -> Result<(), ServeError> {
     let mut metadata = BTreeMap::new();
     metadata.insert("seed".to_string(), json!(seed));
     metadata.insert("shuffle_version".to_string(), json!(SHUFFLE_VERSION));
+    let descriptions = crate::protocol::CardDescriptions::from_card_set(&state.cards);
     let recorder = start_recording(output.0, metadata, required_sets, state)?;
     println!(
         "Listening on {}; recording to {}",
@@ -78,91 +84,166 @@ pub fn serve(args: &ServeArgs) -> Result<(), ServeError> {
         output.1.display()
     );
     let runtime = tokio::runtime::Runtime::new().map_err(ServeError::Interrupt)?;
-    runtime.block_on(serve_session(listener, recorder))
+    runtime.block_on(serve_session(listener, recorder, &descriptions))
 }
 
 enum SessionEvent {
-    Joined(Seat, mpsc::Sender<ServerEnvelope>),
+    Joined(Seat, mpsc::Sender<Outbound>, oneshot::Sender<Admission>),
     Submit(Seat, u64, u64, summoners_match_log::ActionV1),
+    UnsupportedVersion(Seat, u64),
     Gone(Seat),
+}
+
+struct Outbound {
+    envelope: ServerEnvelope,
+    completed: oneshot::Sender<io::Result<()>>,
+}
+
+enum Admission {
+    Accepted,
+    Rejected,
 }
 
 async fn serve_session(
     listener: TcpListener,
     mut recorder: RecordedMatch<File>,
+    descriptions: &crate::protocol::CardDescriptions,
 ) -> Result<(), ServeError> {
     listener
         .set_nonblocking(true)
         .map_err(ServeError::Interrupt)?;
     let listener = tokio::net::TcpListener::from_std(listener).map_err(ServeError::Interrupt)?;
     let (sender, mut receiver) = mpsc::channel(32);
-    let permits = std::sync::Arc::new(Semaphore::new(4));
-    let mut clients: [Option<mpsc::Sender<ServerEnvelope>>; 2] = [None, None];
+    let permits = std::sync::Arc::new(Semaphore::new(HANDSHAKE_LIMIT));
+    let mut clients: [Option<mpsc::Sender<Outbound>>; 2] = [None, None];
     let mut revision = 0_u64;
+    let mut requests = [0_u64; 2];
     loop {
         tokio::select! {
-            interrupted = tokio::signal::ctrl_c() => { interrupted.map_err(ServeError::Interrupt)?; stop_all(&clients, "interrupted").await; return Ok(()); }
-            accepted = listener.accept() => { let (stream, _) = accepted.map_err(ServeError::Interrupt)?; if let Ok(permit) = permits.clone().try_acquire_owned() { let sender = sender.clone(); tokio::spawn(async move { let _permit = permit; handshake(stream, sender).await; }); } }
+            interrupted = tokio::signal::ctrl_c() => { interrupted.map_err(ServeError::Interrupt)?; stop_all(&clients, "interrupted").await?; return Ok(()); }
+            accepted = listener.accept() => {
+                let (mut stream, _) = accepted.map_err(ServeError::Interrupt)?;
+                if let Ok(permit) = permits.clone().try_acquire_owned() {
+                    let sender = sender.clone();
+                    tokio::spawn(async move { handshake(stream, sender, permit).await; });
+                } else {
+                    reject_stream(&mut stream, None, "server busy").await;
+                }
+            }
             event = receiver.recv() => match event {
-                Some(SessionEvent::Joined(seat, client)) => { let index = seat_index(seat); if clients[index].is_some() || clients.iter().all(Option::is_some) { let _ = client.send(ServerEnvelope::Rejected { request_id: None, reason: "seat is occupied".to_string() }).await; } else { let _ = client.send(ServerEnvelope::Waiting { seat }).await; clients[index] = Some(client); if clients.iter().all(Option::is_some) { broadcast(&clients, &recorder, revision, None, false).await; } } }
-                Some(SessionEvent::Gone(seat)) => { if clients[seat_index(seat)].is_some() { stop_all(&clients, "connection closed").await; return Ok(()); } }
-                Some(SessionEvent::Submit(seat, request_id, based_on_revision, action)) => { let Some(client) = &clients[seat_index(seat)] else { continue; }; let action = match normalize_action(seat.into(), action) { Ok(action) => action, Err(ProtocolError::Actor) => { let _ = client.send(ServerEnvelope::Rejected { request_id: Some(request_id), reason: "actor does not own this connection".to_string() }).await; continue; }, Err(ProtocolError::Conversion(reason)) => { let _ = client.send(ServerEnvelope::Rejected { request_id: Some(request_id), reason }).await; continue; } }; if based_on_revision != revision && !matches!(action, summoners_core::domain::actions::GameAction::Resign { .. }) { let _ = client.send(ServerEnvelope::Rejected { request_id: Some(request_id), reason: "stale revision".to_string() }).await; continue; } recorder.submit(&action).map_err(ServeError::Recording)?; revision += 1; let terminal = matches!(recorder.state().status, GameStatus::Ended(_)); broadcast(&clients, &recorder, revision, Some(request_id), terminal).await; if terminal { return Ok(()); } }
+                Some(SessionEvent::Joined(seat, client, admitted)) => {
+                    let index = seat_index(seat);
+                    if clients[index].is_some() || clients.iter().all(Option::is_some) {
+                        let _ = deliver(&client, ServerEnvelope::Rejected { request_id: None, reason: "seat is occupied".to_string() }).await;
+                        let _ = admitted.send(Admission::Rejected);
+                    } else {
+                        if let Err(error) = deliver(&client, ServerEnvelope::Waiting { seat }).await {
+                            let _ = stop_all(&clients, "connection closed").await;
+                            return Err(error);
+                        }
+                        clients[index] = Some(client);
+                        let _ = admitted.send(Admission::Accepted);
+                        if clients.iter().all(Option::is_some) {
+                            broadcast(&clients, Broadcast { recorder: &recorder, descriptions, revision, reply: None }).await?;
+                        }
+                    }
+                }
+                Some(SessionEvent::Gone(seat)) => {
+                    if clients[seat_index(seat)].is_some() {
+                        stop_all(&clients, "connection closed").await?;
+                        return Ok(());
+                    }
+                }
+                Some(SessionEvent::UnsupportedVersion(seat, request_id)) => {
+                    if let Some(client) = &clients[seat_index(seat)] {
+                        deliver(client, rejection(request_id, "unsupported version")).await?;
+                    }
+                    stop_all(&clients, "protocol error").await?;
+                    return Ok(());
+                }
+                Some(SessionEvent::Submit(seat, request_id, based_on_revision, action)) => {
+                    let Some(client) = &clients[seat_index(seat)] else { continue; };
+                    if !request_is_next(requests[seat_index(seat)], request_id) {
+                        deliver(client, rejection(request_id, "request id must increase")).await?;
+                        continue;
+                    }
+                    requests[seat_index(seat)] = request_id;
+                    if !clients.iter().all(Option::is_some) {
+                        deliver(client, rejection(request_id, "waiting for opponent")).await?;
+                        continue;
+                    }
+                    let action = match normalize_action(seat.into(), action) {
+                        Ok(action) => action,
+                        Err(ProtocolError::Actor) => { deliver(client, rejection(request_id, "actor does not own this connection")).await?; continue; }
+                        Err(ProtocolError::Conversion(reason)) => { deliver(client, rejection(request_id, &reason)).await?; continue; }
+                    };
+                    if !accepts_revision(revision, based_on_revision, &action, recorder.state().status) {
+                        deliver(client, rejection(request_id, "stale revision")).await?;
+                        continue;
+                    }
+                    recorder.submit(&action).map_err(ServeError::Recording)?;
+                    revision += 1;
+                    let terminal = matches!(recorder.state().status, GameStatus::Ended(_));
+                    broadcast(&clients, Broadcast { recorder: &recorder, descriptions, revision, reply: Some(request_id) }).await?;
+                    if terminal { return Ok(()); }
+                }
                 None => return Ok(()),
             }
         }
     }
 }
 
-async fn handshake(mut stream: TcpStream, sender: mpsc::Sender<SessionEvent>) {
+async fn handshake(
+    mut stream: TcpStream,
+    sender: mpsc::Sender<SessionEvent>,
+    permit: tokio::sync::OwnedSemaphorePermit,
+) {
     let frame =
         tokio::time::timeout(std::time::Duration::from_secs(5), read_frame(&mut stream)).await;
     let Ok(Ok(frame)) = frame else {
         return;
     };
-    let Ok(ClientEnvelope::Join {
-        version: VERSION,
-        seat,
-    }) = serde_json::from_slice(&frame)
-    else {
-        reject_stream(&mut stream, None, "join required").await;
-        return;
+    let join = serde_json::from_slice(&frame);
+    let seat = match join_decision(&join) {
+        Ok(seat) => seat,
+        Err(reason) => {
+            reject_stream(&mut stream, None, reason).await;
+            return;
+        }
     };
-    let (outbound, mut output) = mpsc::channel(16);
+    let (outbound, mut output) = mpsc::channel::<Outbound>(CONNECTION_QUEUE);
     let (mut reader, mut writer) = stream.into_split();
     tokio::spawn(async move {
-        while let Some(envelope) = output.recv().await {
-            let Ok(mut bytes) = serde_json::to_vec(&envelope) else {
-                return;
-            };
-            if bytes.len() > MAX_SERVER_LINE {
-                return;
-            }
-            bytes.push(b'\n');
-            if tokio::time::timeout(std::time::Duration::from_secs(5), writer.write_all(&bytes))
-                .await
-                .is_err()
-            {
+        while let Some(message) = output.recv().await {
+            let result = write_server_frame(&mut writer, &message.envelope).await;
+            let failed = result.is_err();
+            let _ = message.completed.send(result);
+            if failed {
                 return;
             }
         }
     });
+    let (admission, admitted) = oneshot::channel();
     if sender
-        .send(SessionEvent::Joined(seat, outbound))
+        .send(SessionEvent::Joined(seat, outbound, admission))
         .await
         .is_err()
     {
         return;
     }
-    let mut last_request = 0_u64;
+    if !matches!(admitted.await, Ok(Admission::Accepted)) {
+        return;
+    }
+    drop(permit);
     loop {
         match read_frame(&mut reader).await {
             Ok(frame) => match serde_json::from_slice::<ClientEnvelope>(&frame) {
                 Ok(ClientEnvelope::Submit {
+                    version: VERSION,
                     request_id,
                     based_on_revision,
                     action,
-                }) if request_id > last_request => {
-                    last_request = request_id;
+                }) => {
                     if sender
                         .send(SessionEvent::Submit(
                             seat,
@@ -175,6 +256,12 @@ async fn handshake(mut stream: TcpStream, sender: mpsc::Sender<SessionEvent>) {
                     {
                         return;
                     }
+                }
+                Ok(ClientEnvelope::Submit { request_id, .. }) => {
+                    let _ = sender
+                        .send(SessionEvent::UnsupportedVersion(seat, request_id))
+                        .await;
+                    return;
                 }
                 _ => {
                     let _ = sender.send(SessionEvent::Gone(seat)).await;
@@ -204,6 +291,30 @@ async fn read_frame(reader: &mut (impl AsyncReadExt + Unpin)) -> Result<Vec<u8>,
         bytes.push(byte[0]);
     }
 }
+async fn write_server_frame(
+    writer: &mut (impl AsyncWrite + Unpin),
+    envelope: &ServerEnvelope,
+) -> io::Result<()> {
+    write_server_frame_with_deadline(writer, envelope, CONNECTION_DEADLINE).await
+}
+async fn write_server_frame_with_deadline(
+    writer: &mut (impl AsyncWrite + Unpin),
+    envelope: &ServerEnvelope,
+    deadline: std::time::Duration,
+) -> io::Result<()> {
+    let bytes = server_frame(envelope)?;
+    tokio::time::timeout(deadline, writer.write_all(&bytes))
+        .await
+        .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "write timeout"))?
+}
+fn server_frame(envelope: &ServerEnvelope) -> io::Result<Vec<u8>> {
+    let mut bytes = serde_json::to_vec(envelope).map_err(io::Error::other)?;
+    if bytes.len() >= MAX_SERVER_LINE {
+        return Err(io::Error::other("frame limit"));
+    }
+    bytes.push(b'\n');
+    Ok(bytes)
+}
 async fn reject_stream(stream: &mut TcpStream, request_id: Option<u64>, reason: &str) {
     let envelope = ServerEnvelope::Rejected {
         request_id,
@@ -211,8 +322,8 @@ async fn reject_stream(stream: &mut TcpStream, request_id: Option<u64>, reason: 
     };
     if let Ok(mut bytes) = serde_json::to_vec(&envelope) {
         bytes.push(b'\n');
-        let _ =
-            tokio::time::timeout(std::time::Duration::from_secs(5), stream.write_all(&bytes)).await;
+        let _ = tokio::time::timeout(CONNECTION_DEADLINE, stream.write_all(&bytes)).await;
+        let _ = stream.shutdown().await;
     }
 }
 fn seat_index(seat: Seat) -> usize {
@@ -221,42 +332,127 @@ fn seat_index(seat: Seat) -> usize {
         Seat::Two => 1,
     }
 }
-async fn broadcast(
-    clients: &[Option<mpsc::Sender<ServerEnvelope>>; 2],
-    recorder: &RecordedMatch<File>,
+struct Broadcast<'a> {
+    recorder: &'a RecordedMatch<File>,
+    descriptions: &'a crate::protocol::CardDescriptions,
     revision: u64,
     reply: Option<u64>,
-    terminal: bool,
-) {
+}
+
+async fn broadcast(
+    clients: &[Option<mpsc::Sender<Outbound>>; 2],
+    input: Broadcast<'_>,
+) -> Result<(), ServeError> {
+    let mut failure = None;
     for seat in [Seat::One, Seat::Two] {
         if let Some(client) = &clients[seat_index(seat)] {
-            let view = player_view(recorder.state(), seat.into());
-            let envelope = if terminal {
+            let view = player_view(input.recorder.state(), seat.into(), input.descriptions);
+            let envelope = if let Some(outcome) = view.outcome.clone() {
                 ServerEnvelope::Finished {
-                    outcome: view.outcome.clone().unwrap_or(serde_json::Value::Null),
+                    outcome,
                     view,
                     notices: vec!["resignation".to_string()],
-                    reply,
+                    reply: input.reply,
                 }
             } else {
                 ServerEnvelope::Update {
-                    revision,
+                    revision: input.revision,
                     view,
                     notices: Vec::new(),
-                    reply,
+                    reply: input.reply,
                 }
             };
-            let _ = client.send(envelope).await;
+            if let Err(error) = deliver(client, envelope).await {
+                failure.get_or_insert(error);
+            }
         }
     }
+    failure.map_or(Ok(()), Err)
 }
-async fn stop_all(clients: &[Option<mpsc::Sender<ServerEnvelope>>; 2], reason: &str) {
+async fn stop_all(
+    clients: &[Option<mpsc::Sender<Outbound>>; 2],
+    reason: &str,
+) -> Result<(), ServeError> {
+    let mut failure = None;
     for client in clients.iter().flatten() {
-        let _ = client
-            .send(ServerEnvelope::Stopped {
+        if let Err(error) = deliver(
+            client,
+            ServerEnvelope::Stopped {
                 reason: reason.to_string(),
-            })
-            .await;
+            },
+        )
+        .await
+        {
+            failure.get_or_insert(error);
+        }
+    }
+    failure.map_or(Ok(()), Err)
+}
+
+async fn deliver(
+    client: &mpsc::Sender<Outbound>,
+    envelope: ServerEnvelope,
+) -> Result<(), ServeError> {
+    let (completed, received) = oneshot::channel();
+    tokio::time::timeout(
+        CONNECTION_DEADLINE,
+        client.send(Outbound {
+            envelope,
+            completed,
+        }),
+    )
+    .await
+    .map_err(|_| ServeError::Delivery(io::Error::new(io::ErrorKind::TimedOut, "queue timeout")))?
+    .map_err(|_| {
+        ServeError::Delivery(io::Error::new(
+            io::ErrorKind::BrokenPipe,
+            "connection closed",
+        ))
+    })?;
+    received
+        .await
+        .map_err(|_| {
+            ServeError::Delivery(io::Error::new(io::ErrorKind::BrokenPipe, "writer stopped"))
+        })?
+        .map_err(ServeError::Delivery)
+}
+
+fn rejection(request_id: u64, reason: &str) -> ServerEnvelope {
+    ServerEnvelope::Rejected {
+        request_id: Some(request_id),
+        reason: reason.to_string(),
+    }
+}
+
+fn request_is_next(last: u64, request: u64) -> bool {
+    request > last
+}
+
+fn accepts_revision(
+    revision: u64,
+    based_on_revision: u64,
+    action: &summoners_core::domain::actions::GameAction,
+    status: GameStatus,
+) -> bool {
+    matches!(status, GameStatus::Playing)
+        && (based_on_revision == revision
+            || matches!(
+                action,
+                summoners_core::domain::actions::GameAction::Resign { .. }
+            ))
+}
+
+fn join_decision(join: &Result<ClientEnvelope, serde_json::Error>) -> Result<Seat, &'static str> {
+    match join {
+        Ok(ClientEnvelope::Join {
+            version: VERSION,
+            seat,
+        }) => Ok(*seat),
+        Ok(ClientEnvelope::Join { .. }) => Err("unsupported version"),
+        Ok(ClientEnvelope::Submit { version, .. }) if *version != VERSION => {
+            Err("unsupported version")
+        }
+        Ok(ClientEnvelope::Submit { .. }) | Err(_) => Err("join required"),
     }
 }
 
@@ -388,6 +584,11 @@ fn create_default_output_at(directory: &Path, seconds: u64) -> Result<(File, Pat
 mod tests {
     #![allow(clippy::expect_used)]
     use super::*;
+    use summoners_core::domain::{
+        actions::GameAction,
+        ids::PlayerId,
+        state::{GameOutcome, LossReason},
+    };
     use tempfile::TempDir;
 
     struct CheckpointFailure;
@@ -497,5 +698,195 @@ mod tests {
             error,
             ServeError::Recording(RecordingError::Flush(_))
         ));
+    }
+
+    #[test]
+    fn request_and_revision_rules_are_explicit() {
+        let resign = GameAction::Resign {
+            player: PlayerId::One,
+        };
+        let ordinary = GameAction::EndTurn {
+            player: PlayerId::One,
+        };
+        assert!(request_is_next(3, 4));
+        assert!(!request_is_next(3, 3));
+        assert!(accepts_revision(7, 7, &ordinary, GameStatus::Playing));
+        assert!(!accepts_revision(7, 6, &ordinary, GameStatus::Playing));
+        assert!(accepts_revision(7, 6, &resign, GameStatus::Playing));
+        assert!(!accepts_revision(
+            7,
+            7,
+            &resign,
+            GameStatus::Ended(GameOutcome {
+                winner: PlayerId::Two,
+                reason: LossReason::Resignation,
+            })
+        ));
+        assert!(matches!(
+            rejection(4, "no"),
+            ServerEnvelope::Rejected {
+                request_id: Some(4),
+                reason
+            } if reason == "no"
+        ));
+    }
+
+    #[test]
+    fn join_rules_distinguish_version_and_order() {
+        assert_eq!(
+            join_decision(&Ok(ClientEnvelope::Join {
+                version: VERSION,
+                seat: Seat::One
+            })),
+            Ok(Seat::One)
+        );
+        assert_eq!(
+            join_decision(&Ok(ClientEnvelope::Join {
+                version: VERSION + 1,
+                seat: Seat::One
+            })),
+            Err("unsupported version")
+        );
+        let frame = serde_json::from_str(
+            "{\"kind\":\"submit\",\"version\":1,\"request_id\":1,\"based_on_revision\":0,\"action\":{\"kind\":\"resign\",\"player\":\"one\"}}",
+        );
+        assert_eq!(join_decision(&frame), Err("join required"));
+        assert_eq!(seat_index(Seat::One), 0);
+        assert_eq!(seat_index(Seat::Two), 1);
+    }
+
+    #[tokio::test]
+    async fn client_frame_limit_rejects_unterminated_input() {
+        let (mut writer, mut reader) = tokio::io::duplex(MAX_CLIENT_LINE + 1);
+        let writer = tokio::spawn(async move {
+            writer
+                .write_all(&vec![b'x'; MAX_CLIENT_LINE])
+                .await
+                .expect("frame writes");
+        });
+        assert_eq!(
+            read_frame(&mut reader)
+                .await
+                .expect_err("frame limit")
+                .kind(),
+            io::ErrorKind::Other
+        );
+        writer.await.expect("writer joins");
+    }
+
+    #[tokio::test]
+    async fn server_frame_limit_write_failure_and_timeout_propagate() {
+        let large = ServerEnvelope::Rejected {
+            request_id: None,
+            reason: "x".repeat(MAX_SERVER_LINE),
+        };
+        let (mut bound_writer, _) = tokio::io::duplex(1);
+        assert_eq!(
+            write_server_frame(&mut bound_writer, &large)
+                .await
+                .expect_err("frame limit")
+                .to_string(),
+            "frame limit"
+        );
+        let base = serde_json::to_vec(&ServerEnvelope::Rejected {
+            request_id: None,
+            reason: String::new(),
+        })
+        .expect("base frame");
+        let exact = ServerEnvelope::Rejected {
+            request_id: None,
+            reason: "x".repeat(MAX_SERVER_LINE - base.len() - 1),
+        };
+        assert_eq!(
+            server_frame(&exact).expect("exact frame").len(),
+            MAX_SERVER_LINE
+        );
+
+        let failed = ServerEnvelope::Rejected {
+            request_id: None,
+            reason: "failed".to_string(),
+        };
+        let (mut closed_writer, closed_reader) = tokio::io::duplex(1);
+        drop(closed_reader);
+        assert!(
+            write_server_frame(&mut closed_writer, &failed)
+                .await
+                .is_err()
+        );
+
+        let timeout = ServerEnvelope::Rejected {
+            request_id: None,
+            reason: "x".repeat(64),
+        };
+        let (mut blocked_writer, _blocked_reader) = tokio::io::duplex(1);
+        assert_eq!(
+            write_server_frame_with_deadline(
+                &mut blocked_writer,
+                &timeout,
+                std::time::Duration::from_millis(1)
+            )
+            .await
+            .expect_err("write timeout")
+            .kind(),
+            io::ErrorKind::TimedOut
+        );
+    }
+
+    #[tokio::test]
+    async fn terminal_recording_completes_before_both_finished_deliveries_acknowledge() {
+        let catalog = built_in_catalog().expect("catalog");
+        let state = initial_state(
+            catalog.library(),
+            [catalog.set_paths(), catalog.barrow_herd()],
+            1,
+        )
+        .expect("state");
+        let descriptions = crate::protocol::CardDescriptions::from_card_set(&state.cards);
+        let directory = TempDir::new().expect("directory");
+        let transcript = directory.path().join("match.ndjson");
+        let mut recorder = start_recording(
+            File::create(&transcript).expect("transcript"),
+            BTreeMap::new(),
+            required_sets(catalog.library()).expect("requirements"),
+            state,
+        )
+        .expect("recorder");
+        recorder
+            .submit(&GameAction::Resign {
+                player: PlayerId::One,
+            })
+            .expect("resignation");
+        let (one, mut one_messages) = mpsc::channel::<Outbound>(1);
+        let (two, mut two_messages) = mpsc::channel::<Outbound>(1);
+        let clients = [Some(one), Some(two)];
+        let observe = async {
+            let first = one_messages.recv().await.expect("first finished");
+            assert!(matches!(first.envelope, ServerEnvelope::Finished { .. }));
+            first.completed.send(Ok(())).expect("first acknowledges");
+            let second = two_messages.recv().await.expect("second finished");
+            assert!(matches!(second.envelope, ServerEnvelope::Finished { .. }));
+            assert!(
+                std::fs::read_to_string(&transcript)
+                    .expect("transcript reads")
+                    .contains("\"record\":\"match_completed\"")
+            );
+            second
+                .completed
+                .send(Err(io::Error::other("write failed")))
+                .expect("second fails");
+        };
+        let (delivery, ()) = tokio::join!(
+            broadcast(
+                &clients,
+                Broadcast {
+                    recorder: &recorder,
+                    descriptions: &descriptions,
+                    revision: 1,
+                    reply: Some(1)
+                }
+            ),
+            observe
+        );
+        assert!(matches!(delivery, Err(ServeError::Delivery(_))));
     }
 }
