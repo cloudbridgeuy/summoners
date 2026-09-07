@@ -27,6 +27,7 @@ pub enum PlayError {
 struct Snapshot {
     revision: u64,
     view: Option<PlayerView>,
+    history: Vec<String>,
 }
 
 fn is_stale(tagged_revision: u64, snapshot_revision: u64) -> bool {
@@ -133,15 +134,17 @@ pub fn play(args: &PlayArgs) -> Result<(), PlayError> {
         let Some(latest) = current_snapshot.view.clone() else {
             continue;
         };
-        if let Some(number) = line
-            .trim()
-            .strip_prefix("inspect ")
-            .and_then(|value| value.parse::<usize>().ok())
-        {
-            if let Some(card) = latest.hand.get(number.saturating_sub(1)) {
-                println!("{}", inspect_card(&card.card));
-            } else {
-                println!("Invalid inspection");
+        if let Some(card) = inspected_card(&latest, line.trim()) {
+            println!("{}", inspect_card(card));
+            continue;
+        }
+        if line.trim().starts_with("inspect ") {
+            println!("Invalid inspection");
+            continue;
+        }
+        if line.trim().eq_ignore_ascii_case("history") {
+            for notice in current_snapshot.history {
+                println!("{notice}");
             }
             continue;
         }
@@ -235,6 +238,9 @@ fn receive(
                 if let Ok(mut current) = snapshot.lock() {
                     current.revision = next;
                     current.view = Some(view.clone());
+                    current
+                        .history
+                        .extend(notices.iter().map(|notice| notice.text.clone()));
                 }
                 println!("{}", render_view(&view));
                 for notice in notices {
@@ -247,8 +253,21 @@ fn receive(
                     println!("{line}");
                 }
             }
-            ServerEnvelope::Finished { outcome, view, .. } => {
+            ServerEnvelope::Finished {
+                outcome,
+                view,
+                notices,
+                ..
+            } => {
+                if let Ok(mut current) = snapshot.lock() {
+                    current
+                        .history
+                        .extend(notices.iter().map(|notice| notice.text.clone()));
+                }
                 println!("{}", render_view(&view));
+                for notice in notices {
+                    println!("{}", notice.text);
+                }
                 println!("Finished: {}", render_outcome(&outcome));
                 let _ = terminal.send(());
                 return;
@@ -335,7 +354,14 @@ fn inspect_card(card: &crate::protocol::CardDescription) -> String {
     let abilities = if card.abilities.is_empty() {
         String::new()
     } else {
-        format!(" [{}]", card.abilities.join(", "))
+        format!(
+            " [{}]",
+            card.abilities
+                .iter()
+                .map(render_ability)
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
     };
     let cost = card
         .cost
@@ -350,13 +376,103 @@ fn inspect_card(card: &crate::protocol::CardDescription) -> String {
         format!(" Mana {}", card.mana_types.join(", "))
     };
     format!(
-        "{}{}{}{}{}",
+        "{}{}{}{}{}{}{}",
         render_card(card),
         retreat,
         mana,
         cost,
-        abilities
+        abilities,
+        if card.modifiers.is_empty() {
+            String::new()
+        } else {
+            format!(" modifiers {}", card.modifiers.join(", "))
+        },
+        if card.persistent { " persistent" } else { "" }
     )
+}
+fn render_ability(ability: &crate::protocol::AbilityDescription) -> String {
+    let kind = match ability.kind {
+        crate::protocol::AbilityKind::Skill => "Skill",
+        crate::protocol::AbilityKind::Attack => "Attack",
+        crate::protocol::AbilityKind::Trigger => "Trigger",
+    };
+    let cost = ability
+        .cost
+        .as_ref()
+        .map_or_else(String::new, |cost| format!(" cost {cost}"));
+    let event = ability
+        .trigger_event
+        .as_ref()
+        .map_or_else(String::new, |event| format!(" after {event}"));
+    let timing = ability
+        .timing
+        .as_ref()
+        .map_or_else(String::new, |timing| format!(" {timing}"));
+    let effects = if ability.effects.is_empty() {
+        String::new()
+    } else {
+        format!(": {}", ability.effects.join(", "))
+    };
+    format!(
+        "{kind} {}{}{}{}{}{}{}{}",
+        ability.name,
+        cost,
+        event,
+        timing,
+        if ability.respondable {
+            " respondable"
+        } else {
+            ""
+        },
+        effects,
+        if ability.modifiers.is_empty() {
+            String::new()
+        } else {
+            format!(" modifiers {}", ability.modifiers.join(", "))
+        },
+        if ability.persistent {
+            " persistent"
+        } else {
+            ""
+        }
+    )
+}
+
+fn inspected_card<'a>(
+    view: &'a PlayerView,
+    command: &str,
+) -> Option<&'a crate::protocol::CardDescription> {
+    let mut fields = command.split_whitespace();
+    if fields.next()? != "inspect" {
+        return None;
+    }
+    let target = fields.next()?;
+    if target == "board" {
+        let seat = match fields.next()? {
+            "1" => Seat::One,
+            "2" => Seat::Two,
+            _ => return None,
+        };
+        let position = fields.next()?.parse::<usize>().ok()?;
+        if fields.next().is_some() || !(1..=4).contains(&position) {
+            return None;
+        }
+        let board = match seat {
+            Seat::One => &view.players.one.board,
+            Seat::Two => &view.players.two.board,
+        };
+        let summon = if position == 1 {
+            board.main.as_ref()
+        } else {
+            board.bench[position - 2].as_ref()
+        };
+        return summon?.chain.last();
+    }
+    let index = target.parse::<usize>().ok()?;
+    if fields.next().is_some() || index == 0 {
+        return None;
+    }
+    view.hand.get(index - 1).map(|card| &card.card)
 }
 
 fn render_outcome(outcome: &OutcomeView) -> String {
@@ -379,9 +495,10 @@ mod tests {
 
     use super::*;
     use crate::protocol::{
-        BoardView, CardDescription, ManaView, PhaseView, PlayerPublicView, ReadinessView,
-        SeatsView, SummonView,
+        AbilityDescription, AbilityKind, BoardView, CardDescription, ManaView, PhaseView,
+        PlayerPublicView, ReadinessView, SeatsView, SummonView,
     };
+    use summoners_match_log::wire::EntityIdV1;
 
     fn view() -> PlayerView {
         let card = CardDescription {
@@ -392,6 +509,9 @@ mod tests {
             cost: None,
             abilities: Vec::new(),
             effects: vec!["DealDamage".to_string()],
+            modifiers: Vec::new(),
+            timing: None,
+            persistent: false,
         };
         let player = PlayerPublicView {
             board: BoardView {
@@ -444,6 +564,9 @@ mod tests {
             cost: None,
             abilities: Vec::new(),
             effects: vec!["draw 2 cards".to_string()],
+            modifiers: Vec::new(),
+            timing: None,
+            persistent: false,
         };
         let summon = SummonView {
             chain: vec![card.clone()],
@@ -483,5 +606,54 @@ mod tests {
         assert!(is_stale(0, 1));
         assert!(!is_stale(1, 1));
         assert!(!is_stale(2, 1));
+    }
+
+    #[test]
+    fn inspection_uses_strict_one_based_hand_indices_and_visible_board_cards() {
+        let mut view = view();
+        view.hand[0].card.name = "Hand".to_string();
+        let skill = AbilityDescription {
+            kind: AbilityKind::Skill,
+            id: EntityIdV1("skill-id".to_string()),
+            name: "Skill".to_string(),
+            cost: Some("matter 1 mind 0 spirit 0 generic 0".to_string()),
+            effects: vec!["look at Prizes".to_string()],
+            trigger_event: None,
+            timing: Some("support".to_string()),
+            respondable: true,
+            persistent: true,
+            modifiers: vec!["reduce incoming attack damage by 1".to_string()],
+        };
+        let board_card = CardDescription {
+            name: "Board".to_string(),
+            life: None,
+            retreat_cost: None,
+            mana_types: Vec::new(),
+            cost: None,
+            abilities: vec![skill],
+            effects: Vec::new(),
+            modifiers: Vec::new(),
+            timing: None,
+            persistent: false,
+        };
+        view.players.two.board.main = Some(SummonView {
+            chain: vec![board_card],
+            damage: 0,
+            readiness: ReadinessView::Ready,
+            owner: Seat::Two,
+            controller: Seat::Two,
+        });
+        assert_eq!(
+            inspected_card(&view, "inspect 1").map(|card| &card.name),
+            Some(&"Hand".to_string())
+        );
+        assert!(inspected_card(&view, "inspect 0").is_none());
+        let inspected =
+            inspect_card(inspected_card(&view, "inspect board 2 1").expect("board card"));
+        assert!(inspected.contains("Skill Skill"));
+        assert!(inspected.contains("look at Prizes"));
+        assert!(inspected.contains("respondable"));
+        assert!(inspected.contains("persistent"));
+        assert!(inspected_card(&view, "inspect board 2 0").is_none());
     }
 }

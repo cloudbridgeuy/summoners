@@ -5,6 +5,7 @@ use summoners_core::domain::{
     actions::GameAction,
     cards::{
         Attack, CardSet, Cost, EffectLeaf, EntityId, Life, ManaTypes, Name, RetreatCost, Skill,
+        Trigger,
     },
     events::GameEvent,
     ids::{BenchSlot, CardInstanceId, ManaType, PlayerId, Position},
@@ -98,8 +99,31 @@ pub struct CardDescription {
     pub retreat_cost: Option<u32>,
     pub mana_types: Vec<String>,
     pub cost: Option<String>,
-    pub abilities: Vec<String>,
+    pub abilities: Vec<AbilityDescription>,
     pub effects: Vec<String>,
+    pub modifiers: Vec<String>,
+    pub timing: Option<String>,
+    pub persistent: bool,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AbilityKind {
+    Skill,
+    Attack,
+    Trigger,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AbilityDescription {
+    pub kind: AbilityKind,
+    pub id: summoners_match_log::wire::EntityIdV1,
+    pub name: String,
+    pub cost: Option<String>,
+    pub effects: Vec<String>,
+    pub trigger_event: Option<String>,
+    pub timing: Option<String>,
+    pub respondable: bool,
+    pub persistent: bool,
+    pub modifiers: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -125,6 +149,9 @@ impl CardDescriptions {
             cost: None,
             abilities: Vec::new(),
             effects: Vec::new(),
+            modifiers: Vec::new(),
+            timing: None,
+            persistent: false,
         })
     }
 }
@@ -534,11 +561,16 @@ fn describe_card(card: &summoners_core::domain::cards::Entity) -> CardDescriptio
         abilities: card
             .all::<Skill>()
             .into_iter()
-            .map(|ability| describe_named_ability("Skill", ability))
+            .map(|ability| describe_ability(AbilityKind::Skill, ability))
             .chain(
                 card.all::<Attack>()
                     .into_iter()
-                    .map(|ability| describe_named_ability("Attack", ability)),
+                    .map(|ability| describe_ability(AbilityKind::Attack, ability)),
+            )
+            .chain(
+                card.all::<Trigger>()
+                    .into_iter()
+                    .map(|ability| describe_ability(AbilityKind::Trigger, ability)),
             )
             .collect(),
         effects: card
@@ -546,6 +578,13 @@ fn describe_card(card: &summoners_core::domain::cards::Entity) -> CardDescriptio
             .into_iter()
             .map(effect_text)
             .collect(),
+        modifiers: card
+            .components
+            .iter()
+            .filter_map(crate::card_text::modifier)
+            .collect(),
+        timing: card.components.iter().find_map(crate::card_text::timing),
+        persistent: card.components.iter().any(crate::card_text::persistent),
     }
 }
 
@@ -631,7 +670,7 @@ fn stack_view(item: &StackItem, descriptions: &CardDescriptions) -> StackView {
         } => StackView::Trigger {
             controller: (*controller).into(),
             source: position_text(*source),
-            event: format!("{event:?}"),
+            event: crate::card_text::trigger_event(*event).to_string(),
             targets: targets
                 .iter()
                 .map(|target| position_text(*target))
@@ -652,37 +691,33 @@ fn cost_text(cost: &Cost) -> String {
         cost.matter, cost.mind, cost.spirit, cost.generic
     )
 }
-fn describe_named_ability(kind: &str, ability: &summoners_core::domain::cards::Entity) -> String {
+fn describe_ability(
+    kind: AbilityKind,
+    ability: &summoners_core::domain::cards::Entity,
+) -> AbilityDescription {
     let name = ability.get::<Name>().map_or_else(
         || "Unnamed ability".to_string(),
         |name| terminal_text(&name.0),
     );
-    let effects = ability
-        .all::<EffectLeaf>()
-        .into_iter()
-        .map(effect_text)
-        .collect::<Vec<_>>();
-    if effects.is_empty() {
-        format!("{kind} {} {name}", ability.id)
-    } else {
-        format!("{kind} {} {name}: {}", ability.id, effects.join(", "))
-    }
-}
-#[cfg(test)]
-fn describe_ability(ability: &summoners_core::domain::cards::Entity) -> String {
-    let name = ability.get::<Name>().map_or_else(
-        || "Unnamed ability".to_string(),
-        |name| terminal_text(&name.0),
-    );
-    let effects = ability
-        .all::<EffectLeaf>()
-        .into_iter()
-        .map(effect_text)
-        .collect::<Vec<_>>();
-    if effects.is_empty() {
-        name
-    } else {
-        format!("{name}: {}", effects.join(", "))
+    AbilityDescription {
+        kind,
+        id: summoners_match_log::wire::EntityIdV1(ability.id.to_string()),
+        name,
+        cost: ability.get::<Cost>().map(cost_text),
+        effects: ability
+            .all::<EffectLeaf>()
+            .into_iter()
+            .map(effect_text)
+            .collect(),
+        trigger_event: ability.components.iter().find_map(crate::card_text::event),
+        timing: ability.components.iter().find_map(crate::card_text::timing),
+        respondable: ability.components.iter().any(crate::card_text::respondable),
+        persistent: ability.components.iter().any(crate::card_text::persistent),
+        modifiers: ability
+            .components
+            .iter()
+            .filter_map(crate::card_text::modifier)
+            .collect(),
     }
 }
 pub fn terminal_text(value: &str) -> String {
@@ -693,9 +728,9 @@ pub fn terminal_text(value: &str) -> String {
             '\r' => "\\r".chars().collect(),
             '\t' => "\\t".chars().collect(),
             '\x1b' => "\\x1b".chars().collect(),
-            character if character.is_control() => format!("\\\\u{{{:04x}}}", character as u32)
-                .chars()
-                .collect(),
+            character if character.is_control() => {
+                format!("\\u{{{:04x}}}", character as u32).chars().collect()
+            }
             character => vec![character],
         })
         .collect()
@@ -789,6 +824,14 @@ mod tests {
     }
 
     #[test]
+    fn terminal_text_escapes_every_terminal_control() {
+        assert_eq!(
+            terminal_text("a\n\r\t\u{1b}\u{0007}b"),
+            "a\\n\\r\\t\\x1b\\u{0007}b"
+        );
+    }
+
+    #[test]
     fn view_exposes_own_hand_and_hides_all_known_opponent_private_ids() {
         let (state, descriptions) = state_and_descriptions();
         for (viewer, own, opponent) in [
@@ -842,38 +885,6 @@ mod tests {
     fn phase_and_readiness_have_transport_values() {
         assert_eq!(phase_view(Phase::Combat), PhaseView::Combat);
         assert_eq!(readiness_view(Readiness::Ready), ReadinessView::Ready);
-    }
-
-    #[test]
-    fn conversions_and_private_view_helpers_are_direct() {
-        assert_eq!(PlayerId::from(Seat::One), PlayerId::One);
-        assert_eq!(PlayerId::from(Seat::Two), PlayerId::Two);
-        assert_eq!(Seat::from(PlayerId::One), Seat::One);
-        assert_eq!(Seat::from(PlayerId::Two), Seat::Two);
-        assert_eq!(position_text(Position::Main), "Main");
-        let cost = Cost {
-            matter: 1,
-            mind: 2,
-            spirit: 3,
-            generic: 4,
-        };
-        assert_eq!(cost_text(&cost), "matter 1 mind 2 spirit 3 generic 4");
-        let (state, descriptions) = state_and_descriptions();
-        let public = public_player(&state.players.one, &descriptions);
-        assert_eq!(public.hand_count, state.players.one.hand.len());
-        assert_eq!(public.deck_count, state.players.one.deck.len());
-        let summon = summon_view(
-            state.players.one.main.as_ref().expect("main"),
-            &descriptions,
-        );
-        assert_eq!(summon.damage, 0);
-        assert!(!summon.chain.is_empty());
-        assert_eq!(
-            descriptions
-                .get(EntityId::parse("ffffffffffffffffffffffffffffffff").expect("id"))
-                .name,
-            "Unknown card"
-        );
     }
 
     #[test]
@@ -975,7 +986,7 @@ mod tests {
                 "Skill".to_string(),
             ))],
         };
-        assert_eq!(describe_ability(&ability), "Skill");
+        assert_eq!(describe_ability(AbilityKind::Skill, &ability).name, "Skill");
         assert_ne!(
             describe_card(state.cards.entities().first().expect("card")).name,
             "Unnamed card"

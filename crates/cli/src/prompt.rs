@@ -1,9 +1,9 @@
 use summoners_match_log::{
     ActionV1,
-    wire::{BenchSlotV1, EntityIdV1, ManaTypeV1, PlayerIdV1, PositionV1},
+    wire::{BenchSlotV1, ManaTypeV1, PlayerIdV1, PositionV1},
 };
 
-use crate::protocol::{PendingKindView, PlayerView, Seat};
+use crate::protocol::{AbilityDescription, AbilityKind, PendingKindView, PlayerView, Seat};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PromptState {
@@ -52,9 +52,12 @@ impl TargetList {
     fn values(self) -> Vec<PositionV1> {
         self.0.into_iter().flatten().collect()
     }
-    fn push(&mut self, target: PositionV1) {
+    fn push(&mut self, target: PositionV1) -> bool {
         if let Some(slot) = self.0.iter_mut().find(|slot| slot.is_none()) {
             *slot = Some(target);
+            true
+        } else {
+            false
         }
     }
     fn undo(&mut self) {
@@ -290,8 +293,11 @@ fn target_step(
         _ => position(n).map_or_else(
             || invalid(revision),
             |position| {
-                targets.push(position);
-                target_form(revision, action, targets)
+                if targets.push(position) {
+                    target_form(revision, action, targets)
+                } else {
+                    invalid(revision)
+                }
             },
         ),
     }
@@ -326,19 +332,13 @@ fn target_submit(
         },
         TargetAction::Skill { position, skill } => {
             let skills = skills_at(view, position);
-            let Some(text) = skills.get(skill) else {
-                return invalid(revision);
-            };
-            let Some((id, _)) = text
-                .strip_prefix("Skill ")
-                .and_then(|text| text.split_once(' '))
-            else {
+            let Some(ability) = skills.get(skill) else {
                 return invalid(revision);
             };
             ActionV1::ActivateSkill {
                 player: actor,
                 position,
-                ability: EntityIdV1(id.to_string()),
+                ability: ability.id.clone(),
                 targets: targets.values(),
                 mana_hint,
             }
@@ -363,7 +363,7 @@ fn skill_next(
         TargetList::empty(),
     )
 }
-fn skills_at(view: &PlayerView, position: PositionV1) -> Vec<String> {
+fn skills_at(view: &PlayerView, position: PositionV1) -> Vec<AbilityDescription> {
     let board = match view.you {
         Seat::One => &view.players.one.board,
         Seat::Two => &view.players.two.board,
@@ -382,7 +382,7 @@ fn skills_at(view: &PlayerView, position: PositionV1) -> Vec<String> {
         .map_or_else(Vec::new, |card| {
             card.abilities
                 .iter()
-                .filter(|text| text.starts_with("Skill "))
+                .filter(|ability| ability.kind == AbilityKind::Skill)
                 .cloned()
                 .collect()
         })
@@ -391,7 +391,7 @@ fn skill_lines(view: &PlayerView, position: PositionV1) -> Vec<String> {
     skills_at(view, position)
         .into_iter()
         .enumerate()
-        .map(|(index, skill)| format!("{}. {skill}", index + 1))
+        .map(|(index, skill)| format!("{}. {}", index + 1, skill.name))
         .collect()
 }
 fn card_next(

@@ -1,6 +1,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used)]
 
 pub mod app;
+mod card_text;
 pub mod client;
 pub mod error;
 pub mod prompt;

@@ -37,6 +37,9 @@ fn view(seat: Seat) -> PlayerView {
                 cost: None,
                 abilities: Vec::new(),
                 effects: Vec::new(),
+                modifiers: Vec::new(),
+                timing: None,
+                persistent: false,
             },
         }],
         players: SeatsView {
