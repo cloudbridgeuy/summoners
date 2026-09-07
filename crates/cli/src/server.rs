@@ -31,11 +31,11 @@ const CONNECTION_DEADLINE: std::time::Duration = std::time::Duration::from_secs(
 
 #[derive(Debug, thiserror::Error)]
 pub enum ServeError {
-    #[error("cannot read deck {path}: {source}")]
+    #[error("cannot read deck {}: {source}", crate::terminal::path_text(path))]
     ReadDeck { path: PathBuf, source: io::Error },
-    #[error("deck {path} exceeds 1 MiB")]
+    #[error("deck {} exceeds 1 MiB", crate::terminal::path_text(path))]
     DeckTooLarge { path: PathBuf },
-    #[error("deck {path} is invalid: {source}")]
+    #[error("deck {} is invalid: {source}", crate::terminal::path_text(path))]
     ParseDeck {
         path: PathBuf,
         source: DeckLoadError,
@@ -51,7 +51,7 @@ pub enum ServeError {
         address: SocketAddr,
         source: io::Error,
     },
-    #[error("cannot create output {path}: {source}")]
+    #[error("cannot create output {}: {source}", crate::terminal::path_text(path))]
     Output { path: PathBuf, source: io::Error },
     #[error("cannot start recording: {0}")]
     Recording(RecordingError),
@@ -78,13 +78,10 @@ pub fn serve(args: &ServeArgs) -> Result<(), ServeError> {
     let descriptions = crate::protocol::CardDescriptions::from_card_set(&state.cards);
     let identities = crate::protocol::CardIdentityMap::from_initial_state(&state, &descriptions);
     let recorder = start_recording(output.0, metadata, required_sets, state)?;
-    println!(
-        "Listening on {}; recording to {}",
-        listener
-            .local_addr()
-            .map_err(|source| ServeError::Bind { address, source })?,
-        output.1.display()
-    );
+    let bound_address = listener
+        .local_addr()
+        .map_err(|source| ServeError::Bind { address, source })?;
+    println!("{}", listening_line(bound_address, &output.1));
     let runtime = tokio::runtime::Runtime::new().map_err(ServeError::Interrupt)?;
     runtime.block_on(serve_session(
         listener,
@@ -92,6 +89,13 @@ pub fn serve(args: &ServeArgs) -> Result<(), ServeError> {
         &descriptions,
         &identities,
     ))
+}
+
+fn listening_line(address: SocketAddr, output: &Path) -> String {
+    format!(
+        "Listening on {address}; recording to {}",
+        crate::terminal::path_text(output)
+    )
 }
 
 enum SessionEvent {
@@ -631,6 +635,8 @@ fn create_default_output_at(directory: &Path, seconds: u64) -> Result<(File, Pat
 
 #[cfg(test)]
 mod envelope_tests;
+#[cfg(test)]
+mod path_tests;
 
 #[cfg(test)]
 mod tests {

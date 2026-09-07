@@ -1,5 +1,3 @@
-//! Replaying a recorded transcript against the current engine.
-
 use std::{
     error::Error,
     fmt,
@@ -14,7 +12,6 @@ use summoners_match_log::{
     replay::{ReplayError, verify_transcript},
 };
 
-/// The facts of a verified transcript that the success line names.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VerificationSummary {
     path: PathBuf,
@@ -29,7 +26,6 @@ impl VerificationSummary {
         }
     }
 
-    /// The one confirmation line printed when a transcript verifies.
     #[must_use]
     pub fn confirmation_line(&self) -> String {
         let mut revisions = Vec::new();
@@ -46,24 +42,16 @@ impl VerificationSummary {
         };
         format!(
             "OK {}: transcript verified ({details})",
-            self.path.display()
+            crate::terminal::path_text(&self.path)
         )
     }
 }
 
-/// Why a transcript could not be replayed.
 #[derive(Debug)]
 pub enum ReplayCliError {
-    /// The transcript file could not be opened for reading.
     Open { path: PathBuf, source: io::Error },
-    /// The embedded card catalog could not be loaded.
     Catalog(BuiltInError),
-    /// The transcript did not verify against the current engine.
     Verify(ReplayError),
-    /// A verified transcript could not be re-read to collect its set revisions.
-    ///
-    /// Unreachable for any transcript [`run_replay`] just verified: parsing
-    /// already succeeded over the same bytes, so only filesystem I/O remains.
     Summarize(io::Error),
 }
 
@@ -74,7 +62,7 @@ impl fmt::Display for ReplayCliError {
                 write!(
                     formatter,
                     "cannot open transcript {}: {source}",
-                    path.display()
+                    crate::terminal::path_text(path)
                 )
             }
             Self::Catalog(source) => write!(formatter, "card catalog failed to load: {source}"),
@@ -100,12 +88,6 @@ impl Error for ReplayCliError {
     }
 }
 
-/// Replays one recorded transcript and reports its verified requirements.
-///
-/// # Errors
-///
-/// Returns [`ReplayCliError`] when the transcript cannot be opened, the card
-/// catalog cannot be loaded, or the transcript does not verify.
 pub fn run_replay(path: &Path) -> Result<VerificationSummary, ReplayCliError> {
     let mut file = File::open(path).map_err(|source| ReplayCliError::Open {
         path: path.to_path_buf(),
@@ -188,6 +170,34 @@ mod tests {
                 .to_string()
                 .starts_with(&format!("cannot open transcript {}", absent.display())),
             "the open failure names the path: {error}"
+        );
+    }
+
+    #[test]
+    fn confirmation_line_escapes_control_characters_in_the_path() {
+        let name = "bad\n\r\t\u{1b}\u{0007}\u{007f}name";
+        let summary = super::VerificationSummary::new(Path::new(name), vec![]);
+        let line = summary.confirmation_line();
+        assert_escaped(&line);
+    }
+
+    #[test]
+    fn open_error_escapes_control_characters_in_the_path() {
+        let directory = TempDir::new().expect("temp directory exists");
+        let name = "bad\n\r\t\u{1b}\u{0007}\u{007f}name";
+        let absent = directory.path().join(name);
+        let error = run_replay(&absent).expect_err("an absent transcript cannot open");
+        assert!(matches!(error, ReplayCliError::Open { .. }));
+        assert_escaped(&error.to_string());
+    }
+
+    fn assert_escaped(text: &str) {
+        for form in ["\\n", "\\r", "\\t", "\\x1b", "\\u{0007}", "\\u{007f}"] {
+            assert!(text.contains(form), "missing {form:?} in {text:?}");
+        }
+        assert!(
+            !text.chars().any(char::is_control),
+            "raw control character in {text:?}"
         );
     }
 

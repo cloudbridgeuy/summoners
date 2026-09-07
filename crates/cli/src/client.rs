@@ -134,17 +134,9 @@ pub fn play(args: &PlayArgs) -> Result<(), PlayError> {
         let Some(latest) = current_snapshot.view.clone() else {
             continue;
         };
-        if let Some(card) = inspected_card(&latest, line.trim()) {
-            println!("{}", inspect_card(card));
-            continue;
-        }
-        if line.trim().starts_with("inspect ") {
-            println!("Invalid inspection");
-            continue;
-        }
-        if line.trim().eq_ignore_ascii_case("history") {
-            for notice in current_snapshot.history {
-                println!("{notice}");
+        if let Some(lines) = local_command(line.trim(), &current_snapshot) {
+            for output in lines {
+                println!("{output}");
             }
             continue;
         }
@@ -209,6 +201,20 @@ pub fn play(args: &PlayArgs) -> Result<(), PlayError> {
     drop(stream);
     let _ = listener.join();
     Ok(())
+}
+
+fn local_command(line: &str, snapshot: &Snapshot) -> Option<Vec<String>> {
+    let view = snapshot.view.as_ref()?;
+    if let Some(card) = inspected_card(view, line) {
+        return Some(vec![inspect_card(card)]);
+    }
+    if line.starts_with("inspect ") {
+        return Some(vec!["Invalid inspection".to_string()]);
+    }
+    if line.eq_ignore_ascii_case("history") {
+        return Some(snapshot.history.clone());
+    }
+    None
 }
 
 fn send(stream: &mut TcpStream, message: &ClientEnvelope) -> Result<(), PlayError> {
@@ -488,6 +494,9 @@ fn render_outcome(outcome: &OutcomeView) -> String {
     };
     format!("{winner} wins by {reason}")
 }
+
+#[cfg(test)]
+mod history_tests;
 
 #[cfg(test)]
 mod tests {
