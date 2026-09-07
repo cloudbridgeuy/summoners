@@ -95,6 +95,24 @@ mod tests {
     }
 
     #[test]
+    fn parser_accepts_a_wildcard_bind_address() {
+        let app = App::try_parse_from([
+            "summoners",
+            "serve",
+            "--bind",
+            "0.0.0.0",
+            "--decks",
+            "a",
+            "b",
+        ])
+        .expect("wildcard bind command line is valid");
+        let Command::Serve(args) = app.command else {
+            panic!("expected serve command");
+        };
+        assert_eq!(args.bind, std::net::IpAddr::from([0, 0, 0, 0]));
+    }
+
+    #[test]
     fn parser_rejects_wrong_deck_counts() {
         assert!(
             App::try_parse_from(["summoners", "serve", "--decks", "a"]).is_err(),

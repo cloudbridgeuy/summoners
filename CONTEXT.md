@@ -14,13 +14,13 @@ search form. It connects to the Art Institute of Chicago, the Cleveland Museum
 of Art, the Metropolitan Museum of Art, and Wikimedia Commons. It attempts
 Smithsonian Open Access requests when `SMITHSONIAN_API_KEY` has a non-empty
 value that is valid as an HTTP header. A second CLI, the game's
-`summoners` binary from workspace member `summoners-cli`, declares `serve`
-and `play` subcommands that refuse by name until their behavior lands, and
-ships `replay <transcript.ndjson>` verifying any version-1 NDJSON match
-transcript end to end against the built-in catalog: exit 0 on a valid stream,
-exit 1 with a typed message otherwise. There is no game client yet, and
-decks and Sets still reach the engine only through caller-held bytes. Detail
-pages include a trusted self-contained JPEG
+`summoners` binary from workspace member `summoners-cli`, hosts a local
+two-seat match from two Deck files, lets explicit-seat clients join, and
+ships `replay <transcript.ndjson>` verifying completed version-1 NDJSON match
+transcripts end to end against the built-in catalog: exit 0 on a valid stream,
+exit 1 with a typed message otherwise. The game client uses numbered prompts,
+inspection, and deliberate resignation. The host owns Deck inputs and output;
+the engine still receives caller-held values. Detail pages include a trusted self-contained JPEG
 runtime file loader yet. Detail pages include a trusted self-contained JPEG
 download path for provider image responses. This file is an index of stable
 product language, not an API contract.
@@ -612,21 +612,26 @@ the final digest.
 ### Requirement: Game CLI command surface
 
 One binary, `summoners`, ships from workspace member `summoners-cli` with a
-fixed subcommand surface: `serve`, `play`, and `replay`. Help and version
-render through clap derive doc comments; `serve` names its bind default
-(`127.0.0.1`), OS-assigned port default, and two deck arguments; `play`
-restricts `--player` to 1 or 2. Until hosting and joining behavior land,
-`serve` and `play` refuse by name: the exact message is
-`` `<command>` is not part of this build yet. `` on standard error, exit
-code 1. Invalid command-line values fail at parse time with clap usage
-errors.
+fixed subcommand surface: `serve`, `play`, and `replay`. `serve` reads exactly
+two host-owned Deck paths, binds `127.0.0.1` by default, chooses an
+operating-system-assigned port when `--port` is omitted, and writes an
+exclusive transcript file. `play` joins a host address with an explicit seat
+of 1 or 2. The bind address selects the listener; the join address selects the
+host to contact, so `0.0.0.0` is valid for binding but not joining. This is an
+unencrypted protocol that trusts each client's chosen seat. The client renders
+numbered prompts, supports visible-card inspection and deliberate `give up`
+confirmation, and reports a completed outcome or an interruption. The host
+creates a unique `matches/` output by default and never overwrites an explicit
+output path. A completed transcript passes `replay`; a partial transcript is
+rejected. Setup currently begins in Main phase with Player One active and
+Player Two's Coin, without Player One's opening Upkeep.
 
-#### Scenario: Declared stubs refuse
+#### Scenario: Host and clients complete a match
 
-- **WHEN** the operator runs `summoners serve ...` or `summoners play ...`
-  with valid arguments
-- **THEN** nothing else executes and the binary prints the refusal naming
-  that subcommand on stderr and exits 1
+- **WHEN** an operator starts `serve` with valid Deck paths and two clients
+  join with the two explicit seats
+- **THEN** the host records accepted play through completion before both
+  clients print the outcome and exit
 
 #### Scenario: Usage errors stay at parse time
 
