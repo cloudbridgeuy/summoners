@@ -8,7 +8,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use rand::RngExt;
 use serde_json::json;
 use summoners_cards::{BuiltInError, DeckLoadError, built_in_catalog, parse_deck};
-use summoners_core::domain::state::GameStatus;
+use summoners_core::domain::{events::GameEvent, state::GameStatus};
 use summoners_match_log::{RecordedMatch, RecordedStep, RecordingError, SetRequirementV1};
 use tokio::io::{AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -76,6 +76,7 @@ pub fn serve(args: &ServeArgs) -> Result<(), ServeError> {
     metadata.insert("seed".to_string(), json!(seed));
     metadata.insert("shuffle_version".to_string(), json!(SHUFFLE_VERSION));
     let descriptions = crate::protocol::CardDescriptions::from_card_set(&state.cards);
+    let identities = crate::protocol::CardIdentityMap::from_initial_state(&state, &descriptions);
     let recorder = start_recording(output.0, metadata, required_sets, state)?;
     println!(
         "Listening on {}; recording to {}",
@@ -85,7 +86,12 @@ pub fn serve(args: &ServeArgs) -> Result<(), ServeError> {
         output.1.display()
     );
     let runtime = tokio::runtime::Runtime::new().map_err(ServeError::Interrupt)?;
-    runtime.block_on(serve_session(listener, recorder, &descriptions))
+    runtime.block_on(serve_session(
+        listener,
+        recorder,
+        &descriptions,
+        &identities,
+    ))
 }
 
 enum SessionEvent {
@@ -109,6 +115,7 @@ async fn serve_session(
     listener: TcpListener,
     mut recorder: RecordedMatch<File>,
     descriptions: &crate::protocol::CardDescriptions,
+    identities: &crate::protocol::CardIdentityMap,
 ) -> Result<(), ServeError> {
     listener
         .set_nonblocking(true)
@@ -145,7 +152,7 @@ async fn serve_session(
                         clients[index] = Some(client);
                         let _ = admitted.send(Admission::Accepted);
                         if clients.iter().all(Option::is_some) {
-                            broadcast(&clients, Broadcast { recorder: &recorder, descriptions, revision, reply: None, requester: None, result: None }).await?;
+                            broadcast(&clients, Broadcast { recorder: &recorder, descriptions, identities, events: &[], revision, reply: None, requester: None, result: None }).await?;
                         }
                     }
                 }
@@ -182,13 +189,13 @@ async fn serve_session(
                         deliver(client, rejection(request_id, "stale revision")).await?;
                         continue;
                     }
-                    let result = match recorder.submit(&action).map_err(ServeError::Recording)? {
-                        RecordedStep::Accepted { .. } => SubmissionResult::Accepted,
-                        RecordedStep::Rejected { error } => SubmissionResult::Rejected { reason: rejection_reason(error) },
+                    let (result, events) = match recorder.submit(&action).map_err(ServeError::Recording)? {
+                        RecordedStep::Accepted { events } => (SubmissionResult::Accepted, events),
+                        RecordedStep::Rejected { error } => (SubmissionResult::Rejected { reason: rejection_reason(error) }, Vec::new()),
                     };
                     revision += 1;
                     let terminal = matches!(recorder.state().status, GameStatus::Ended(_));
-                    broadcast(&clients, Broadcast { recorder: &recorder, descriptions, revision, reply: Some(request_id), requester: Some(seat), result: Some(result) }).await?;
+                    broadcast(&clients, Broadcast { recorder: &recorder, descriptions, identities, events: &events, revision, reply: Some(request_id), requester: Some(seat), result: Some(result) }).await?;
                     if terminal { return Ok(()); }
                 }
                 None => return Ok(()),
@@ -339,6 +346,8 @@ fn seat_index(seat: Seat) -> usize {
 struct Broadcast<'a> {
     recorder: &'a RecordedMatch<File>,
     descriptions: &'a crate::protocol::CardDescriptions,
+    identities: &'a crate::protocol::CardIdentityMap,
+    events: &'a [GameEvent],
     revision: u64,
     reply: Option<u64>,
     requester: Option<Seat>,
@@ -353,18 +362,22 @@ async fn broadcast(
     for seat in [Seat::One, Seat::Two] {
         if let Some(client) = &clients[seat_index(seat)] {
             let view = player_view(input.recorder.state(), seat.into(), input.descriptions);
+            let notices =
+                crate::protocol::player_notices(input.events, input.identities, seat.into());
             let envelope = if let Some(outcome) = view.outcome.clone() {
                 ServerEnvelope::Finished {
                     outcome,
                     view,
-                    notices: vec!["resignation".to_string()],
-                    reply: input.reply,
+                    notices,
+                    reply: (input.requester == Some(seat))
+                        .then_some(input.reply)
+                        .flatten(),
                 }
             } else {
                 ServerEnvelope::Update {
                     revision: input.revision,
                     view,
-                    notices: Vec::new(),
+                    notices,
                     reply: (input.requester == Some(seat))
                         .then_some(input.reply)
                         .flatten(),
@@ -878,6 +891,8 @@ mod tests {
         )
         .expect("state");
         let descriptions = crate::protocol::CardDescriptions::from_card_set(&state.cards);
+        let identities =
+            crate::protocol::CardIdentityMap::from_initial_state(&state, &descriptions);
         let directory = TempDir::new().expect("directory");
         let transcript = directory.path().join("match.ndjson");
         let mut recorder = start_recording(
@@ -917,6 +932,8 @@ mod tests {
                 Broadcast {
                     recorder: &recorder,
                     descriptions: &descriptions,
+                    identities: &identities,
+                    events: &[],
                     revision: 1,
                     reply: Some(1),
                     requester: Some(Seat::One),

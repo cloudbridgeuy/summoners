@@ -6,7 +6,8 @@ use summoners_core::domain::{
     cards::{
         Attack, CardSet, Cost, EffectLeaf, EntityId, Life, ManaTypes, Name, RetreatCost, Skill,
     },
-    ids::{PlayerId, Position},
+    events::GameEvent,
+    ids::{BenchSlot, CardInstanceId, ManaType, PlayerId, Position},
     state::{
         GameOutcome, GameState, GameStatus, PendingInput, Phase, Readiness, StackItem,
         SummonInstance,
@@ -64,14 +65,14 @@ pub enum ServerEnvelope {
     Update {
         revision: u64,
         view: PlayerView,
-        notices: Vec<String>,
+        notices: Vec<Notice>,
         reply: Option<u64>,
         result: Option<SubmissionResult>,
     },
     Finished {
         outcome: OutcomeView,
         view: PlayerView,
-        notices: Vec<String>,
+        notices: Vec<Notice>,
         reply: Option<u64>,
     },
     Stopped {
@@ -125,6 +126,222 @@ impl CardDescriptions {
             abilities: Vec::new(),
             effects: Vec::new(),
         })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct CardIdentityMap(HashMap<CardInstanceId, CardDescription>);
+
+impl CardIdentityMap {
+    pub fn from_initial_state(state: &GameState, descriptions: &CardDescriptions) -> Self {
+        let mut cards = HashMap::new();
+        for player in [&state.players.one, &state.players.two] {
+            for card in player
+                .deck
+                .iter()
+                .chain(&player.hand)
+                .chain(&player.prizes)
+                .chain(&player.discard)
+                .chain(&player.enchantments)
+            {
+                cards.insert(card.instance, descriptions.get(card.def));
+            }
+            for summon in player.main.iter().chain(player.bench.iter().flatten()) {
+                for card in summon.chain.layers() {
+                    cards.insert(card.instance, descriptions.get(card.def));
+                }
+            }
+        }
+        Self(cards)
+    }
+
+    fn name(&self, card: CardInstanceId) -> String {
+        self.0
+            .get(&card)
+            .map(|description| description.name.clone())
+            .unwrap_or_else(|| "Unknown card".to_string())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Notice {
+    pub text: String,
+}
+
+pub fn player_notices(
+    events: &[GameEvent],
+    identities: &CardIdentityMap,
+    viewer: PlayerId,
+) -> Vec<Notice> {
+    events
+        .iter()
+        .map(|event| Notice {
+            text: notice_text(event, identities, viewer),
+        })
+        .collect()
+}
+
+fn notice_text(event: &GameEvent, identities: &CardIdentityMap, viewer: PlayerId) -> String {
+    match event {
+        GameEvent::TurnBegan { player } => format!("{} began a turn", player_text(*player)),
+        GameEvent::SummonsReadied { player, positions } => format!(
+            "{} readied {}",
+            player_text(*player),
+            positions
+                .iter()
+                .map(|position| position_text(*position))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+        GameEvent::CardDrawn { player, card } => {
+            private_card_notice("drew", *player, *card, identities, viewer)
+        }
+        GameEvent::ManaProduced {
+            player, mana_type, ..
+        } => format!(
+            "{} produced {} Mana",
+            player_text(*player),
+            mana_text(*mana_type)
+        ),
+        GameEvent::SummonPlayed { player, card, slot } => format!(
+            "{} played {} to {}",
+            player_text(*player),
+            identities.name(*card),
+            bench_text(*slot)
+        ),
+        GameEvent::SummonUpgraded {
+            player,
+            card,
+            position,
+        } => format!(
+            "{} upgraded {} with {}",
+            player_text(*player),
+            position_text(*position),
+            identities.name(*card)
+        ),
+        GameEvent::SpellCast { player, card, .. } => {
+            format!("{} cast {}", player_text(*player), identities.name(*card))
+        }
+        GameEvent::SkillActivated {
+            player, position, ..
+        } => format!(
+            "{} activated a Skill at {}",
+            player_text(*player),
+            position_text(*position)
+        ),
+        GameEvent::AttackDeclared { player, target } => format!(
+            "{} declared an attack at {}",
+            player_text(*player),
+            position_text(*target)
+        ),
+        GameEvent::PriorityPassed { player } => format!("{} passed Priority", player_text(*player)),
+        GameEvent::StackItemResolved { .. } => "A Stack item resolved".to_string(),
+        GameEvent::DamageCalculationStarted { base, .. } => {
+            format!("Damage calculation began at {base}")
+        }
+        GameEvent::DamageAdjustmentApplied { output, .. } => format!("Damage adjusted to {output}"),
+        GameEvent::DamageAdjustmentSkipped { .. } => "A damage adjustment was skipped".to_string(),
+        GameEvent::DamageApplied {
+            amount,
+            before,
+            after,
+            ..
+        } => format!("Damage {amount} applied: {before} to {after}"),
+        GameEvent::Healed { position, amount } => {
+            format!("{} healed for {amount}", position_text(*position))
+        }
+        GameEvent::SummonDestroyed { position, .. } => {
+            format!("{} was destroyed", position_text(*position))
+        }
+        GameEvent::PrizeRecovered { player, card } => {
+            private_card_notice("recovered a Prize", *player, *card, identities, viewer)
+        }
+        GameEvent::PrizesViewed { player, prizes } => {
+            if *player == viewer {
+                format!(
+                    "{} viewed Prizes: {}",
+                    player_text(*player),
+                    prizes
+                        .iter()
+                        .map(|card| identities.name(*card))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            } else {
+                format!("{} viewed {} Prizes", player_text(*player), prizes.len())
+            }
+        }
+        GameEvent::SummonPromoted { player, from } => {
+            format!("{} promoted {}", player_text(*player), bench_text(*from))
+        }
+        GameEvent::SummonsSwapped { player, main } => format!(
+            "{} swapped Main with {}",
+            player_text(*player),
+            bench_text(*main)
+        ),
+        GameEvent::TriggerFired {
+            controller,
+            position,
+            ..
+        } => format!(
+            "{} triggered an ability at {}",
+            player_text(*controller),
+            position_text(*position)
+        ),
+        GameEvent::CoinConverted { player, mana_type } => format!(
+            "{} converted Coin to {} Mana",
+            player_text(*player),
+            mana_text(*mana_type)
+        ),
+        GameEvent::ManaDeducted {
+            player,
+            mana_type,
+            amount,
+        } => format!(
+            "{} spent {amount} {} Mana",
+            player_text(*player),
+            mana_text(*mana_type)
+        ),
+        GameEvent::GameEnded { winner, .. } => format!("{} won the game", player_text(*winner)),
+    }
+}
+
+fn private_card_notice(
+    action: &str,
+    player: PlayerId,
+    card: CardInstanceId,
+    identities: &CardIdentityMap,
+    viewer: PlayerId,
+) -> String {
+    if player == viewer {
+        format!(
+            "{} {} {}",
+            player_text(player),
+            action,
+            identities.name(card)
+        )
+    } else {
+        format!("{} {} a card", player_text(player), action)
+    }
+}
+fn player_text(player: PlayerId) -> &'static str {
+    match player {
+        PlayerId::One => "Player One",
+        PlayerId::Two => "Player Two",
+    }
+}
+fn bench_text(slot: BenchSlot) -> &'static str {
+    match slot {
+        BenchSlot::First => "Bench 1",
+        BenchSlot::Second => "Bench 2",
+        BenchSlot::Third => "Bench 3",
+    }
+}
+fn mana_text(mana: ManaType) -> &'static str {
+    match mana {
+        ManaType::Matter => "Matter",
+        ManaType::Mind => "Mind",
+        ManaType::Spirit => "Spirit",
     }
 }
 

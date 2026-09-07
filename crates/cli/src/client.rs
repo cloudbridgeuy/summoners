@@ -50,9 +50,14 @@ pub fn play(args: &PlayArgs) -> Result<(), PlayError> {
     let listener =
         std::thread::spawn(move || receive(reader, &observed, &observed_view, &terminal_sender));
     let (input_sender, input_receiver) = std::sync::mpsc::channel();
+    let input_revision = Arc::clone(&revision);
     std::thread::spawn(move || {
         for line in io::stdin().lock().lines() {
-            if input_sender.send(line).is_err() {
+            let tagged = match input_revision.lock() {
+                Ok(revision) => *revision,
+                Err(_) => return,
+            };
+            if input_sender.send((line, tagged)).is_err() {
                 return;
             }
         }
@@ -64,11 +69,29 @@ pub fn play(args: &PlayArgs) -> Result<(), PlayError> {
         terminal_receiver.try_recv(),
         Err(std::sync::mpsc::TryRecvError::Empty)
     ) {
-        let line = match input_receiver.recv_timeout(POLL_INTERVAL) {
-            Ok(line) => line.map_err(PlayError::Socket)?,
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
+        let (line, tagged_revision) = match input_receiver.recv_timeout(POLL_INTERVAL) {
+            Ok((line, tagged)) => (line.map_err(PlayError::Socket)?, tagged),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                let current = *revision
+                    .lock()
+                    .map_err(|_| PlayError::Socket(io::Error::other("revision lock")))?;
+                let (next, effects) = crate::prompt::revised(&prompt, current);
+                if effects.contains(&PromptEffect::Cancelled) {
+                    giveup_pending = false;
+                    println!("Prompt cancelled");
+                }
+                prompt = next;
+                continue;
+            }
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
         };
+        let current = *revision
+            .lock()
+            .map_err(|_| PlayError::Socket(io::Error::other("revision lock")))?;
+        if tagged_revision < current {
+            println!("Discarded stale input");
+            continue;
+        }
         if line.trim().eq_ignore_ascii_case("give up") {
             giveup_pending = true;
             println!("Confirm Give up with yes");
@@ -94,6 +117,11 @@ pub fn play(args: &PlayArgs) -> Result<(), PlayError> {
                     },
                 },
             )?;
+            continue;
+        }
+        if giveup_pending {
+            giveup_pending = false;
+            println!("Give up cancelled");
             continue;
         }
         let latest = view
@@ -201,7 +229,7 @@ fn receive(
                 }
                 println!("{}", render_view(&view));
                 for notice in notices {
-                    println!("{notice}");
+                    println!("{}", notice.text);
                 }
                 if let Some(crate::protocol::SubmissionResult::Rejected { reason }) = result {
                     println!("Rejected {reason}");
