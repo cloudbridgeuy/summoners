@@ -353,15 +353,19 @@ fn skill_next(
     n: Option<usize>,
 ) -> (PromptState, Vec<PromptEffect>) {
     let skills = skills_at(view, position);
-    let skill = n.unwrap_or(0).saturating_sub(1);
-    if skills.get(skill).is_none() {
-        return invalid(revision);
-    }
-    target_form(
-        revision,
-        TargetAction::Skill { position, skill },
-        TargetList::empty(),
-    )
+    n.filter(|n| *n >= 1)
+        .map(|n| n - 1)
+        .filter(|skill| skills.get(*skill).is_some())
+        .map_or_else(
+            || invalid(revision),
+            |skill| {
+                target_form(
+                    revision,
+                    TargetAction::Skill { position, skill },
+                    TargetList::empty(),
+                )
+            },
+        )
 }
 fn skills_at(view: &PlayerView, position: PositionV1) -> Vec<AbilityDescription> {
     let board = match view.you {
