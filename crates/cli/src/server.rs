@@ -115,9 +115,9 @@ enum Admission {
     Rejected,
 }
 
-async fn serve_session(
+async fn serve_session<W: Write>(
     listener: TcpListener,
-    mut recorder: RecordedMatch<File>,
+    mut recorder: RecordedMatch<W>,
     descriptions: &crate::protocol::CardDescriptions,
     identities: &crate::protocol::CardIdentityMap,
 ) -> Result<(), ServeError> {
@@ -357,8 +357,8 @@ fn seat_index(seat: Seat) -> usize {
         Seat::Two => 1,
     }
 }
-struct Broadcast<'a> {
-    recorder: &'a RecordedMatch<File>,
+struct Broadcast<'a, W: Write> {
+    recorder: &'a RecordedMatch<W>,
     descriptions: &'a crate::protocol::CardDescriptions,
     identities: &'a crate::protocol::CardIdentityMap,
     events: &'a [GameEvent],
@@ -368,9 +368,9 @@ struct Broadcast<'a> {
     result: Option<SubmissionResult>,
 }
 
-async fn broadcast(
+async fn broadcast<W: Write>(
     clients: &[Option<mpsc::Sender<Outbound>>; 2],
-    input: Broadcast<'_>,
+    input: Broadcast<'_, W>,
 ) -> Result<(), ServeError> {
     let mut failure = None;
     for seat in [Seat::One, Seat::Two] {
@@ -637,6 +637,8 @@ fn create_default_output_at(directory: &Path, seconds: u64) -> Result<(File, Pat
 
 #[cfg(test)]
 mod envelope_tests;
+#[cfg(test)]
+mod failure_tests;
 #[cfg(test)]
 mod path_tests;
 

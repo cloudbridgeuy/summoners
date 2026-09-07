@@ -381,6 +381,23 @@ fn stale_ordinary_action_is_rejected_and_either_seat_can_resign_stale() {
 }
 
 #[test]
+fn competing_resignations_record_one_completion() {
+    let directory = tempfile::tempdir().expect("temporary directory exists");
+    let mut host = start_host(&directory);
+    let (mut one, mut two) = join_pair(&host);
+    resign(&mut one, "one", 1, 0);
+    resign(&mut two, "two", 1, 0);
+    assert_eq!(one.receive()["kind"], "finished");
+    assert_eq!(two.receive()["kind"], "finished");
+    assert!(host.process.wait().success());
+    let transcript = std::fs::read_to_string(&host.transcript).expect("transcript reads");
+    assert_eq!(
+        transcript.matches("\"record\":\"match_completed\"").count(),
+        1
+    );
+}
+
+#[test]
 fn malformed_admitted_frame_stops_the_session() {
     let directory = tempfile::tempdir().expect("temporary directory exists");
     let mut host = start_host(&directory);
@@ -449,16 +466,38 @@ fn client_stdin_eof_stops_the_session_and_replay_rejects_the_transcript() {
 fn ctrl_c_keeps_the_transcript_incomplete() {
     let directory = tempfile::tempdir().expect("temporary directory exists");
     let mut host = start_host(&directory);
-    let (_one, _two) = join_pair(&host);
+    let (mut one, mut two) = join_pair(&host);
     let status = Command::new("kill")
         .args(["-INT", &host.process.child.id().to_string()])
         .status()
         .expect("interrupt command runs");
     assert!(status.success());
+    assert_eq!(one.receive()["reason"], "interrupted");
+    assert_eq!(two.receive()["reason"], "interrupted");
     assert!(host.process.wait().success());
     let transcript =
         std::fs::read_to_string(&host.transcript).expect("incomplete transcript reads");
     assert!(!transcript.contains("\"record\":\"match_completed\""));
+}
+
+#[test]
+fn active_form_client_prints_stopped_when_the_peer_disconnects() {
+    let directory = tempfile::tempdir().expect("temporary directory exists");
+    let mut host = start_host(&directory);
+    let mut one = start_player(&directory, 1, host.port);
+    let mut two = RawClient::connect(host.port);
+    assert_eq!(join(&mut two, "two")["kind"], "waiting");
+    assert_eq!(two.receive()["kind"], "update");
+    wait_for_text(&one.output, "Hand:");
+    one.input.write_all(b"1\n").expect("form input writes");
+    one.input.flush().expect("form input flushes");
+    thread::sleep(Duration::from_millis(100));
+    drop(two);
+    assert!(one.process.wait().success());
+    let output = std::fs::read_to_string(&one.output).expect("client output reads");
+    assert!(output.contains("Stopped connection closed"));
+    drop(one.input);
+    assert!(host.process.wait().success());
 }
 
 fn hand_ids(output: &str) -> Vec<&str> {
