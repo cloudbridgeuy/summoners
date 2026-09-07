@@ -9,6 +9,7 @@ pub mod protocol;
 pub mod replay;
 pub mod server;
 pub mod setup;
+pub mod terminal;
 
 use error::CliError;
 

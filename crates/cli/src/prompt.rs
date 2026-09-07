@@ -653,4 +653,6 @@ pub fn forced_form(view: &PlayerView) -> Option<Form> {
 }
 
 #[cfg(test)]
+mod spell_skill_tests;
+#[cfg(test)]
 mod tests;

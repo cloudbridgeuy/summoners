@@ -545,9 +545,10 @@ pub fn player_view(
 
 fn describe_card(card: &summoners_core::domain::cards::Entity) -> CardDescription {
     CardDescription {
-        name: card
-            .get::<Name>()
-            .map_or_else(|| "Unnamed card".to_string(), |name| terminal_text(&name.0)),
+        name: card.get::<Name>().map_or_else(
+            || "Unnamed card".to_string(),
+            |name| crate::terminal::terminal_text(&name.0),
+        ),
         life: card.get::<Life>().map(|life| life.0),
         retreat_cost: card.get::<RetreatCost>().map(|cost| cost.0),
         mana_types: card.get::<ManaTypes>().map_or_else(Vec::new, |types| {
@@ -697,7 +698,7 @@ fn describe_ability(
 ) -> AbilityDescription {
     let name = ability.get::<Name>().map_or_else(
         || "Unnamed ability".to_string(),
-        |name| terminal_text(&name.0),
+        |name| crate::terminal::terminal_text(&name.0),
     );
     AbilityDescription {
         kind,
@@ -719,21 +720,6 @@ fn describe_ability(
             .filter_map(crate::card_text::modifier)
             .collect(),
     }
-}
-pub fn terminal_text(value: &str) -> String {
-    value
-        .chars()
-        .flat_map(|character| match character {
-            '\n' => "\\n".chars().collect::<Vec<_>>(),
-            '\r' => "\\r".chars().collect(),
-            '\t' => "\\t".chars().collect(),
-            '\x1b' => "\\x1b".chars().collect(),
-            character if character.is_control() => {
-                format!("\\u{{{:04x}}}", character as u32).chars().collect()
-            }
-            character => vec![character],
-        })
-        .collect()
 }
 fn effect_text(effect: &EffectLeaf) -> String {
     match effect {
@@ -802,7 +788,13 @@ fn outcome_view(outcome: GameOutcome) -> OutcomeView {
 }
 
 #[cfg(test)]
+mod action_tests;
+#[cfg(test)]
 mod envelope_tests;
+#[cfg(test)]
+mod event_tests;
+#[cfg(test)]
+mod inspection_tests;
 
 #[cfg(test)]
 mod tests {
@@ -821,14 +813,6 @@ mod tests {
         .expect("state");
         let descriptions = CardDescriptions::from_card_set(&state.cards);
         (state, descriptions)
-    }
-
-    #[test]
-    fn terminal_text_escapes_every_terminal_control() {
-        assert_eq!(
-            terminal_text("a\n\r\t\u{1b}\u{0007}b"),
-            "a\\n\\r\\t\\x1b\\u{0007}b"
-        );
     }
 
     #[test]
