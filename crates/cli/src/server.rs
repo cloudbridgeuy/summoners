@@ -145,7 +145,7 @@ async fn serve_session(
                         clients[index] = Some(client);
                         let _ = admitted.send(Admission::Accepted);
                         if clients.iter().all(Option::is_some) {
-                            broadcast(&clients, Broadcast { recorder: &recorder, descriptions, revision, reply: None, result: None }).await?;
+                            broadcast(&clients, Broadcast { recorder: &recorder, descriptions, revision, reply: None, requester: None, result: None }).await?;
                         }
                     }
                 }
@@ -188,7 +188,7 @@ async fn serve_session(
                     };
                     revision += 1;
                     let terminal = matches!(recorder.state().status, GameStatus::Ended(_));
-                    broadcast(&clients, Broadcast { recorder: &recorder, descriptions, revision, reply: Some(request_id), result: Some(result) }).await?;
+                    broadcast(&clients, Broadcast { recorder: &recorder, descriptions, revision, reply: Some(request_id), requester: Some(seat), result: Some(result) }).await?;
                     if terminal { return Ok(()); }
                 }
                 None => return Ok(()),
@@ -341,6 +341,7 @@ struct Broadcast<'a> {
     descriptions: &'a crate::protocol::CardDescriptions,
     revision: u64,
     reply: Option<u64>,
+    requester: Option<Seat>,
     result: Option<SubmissionResult>,
 }
 
@@ -364,8 +365,12 @@ async fn broadcast(
                     revision: input.revision,
                     view,
                     notices: Vec::new(),
-                    reply: input.reply,
-                    result: input.result.clone(),
+                    reply: (input.requester == Some(seat))
+                        .then_some(input.reply)
+                        .flatten(),
+                    result: (input.requester == Some(seat))
+                        .then_some(input.result.clone())
+                        .flatten(),
                 }
             };
             if let Err(error) = deliver(client, envelope).await {
@@ -914,6 +919,7 @@ mod tests {
                     descriptions: &descriptions,
                     revision: 1,
                     reply: Some(1),
+                    requester: Some(Seat::One),
                     result: Some(SubmissionResult::Accepted),
                 }
             ),

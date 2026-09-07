@@ -8,6 +8,7 @@ use crate::prompt::{PromptEffect, PromptState, reduce};
 use crate::protocol::{
     ClientEnvelope, OutcomeReasonView, OutcomeView, PlayerView, Seat, ServerEnvelope, VERSION,
 };
+use summoners_match_log::{ActionV1, wire::PlayerIdV1};
 
 const MAX_SERVER_FRAME: usize = 1024 * 1024;
 const POLL_INTERVAL: Duration = Duration::from_millis(50);
@@ -57,6 +58,7 @@ pub fn play(args: &PlayArgs) -> Result<(), PlayError> {
         }
     });
     let mut request_id = 0_u64;
+    let mut giveup_pending = false;
     let mut prompt = PromptState::Menu { revision: 0 };
     while matches!(
         terminal_receiver.try_recv(),
@@ -67,6 +69,33 @@ pub fn play(args: &PlayArgs) -> Result<(), PlayError> {
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
         };
+        if line.trim().eq_ignore_ascii_case("give up") {
+            giveup_pending = true;
+            println!("Confirm Give up with yes");
+            continue;
+        }
+        if giveup_pending && line.trim().eq_ignore_ascii_case("yes") {
+            giveup_pending = false;
+            request_id += 1;
+            let based_on_revision = *revision
+                .lock()
+                .map_err(|_| PlayError::Socket(io::Error::other("revision lock")))?;
+            send(
+                &mut stream,
+                &ClientEnvelope::Submit {
+                    version: VERSION,
+                    request_id,
+                    based_on_revision,
+                    action: ActionV1::Resign {
+                        player: match seat {
+                            Seat::One => PlayerIdV1::One,
+                            Seat::Two => PlayerIdV1::Two,
+                        },
+                    },
+                },
+            )?;
+            continue;
+        }
         let latest = view
             .lock()
             .map_err(|_| PlayError::Socket(io::Error::other("view lock")))?
@@ -77,6 +106,11 @@ pub fn play(args: &PlayArgs) -> Result<(), PlayError> {
         let current = *revision
             .lock()
             .map_err(|_| PlayError::Socket(io::Error::other("revision lock")))?;
+        let (revised_prompt, revision_effects) = crate::prompt::revised(&prompt, current);
+        prompt = revised_prompt;
+        if revision_effects.contains(&PromptEffect::Cancelled) {
+            println!("Prompt cancelled");
+        }
         if matches!(prompt, PromptState::Menu { .. })
             && latest
                 .pending
