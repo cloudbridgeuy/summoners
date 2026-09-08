@@ -17,3 +17,8 @@
 .bacon-locations
 
 .env
+
+matches/
+.lane
+.agents
+AGENTS.md
