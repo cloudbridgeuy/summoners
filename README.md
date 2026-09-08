@@ -60,8 +60,9 @@ cargo test --workspace --all-targets
 
 ## Play a local match
 
-The host owns both Deck paths and the transcript. Start it with two repository
-Deck files and an explicit seed:
+See the [game shell guide](docs/shell.md) for command details, prompts, local
+commands, transcripts, and recovery. The host owns both Deck paths and the
+transcript. Start it with two repository Deck files and an explicit seed:
 
 ```sh
 mkdir -p matches
@@ -75,17 +76,7 @@ cargo run -p summoners-cli -- play --player 1 --host localhost --port 4000
 cargo run -p summoners-cli -- play --player 2 --host 127.0.0.1 --port 4000
 ```
 
-`--bind` selects the host listener address. `--host` selects the address a
-client joins; do not use `0.0.0.0` as a join address. The protocol is
-unencrypted and trusts the explicit seat chosen by each connected client. Use
-loopback or a trusted network.
-
-Clients show numbered prompts. Type `inspect <hand index>` or
-`inspect board <player> <position>` to inspect visible cards. Type `give up`,
-then `yes`, to resign deliberately. The host creates a unique file in
-`matches/` when `--output` is omitted and never overwrites an existing output
-path. Change or remove an existing explicit output file before a rerun. A
-completed transcript replays; an interrupted or partial transcript does not:
+Replay the completed transcript with:
 
 ```sh
 cargo run -p summoners-cli -- replay matches/local.ndjson
