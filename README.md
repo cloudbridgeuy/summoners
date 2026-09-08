@@ -85,6 +85,8 @@ cargo run -p summoners-cli -- replay matches/local.ndjson
 The current opening starts in Main phase with Player One active and Player Two
 holding the Coin. It does not run Player One's opening Upkeep.
 
+## Search museum images
+
 To enable Smithsonian Open Access, get an api.data.gov key and set it only in
 the process environment:
 
