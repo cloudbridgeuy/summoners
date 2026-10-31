@@ -1,4 +1,7 @@
-#![allow(clippy::unwrap_used)]
+#![allow(
+    clippy::unwrap_used,
+    reason = "test code asserts with expect/unwrap; a failure is the test failure"
+)]
 
 use super::*;
 

@@ -78,7 +78,10 @@ fn mint(next_instance: &mut u32) -> CardInstanceId {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used)]
+    #![allow(
+        clippy::expect_used,
+        reason = "test code asserts with expect/unwrap; a failure is the test failure"
+    )]
     use super::*;
     use std::collections::HashSet;
     use summoners_cards::built_in_catalog;

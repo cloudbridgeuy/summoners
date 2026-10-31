@@ -1,4 +1,7 @@
-#![allow(dead_code)]
+#![allow(
+    dead_code,
+    reason = "shared test support; not every test binary uses every helper"
+)]
 
 use summoners_cards::{BuiltInCatalog, CardLibrary, Deck};
 use summoners_core::{

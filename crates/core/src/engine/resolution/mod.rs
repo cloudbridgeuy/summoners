@@ -300,5 +300,8 @@ fn spell_effects(cards: &CardSet, def_id: EntityId) -> Vec<EffectLeaf> {
 }
 
 #[cfg(test)]
-#[allow(clippy::expect_used)]
+#[allow(
+    clippy::expect_used,
+    reason = "test code asserts with expect/unwrap; a failure is the test failure"
+)]
 mod tests;

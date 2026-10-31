@@ -218,7 +218,10 @@ pub(crate) fn choose_mana_type(
 }
 
 #[cfg(test)]
-#[allow(clippy::expect_used)]
+#[allow(
+    clippy::expect_used,
+    reason = "test code asserts with expect/unwrap; a failure is the test failure"
+)]
 mod tests {
     use super::*;
     use crate::domain::cards::fixtures;

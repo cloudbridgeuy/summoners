@@ -1,5 +1,6 @@
 //! Deterministic full download pipeline evidence for native JPEG and TIFF inputs.
 #![deny(clippy::unwrap_used, clippy::expect_used)]
+#![deny(clippy::too_many_arguments)]
 
 use cceroby::artwork::format_attribution;
 use cceroby::asset_writer::write_atomic_replace;

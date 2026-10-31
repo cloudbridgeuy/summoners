@@ -1,4 +1,7 @@
-#![allow(clippy::expect_used)]
+#![allow(
+    clippy::expect_used,
+    reason = "test code asserts with expect/unwrap; a failure is the test failure"
+)]
 use super::*;
 use crate::setup::initial_state;
 use summoners_cards::built_in_catalog;

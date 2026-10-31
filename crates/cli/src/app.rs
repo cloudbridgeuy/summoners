@@ -54,7 +54,10 @@ pub struct ReplayArgs {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used)]
+    #![allow(
+        clippy::expect_used,
+        reason = "test code asserts with expect/unwrap; a failure is the test failure"
+    )]
 
     use clap::Parser;
     use std::path::PathBuf;

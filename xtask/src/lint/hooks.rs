@@ -253,7 +253,11 @@ pub fn show_status() -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used, clippy::expect_used)]
+    #![allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        reason = "test code asserts with expect/unwrap; a failure is the test failure"
+    )]
 
     use std::fs;
     use std::path::PathBuf;
@@ -383,7 +387,11 @@ exec cargo xtask lint --staged-only\n"
 
 #[cfg(test)]
 mod lint_pipeline_tests {
-    #![allow(clippy::unwrap_used, clippy::expect_used)]
+    #![allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        reason = "test code asserts with expect/unwrap; a failure is the test failure"
+    )]
 
     use super::super::{
         CHECKS, CheckId, CheckOutcome, CheckResult, LintArgs, MAX_FILE_LINES,

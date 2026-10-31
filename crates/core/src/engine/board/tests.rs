@@ -1,6 +1,9 @@
 //! Split out of `mod.rs` to stay under the file length cap; shares that
 //! module's items through `super::*`.
-#![allow(clippy::expect_used)]
+#![allow(
+    clippy::expect_used,
+    reason = "test code asserts with expect/unwrap; a failure is the test failure"
+)]
 
 use super::*;
 use crate::domain::cards::fixtures;

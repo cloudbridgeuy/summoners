@@ -1,5 +1,6 @@
 //! Strict parsing and conversion for authored Summoners card documents.
 #![deny(clippy::unwrap_used, clippy::expect_used)]
+#![deny(clippy::too_many_arguments)]
 
 mod built_in;
 mod deck;

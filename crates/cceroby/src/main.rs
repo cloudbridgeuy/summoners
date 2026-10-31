@@ -1,5 +1,6 @@
 //! Command-line entry point for local museum image search.
 #![deny(clippy::unwrap_used, clippy::expect_used)]
+#![deny(clippy::too_many_arguments)]
 
 use cceroby::app::{App, CacheAction, Command};
 use cceroby::cache::{Cache, CacheLayerStats};

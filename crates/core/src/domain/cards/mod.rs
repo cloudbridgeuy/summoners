@@ -287,12 +287,18 @@ pub use set::CardSet;
 /// `CardSet` and lookups that reach them. Test-only: nothing outside
 /// `#[cfg(test)]` may depend on this data's shape.
 #[cfg(test)]
-#[allow(clippy::expect_used)]
+#[allow(
+    clippy::expect_used,
+    reason = "test code asserts with expect/unwrap; a failure is the test failure"
+)]
 pub(crate) mod fixtures;
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used)]
+    #![allow(
+        clippy::expect_used,
+        reason = "test code asserts with expect/unwrap; a failure is the test failure"
+    )]
 
     use super::*;
 

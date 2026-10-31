@@ -1,5 +1,6 @@
 //! User-visible command-line behavior.
 #![deny(clippy::unwrap_used, clippy::expect_used)]
+#![deny(clippy::too_many_arguments)]
 
 use std::process::Command;
 

@@ -9,7 +9,10 @@ pub fn encode_record(record: &RecordV1) -> Result<Vec<u8>, EncodeError> {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used)]
+    #![allow(
+        clippy::expect_used,
+        reason = "test code asserts with expect/unwrap; a failure is the test failure"
+    )]
 
     use std::collections::BTreeMap;
 

@@ -4,6 +4,7 @@
 //! development commands that plain `cargo` cannot express. The `lint` command
 //! runs every quality check in order and manages the Git pre-commit hook.
 #![deny(clippy::unwrap_used, clippy::expect_used)]
+#![deny(clippy::too_many_arguments)]
 
 mod golden;
 mod lint;

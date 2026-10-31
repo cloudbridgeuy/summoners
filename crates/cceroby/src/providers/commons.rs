@@ -493,7 +493,10 @@ const fn drop_reason_to_provider_error(reason: ArtworkDropReason) -> ProviderErr
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used)]
+    #![allow(
+        clippy::expect_used,
+        reason = "test code asserts with expect/unwrap; a failure is the test failure"
+    )]
     use super::*;
     use crate::core::{Culture, QueryText, SourceSet};
     use reqwest::header::USER_AGENT;

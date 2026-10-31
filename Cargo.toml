@@ -21,6 +21,17 @@ implicit_clone = "warn"
 cloned_instead_of_copied = "warn"
 redundant_closure_for_method_calls = "warn"
 needless_pass_by_value = "warn"
+todo = "warn"
+unimplemented = "warn"
+dbg_macro = "warn"
+mem_forget = "warn"
+large_futures = "warn"
+allow_attributes_without_reason = "warn"
+rc_buffer = "warn"
+unwrap_used = "warn"
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "warn"
 
 [profile.dev]
 debug = 0

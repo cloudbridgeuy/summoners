@@ -1,5 +1,6 @@
 //! Deterministic Cleveland search, card, detail, preview, and TIFF download evidence.
 #![deny(clippy::unwrap_used, clippy::expect_used)]
+#![deny(clippy::too_many_arguments)]
 
 use std::path::Path;
 use std::sync::Arc;

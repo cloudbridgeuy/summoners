@@ -121,7 +121,10 @@ fn recorded_match_created(file: &File) -> Result<MatchCreatedV1, ReplayCliError>
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used)]
+    #![allow(
+        clippy::expect_used,
+        reason = "test code asserts with expect/unwrap; a failure is the test failure"
+    )]
 
     use std::path::Path;
 

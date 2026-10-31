@@ -1,4 +1,7 @@
-#![allow(clippy::expect_used)]
+#![allow(
+    clippy::expect_used,
+    reason = "test code asserts with expect/unwrap; a failure is the test failure"
+)]
 
 mod support;
 
@@ -208,7 +211,10 @@ fn seeded_g2() -> G2 {
     }
 }
 
-#[allow(clippy::needless_pass_by_value)]
+#[allow(
+    clippy::needless_pass_by_value,
+    reason = "helper takes ownership for call-site brevity in tests"
+)]
 fn step(state: &mut GameState, action: GameAction) -> Vec<GameEvent> {
     let outcome = apply(state, &action).expect("G2 action must be legal");
     *state = outcome.state;

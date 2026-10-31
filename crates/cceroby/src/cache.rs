@@ -454,7 +454,10 @@ fn classify_entry(bytes: &[u8], now: SystemTime, layer: CacheLayer) -> Option<Fr
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used)]
+    #![allow(
+        clippy::expect_used,
+        reason = "test code asserts with expect/unwrap; a failure is the test failure"
+    )]
 
     use tempfile::tempdir;
 

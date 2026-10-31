@@ -443,7 +443,10 @@ fn default_goldens_dir() -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used)]
+    #![allow(
+        clippy::expect_used,
+        reason = "test code asserts with expect/unwrap; a failure is the test failure"
+    )]
 
     use super::*;
     use summoners_core::engine::apply::apply;

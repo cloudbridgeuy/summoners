@@ -409,7 +409,10 @@ fn serving_url(address: SocketAddr) -> String {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used)]
+    #![allow(
+        clippy::expect_used,
+        reason = "test code asserts with expect/unwrap; a failure is the test failure"
+    )]
 
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};

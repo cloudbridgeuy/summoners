@@ -1,4 +1,7 @@
-#![allow(dead_code)]
+#![allow(
+    dead_code,
+    reason = "shared test support; not every test binary uses every helper"
+)]
 
 use std::{collections::VecDeque, sync::Arc};
 

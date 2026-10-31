@@ -84,7 +84,11 @@ fn decode_v1(source: &str) -> Result<v1::dto::Set, SetLoadError> {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used, clippy::expect_used)]
+    #![allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        reason = "test code asserts with expect/unwrap; a failure is the test failure"
+    )]
 
     use super::*;
     use crate::{DocumentKind, SetLoadCause};

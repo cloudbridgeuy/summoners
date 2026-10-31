@@ -3,6 +3,7 @@
 //! Domain types and HTML rendering form the functional core. The command-line,
 //! process, network, browser, and shared-state modules form the imperative shell.
 #![deny(clippy::unwrap_used, clippy::expect_used)]
+#![deny(clippy::too_many_arguments)]
 
 pub mod app;
 pub mod artwork;

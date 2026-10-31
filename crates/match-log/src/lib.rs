@@ -4,6 +4,7 @@
 //! `RecordedMatch` adapter is a small imperative shell that owns a caller's
 //! writer and appends checkpoints selected by the pure core.
 #![deny(clippy::unwrap_used, clippy::expect_used)]
+#![deny(clippy::too_many_arguments)]
 
 pub mod codec;
 pub mod compare;
