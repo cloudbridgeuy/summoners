@@ -11,6 +11,7 @@
 //! collected facts, so they are unit tested without touching the filesystem.
 
 pub mod hooks;
+pub mod summary;
 
 use std::collections::HashSet;
 use std::fs;
@@ -624,6 +625,7 @@ pub fn run(args: &LintArgs) -> Result<()> {
     let mut log_file = fs::File::create(&log_path)?;
 
     let mut failed_check: Option<String> = None;
+    let mut failure_report: Option<String> = None;
 
     for check in CHECKS {
         if should_skip(check.id, args) {
@@ -669,16 +671,30 @@ pub fn run(args: &LintArgs) -> Result<()> {
                 }
             }
             CheckOutcome::Failed { ref output } => {
-                print!("{output}");
+                failure_report = Some(if args.verbose {
+                    format!(
+                        "{output}\nlint failed at: {}\n{}",
+                        result.name,
+                        summary::failure_footer(output, &log_path)
+                    )
+                } else {
+                    summary::failure_summary(
+                        &result.name,
+                        output,
+                        &log_path,
+                        summary::MAX_SUMMARY_LINES,
+                    )
+                });
                 failed_check = Some(result.name.clone());
                 break;
             }
         }
     }
 
-    if let Some(name) = failed_check {
-        println!("\nlint failed at: {name}");
-        println!("log: {log_path}");
+    if failed_check.is_some() {
+        if let Some(report) = failure_report {
+            print!("{report}");
+        }
         drop(log_file);
         std::process::exit(1);
     }
