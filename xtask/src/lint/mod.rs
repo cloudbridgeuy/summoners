@@ -199,8 +199,10 @@ fn should_skip(id: CheckId, args: &LintArgs) -> bool {
 /// The arguments a check takes in `--fix` mode, if it can repair anything.
 ///
 /// - `fmt` drops `--check`, so the formatting is written.
-/// - `clippy` gains `--fix --allow-dirty`, so the machine-applicable lints are
-///   written.
+/// - `clippy` gains `--fix --allow-dirty --allow-no-vcs`, so the
+///   machine-applicable lints are written. `--allow-no-vcs` is needed because
+///   cargo's VCS check uses libgit2, which rejects the `relativeWorktrees`
+///   repository extension and so reports "no VCS found".
 /// - Every other check reports only, and returns `None`.
 fn fix_args(id: CheckId) -> Option<Vec<&'static str>> {
     match id {
@@ -211,6 +213,7 @@ fn fix_args(id: CheckId) -> Option<Vec<&'static str>> {
             "--all-targets",
             "--fix",
             "--allow-dirty",
+            "--allow-no-vcs",
             "--",
             "-D",
             "warnings",
@@ -826,4 +829,18 @@ fn restage_files(files: &[String]) -> Result<()> {
         ));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod fix_args_tests {
+    use super::{CheckId, check_display_name, fix_args};
+
+    #[test]
+    fn clippy_fix_allows_dirty_and_no_vcs() {
+        let args = fix_args(CheckId::Clippy).unwrap_or_default();
+        assert!(args.contains(&"--allow-dirty"));
+        assert!(args.contains(&"--allow-no-vcs"));
+        let display = check_display_name("cargo", &args);
+        assert!(display.contains("--allow-dirty --allow-no-vcs"));
+    }
 }
